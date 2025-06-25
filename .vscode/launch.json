@@ -1,0 +1,29 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug Rust main",
+            "program": "${workspaceFolder}/target/debug/rusteroids.exe",
+            "args": ["5"],
+            "cwd": "${workspaceFolder}",
+            "cargo": {
+                "args": ["build"]
+            },
+            "stopOnEntry": false
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Release Rust main",
+            "program": "${workspaceFolder}/target/release/rusteroids.exe",
+            "args": ["5"],
+            "cwd": "${workspaceFolder}",
+            "cargo": {
+                "args": ["build", "--release"]
+            },
+            "stopOnEntry": false
+        }
+    ]
+}

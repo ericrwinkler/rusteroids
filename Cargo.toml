@@ -1,0 +1,13 @@
+[package]
+name = "rust-vulkan-glfw-triangle"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+glfw = "0.54"
+ash = "0.37"
+nalgebra = "0.29.0"
+
+[[bin]]
+name = "rusteroids"
+path = "main.rs"

@@ -1,13 +1,17 @@
 [package]
 name = "rust-vulkan-glfw-triangle"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+build = "build.rs"
 
 [dependencies]
-glfw = "0.54"
-ash = "0.37"
-nalgebra = "0.29.0"
+ash = "*"
+nalgebra = "*"
+
+[dependencies.glfw]
+version = "*"
+features = [ "vulkan" ]
 
 [[bin]]
 name = "rusteroids"
-path = "main.rs"
+path = "src/main.rs"

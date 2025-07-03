@@ -10,11 +10,11 @@ pub struct Window {
     pub title: String,
     pub glfw_context: glfw::Glfw,
     pub glfw_receiver: glfw::GlfwReceiver<(f64, glfw::WindowEvent)>,
-    pub glfw_window: glfw::PWindow
+    pub glfw_window: glfw::PWindow,
 }
 
 impl Window {
-    pub fn new(width: u32, height: u32, title: &str) -> Self {
+    pub fn try_new(width: u32, height: u32, title: &str) -> Self {
         // Initialize GLFW
         let mut context = glfw::init(glfw::log_errors).expect("Failed to initialize GLFW");
 
@@ -29,7 +29,7 @@ impl Window {
 
         // Set the window's context to the current thread
         window.make_current();
-        
+
         // Set the key polling to true to receive key events
         window.set_key_polling(true);
 
@@ -39,7 +39,7 @@ impl Window {
             title: title.to_string(),
             glfw_context: context,
             glfw_window: window,
-            glfw_receiver: receiver
+            glfw_receiver: receiver,
         }
     }
 }

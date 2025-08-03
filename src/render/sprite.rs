@@ -1,0 +1,1 @@
+// Sprite/texture abstraction stub

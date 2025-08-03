@@ -4,25 +4,10 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug Rust main",
-            "program": "${workspaceFolder}/target/debug/rusteroids.exe",
-            "args": ["5"],
+            "name": "Debug Vulkan Asteroids",
+            "program": "${workspaceFolder}/target/debug/vulkan_triangle.exe",
+            "args": [],
             "cwd": "${workspaceFolder}",
-            "cargo": {
-                "args": ["build"]
-            },
-            "stopOnEntry": false
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Release Rust main",
-            "program": "${workspaceFolder}/target/release/rusteroids.exe",
-            "args": ["5"],
-            "cwd": "${workspaceFolder}",
-            "cargo": {
-                "args": ["build", "--release"]
-            },
             "stopOnEntry": false
         }
     ]

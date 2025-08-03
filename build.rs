@@ -1,35 +1,52 @@
-use std::fs;
+// build.rs
+// All build scripts for the Vulkan triangle project should be placed here.
+
+use std::env;
 use std::path::Path;
 use std::process::Command;
 
 fn main() {
-    let vulkan_bin = r"C:\VulkanSDK\1.4.313.2\Bin";
-    let glslc = format!(r"{}\glslc.exe", vulkan_bin);
-    let shader_dir = "shaders";
-    let target_dir = "target/shaders";
-
-    // Create the target directory if it doesn't exist
-    if !Path::new(target_dir).exists() {
-        fs::create_dir_all(target_dir).expect("Failed to create target/shaders directory");
+    // Allow skipping shader compilation with an env var or arg
+    let skip_shaders =
+        env::var("SKIP_SHADERS").is_ok() || env::args().any(|arg| arg == "--skip-shaders");
+    if skip_shaders {
+        println!("cargo:rerun-if-changed=shaders");
+        eprintln!("info: Skipping shader compilation (SKIP_SHADERS set or --skip-shaders arg)");
+        return;
     }
 
-    // Compile all .vert and .frag files in the shaders directory
-    let shader_files = fs::read_dir(shader_dir).expect("Failed to read shaders directory");
+    let vulkan_bin = if let Ok(sdk) = env::var("VULKAN_SDK") {
+        format!("{}\\Bin", sdk)
+    } else {
+        println!("cargo:rerun-if-env-changed=VULKAN_SDK");
+        eprintln!("info: VULKAN_SDK not set, shader compilation skipped");
+        return;
+    };
+    let glslc = format!("{}\\glslc.exe", vulkan_bin);
+    let shader_dir = "resources/shaders";
+    let target_dir = "target/shaders";
+    std::fs::create_dir_all(target_dir).ok();
+    let shader_files =
+        std::fs::read_dir(shader_dir).unwrap_or_else(|_| panic!("No {} directory", shader_dir));
     for entry in shader_files {
-        let entry = entry.expect("Failed to read shader file entry");
+        let entry = entry.unwrap();
         let path = entry.path();
         if let Some(ext) = path.extension() {
             if ext == "vert" || ext == "frag" {
-                let file_name = path.file_stem().unwrap().to_string_lossy();
-                let out_path = format!("{}/{}.spv", target_dir, file_name);
+                let out_file = Path::new(target_dir)
+                    .join(path.file_stem().unwrap())
+                    .with_extension("spv");
                 let status = Command::new(&glslc)
                     .arg(&path)
                     .arg("-o")
-                    .arg(&out_path)
-                    .status()
-                    .expect("Failed to run glslc");
-                if !status.success() {
-                    panic!("Failed to compile shader: {:?}", path);
+                    .arg(&out_file)
+                    .status();
+                match status {
+                    Ok(s) if s.success() => {
+                        eprintln!("info: Compiled {:?} -> {:?}", path, out_file)
+                    }
+                    Ok(s) => panic!("glslc failed for {:?} with status {}", path, s),
+                    Err(e) => panic!("Failed to run glslc for {:?}: {}", path, e),
                 }
             }
         }

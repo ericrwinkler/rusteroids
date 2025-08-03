@@ -1,0 +1,1 @@
+// Basic lighting stub

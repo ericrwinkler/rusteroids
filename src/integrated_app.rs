@@ -12,6 +12,7 @@ use crate::render::{
 };
 use crate::util::math::{Vec3, Mat4};
 use glfw::{Action, Key, WindowEvent};
+use std::time::Instant;
 
 pub struct IntegratedApp {
     window: WindowHandle,
@@ -20,7 +21,8 @@ pub struct IntegratedApp {
     teapot_mesh: Option<Mesh>,
     teapot_material: Material,
     lighting_env: LightingEnvironment,
-    time: f32,
+    start_time: Instant,
+    total_rotation: f32, // Total rotation in radians
 }
 
 impl IntegratedApp {
@@ -60,60 +62,45 @@ impl IntegratedApp {
             teapot_mesh: None,
             teapot_material,
             lighting_env,
-            time: 0.0,
+            start_time: Instant::now(),
+            total_rotation: 0.0,
         }
     }
     
     pub fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // DEBUGGING: Create a simple test cube instead of loading OBJ
-        use crate::render::mesh::{Vertex, Mesh};
-        
-        // DEBUG: Let's create an extremely simple cube that should definitely be visible
-        let test_vertices = vec![
-            // Front face (much larger and clearly positioned)
-            Vertex { position: [-2.0, -2.0,  2.0], normal: [0.0, 0.0, 1.0], tex_coord: [0.0, 0.0] },
-            Vertex { position: [ 2.0, -2.0,  2.0], normal: [0.0, 0.0, 1.0], tex_coord: [1.0, 0.0] },
-            Vertex { position: [ 2.0,  2.0,  2.0], normal: [0.0, 0.0, 1.0], tex_coord: [1.0, 1.0] },
-            Vertex { position: [-2.0,  2.0,  2.0], normal: [0.0, 0.0, 1.0], tex_coord: [0.0, 1.0] },
-            
-            // Back face
-            Vertex { position: [-2.0, -2.0, -2.0], normal: [0.0, 0.0, -1.0], tex_coord: [1.0, 0.0] },
-            Vertex { position: [-2.0,  2.0, -2.0], normal: [0.0, 0.0, -1.0], tex_coord: [1.0, 1.0] },
-            Vertex { position: [ 2.0,  2.0, -2.0], normal: [0.0, 0.0, -1.0], tex_coord: [0.0, 1.0] },
-            Vertex { position: [ 2.0, -2.0, -2.0], normal: [0.0, 0.0, -1.0], tex_coord: [0.0, 0.0] },
-        ];
-        
-        // DEBUG: Print vertex positions to verify they're reasonable
-        println!("Test cube vertices:");
-        for (i, vertex) in test_vertices.iter().enumerate() {
-            println!("  Vertex {}: pos=({:.1}, {:.1}, {:.1})", i, vertex.position[0], vertex.position[1], vertex.position[2]);
+        // Load teapot OBJ model
+        match ObjLoader::load_obj("resources/models/teapot.obj") {
+            Ok(mut mesh) => {
+                // Check if vertices are reasonable (not too large/small)
+                let mut min_pos = [f32::MAX; 3];
+                let mut max_pos = [f32::MIN; 3];
+                
+                for vertex in &mesh.vertices {
+                    for i in 0..3 {
+                        min_pos[i] = min_pos[i].min(vertex.position[i]);
+                        max_pos[i] = max_pos[i].max(vertex.position[i]);
+                    }
+                }
+                
+                // If the model is too large, scale it down
+                let max_extent = (max_pos[0] - min_pos[0]).max(max_pos[1] - min_pos[1]).max(max_pos[2] - min_pos[2]);
+                if max_extent > 10.0 {
+                    let scale_factor = 4.0 / max_extent; // Scale to fit in 4 unit cube
+                    
+                    for vertex in &mut mesh.vertices {
+                        vertex.position[0] *= scale_factor;
+                        vertex.position[1] *= scale_factor;
+                        vertex.position[2] *= scale_factor;
+                    }
+                }
+                
+                self.teapot_mesh = Some(mesh);
+            }
+            Err(_) => {
+                // Fallback to test cube if teapot loading fails
+                self.teapot_mesh = Some(Mesh::cube());
+            }
         }
-        
-        let test_indices = vec![
-            // Front face
-            0, 1, 2,  2, 3, 0,
-            // Back face  
-            4, 5, 6,  6, 7, 4,
-            // Left face
-            4, 0, 3,  3, 5, 4,
-            // Right face
-            1, 7, 6,  6, 2, 1,
-            // Top face
-            3, 2, 6,  6, 5, 3,
-            // Bottom face
-            4, 7, 1,  1, 0, 4,
-        ];
-        
-        println!("Test cube indices: {:?}", test_indices);
-        
-        let test_mesh = Mesh {
-            vertices: test_vertices,
-            indices: test_indices,
-        };
-        
-        println!("Created test cube with {} vertices, {} triangles", 
-                 test_mesh.vertices.len(), test_mesh.indices.len() / 3);
-        self.teapot_mesh = Some(test_mesh);
         
         Ok(())
     }
@@ -121,7 +108,6 @@ impl IntegratedApp {
     pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.initialize()?;
         
-        println!("Starting main loop...");
         let mut framebuffer_resized = false;
         
         while !self.window.should_close() {
@@ -158,7 +144,12 @@ impl IntegratedApp {
             }
             
             // Update time for animations
-            self.time += 0.016; // Assume ~60 FPS
+            let current_time = Instant::now();
+            let elapsed_seconds = current_time.duration_since(self.start_time).as_secs_f32();
+            
+            // Calculate rotation: 1 full rotation every 8 seconds (π/4 radians per second)
+            let angular_velocity = std::f32::consts::PI / 4.0;
+            self.total_rotation = elapsed_seconds * angular_velocity;
             
             // Update camera and lighting
             self.update_scene();
@@ -174,20 +165,14 @@ impl IntegratedApp {
     }
     
     fn update_scene(&mut self) {
-        // REPOSITION: Much closer camera position and off-center angle to see the cube clearly
+        // Position camera for good viewing angle
         let camera_x = 3.0;
-        let camera_z = 8.0; // Closer than before
-        let camera_y = 3.0; // Angle from above
+        let camera_z = 8.0;
+        let camera_y = 3.0;
         
         // Use proper setter methods to ensure matrices are updated
         self.camera.set_position(Vec3::new(camera_x, camera_y, camera_z));
-        self.camera.look_at(Vec3::new(0.0, 0.0, 0.0)); // Look at cube at origin
-        
-        // Print camera info for debugging (less frequently)
-        if (self.time * 60.0) as i32 % 60 == 0 {
-            println!("Camera at ({:.1}, {:.1}, {:.1}) looking at origin, time: {:.2}", 
-                     camera_x, camera_y, camera_z, self.time);
-        }
+        self.camera.look_at(Vec3::new(0.0, 0.0, 0.0));
     }
     
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -200,16 +185,11 @@ impl IntegratedApp {
         
         // Render teapot if loaded
         if let Some(ref teapot_mesh) = self.teapot_mesh {
-            // ADD SLOW ROTATION: Rotate the cube slowly around Y axis to test for artifacts
-            let rotation_y = self.time * 0.5; // Slow rotation (0.5 radians per second)
-            let model_matrix = Mat4::rotation_y(rotation_y);
-            
-            // DEBUG: Print matrix values occasionally
-            if (self.time * 60.0) as i32 % 120 == 0 {
-                println!("Model rotation: {:.2} radians", rotation_y);
-                println!("Camera view matrix: {:?}", self.camera.get_view_matrix().m[0]);
-                println!("Camera projection matrix: {:?}", self.camera.get_projection_matrix().m[0]);
-            }
+            // Apply rotation and flip to correct orientation
+            let rotation_y = self.total_rotation;
+            let flip_matrix = Mat4::rotation_x(std::f32::consts::PI);
+            let rotation_matrix = Mat4::rotation_y(rotation_y);
+            let model_matrix = rotation_matrix * flip_matrix;
             
             // Submit teapot for rendering
             self.renderer.draw_mesh_3d(

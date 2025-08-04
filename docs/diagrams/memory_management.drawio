@@ -1,0 +1,253 @@
+<mxfile host="app.diagrams.net" modified="2025-08-03T00:00:00.000Z" agent="5.0" etag="memory_management_v1" version="24.6.4" type="device">
+  <diagram name="Memory Management" id="memory-mgmt">
+    <mxGraphModel dx="1422" dy="754" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        
+        <!-- Title -->
+        <mxCell id="title" value="Vulkan Memory Management Architecture" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=18;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="260" y="20" width="340" height="30" as="geometry" />
+        </mxCell>
+        
+        <!-- GPU Memory Types -->
+        <mxCell id="gpu_title" value="GPU Memory Types" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="100" y="70" width="150" height="25" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="device_local" value="Device Local&#xa;(VRAM)&#xa;Fast GPU Access" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="50" y="110" width="100" height="60" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="host_visible" value="Host Visible&#xa;(System RAM)&#xa;CPU Mappable" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="170" y="110" width="100" height="60" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="host_coherent" value="Host Coherent&#xa;(Unified)&#xa;No Sync Required" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="290" y="110" width="100" height="60" as="geometry" />
+        </mxCell>
+        
+        <!-- Memory Allocator -->
+        <mxCell id="allocator_title" value="Memory Allocator (VMA)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="460" y="70" width="180" height="25" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="vma" value="VulkanMemoryAllocator&#xa;• Pool Management&#xa;• Defragmentation&#xa;• Usage Tracking&#xa;• Memory Budget" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left" vertex="1" parent="1">
+          <mxGeometry x="450" y="110" width="200" height="100" as="geometry" />
+        </mxCell>
+        
+        <!-- Buffer Management -->
+        <mxCell id="buffers_title" value="Buffer Management" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="50" y="240" width="140" height="25" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="vertex_buffer" value="Vertex Buffers&#xa;Device Local&#xa;Static/Dynamic" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450" vertex="1" parent="1">
+          <mxGeometry x="50" y="280" width="100" height="50" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="index_buffer" value="Index Buffers&#xa;Device Local&#xa;Read-Only" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450" vertex="1" parent="1">
+          <mxGeometry x="170" y="280" width="100" height="50" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="uniform_buffer" value="Uniform Buffers&#xa;Host Visible&#xa;Per-Frame Update" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450" vertex="1" parent="1">
+          <mxGeometry x="290" y="280" width="100" height="50" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="staging_buffer" value="Staging Buffers&#xa;Host Visible&#xa;Transfer Source" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450" vertex="1" parent="1">
+          <mxGeometry x="50" y="350" width="100" height="50" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="storage_buffer" value="Storage Buffers&#xa;Device Local&#xa;Compute/Shader" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450" vertex="1" parent="1">
+          <mxGeometry x="170" y="350" width="100" height="50" as="geometry" />
+        </mxCell>
+        
+        <!-- Image Management -->
+        <mxCell id="images_title" value="Image Management" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="460" y="240" width="140" height="25" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="color_target" value="Color Targets&#xa;Device Local&#xa;Render Target" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00" vertex="1" parent="1">
+          <mxGeometry x="450" y="280" width="100" height="50" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="depth_target" value="Depth/Stencil&#xa;Device Local&#xa;Depth Testing" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00" vertex="1" parent="1">
+          <mxGeometry x="570" y="280" width="100" height="50" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="textures" value="Textures&#xa;Device Local&#xa;Sampled Images" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00" vertex="1" parent="1">
+          <mxGeometry x="450" y="350" width="100" height="50" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="compute_images" value="Compute Images&#xa;Device Local&#xa;Storage Images" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00" vertex="1" parent="1">
+          <mxGeometry x="570" y="350" width="100" height="50" as="geometry" />
+        </mxCell>
+        
+        <!-- Memory Pools -->
+        <mxCell id="pools_title" value="Memory Pool Architecture" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="320" y="440" width="180" height="25" as="geometry" />
+        </mxCell>
+        
+        <!-- Static Pool -->
+        <mxCell id="static_pool" value="Static Pool" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6f3ff;strokeColor=#4d9fff;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="100" y="480" width="120" height="30" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="static_vertex" value="Level Geometry" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e6f3ff;strokeColor=#4d9fff" vertex="1" parent="1">
+          <mxGeometry x="80" y="520" width="80" height="25" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="static_texture" value="Art Assets" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e6f3ff;strokeColor=#4d9fff" vertex="1" parent="1">
+          <mxGeometry x="170" y="520" width="80" height="25" as="geometry" />
+        </mxCell>
+        
+        <!-- Dynamic Pool -->
+        <mxCell id="dynamic_pool" value="Dynamic Pool" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fff0;strokeColor=#66b366;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="300" y="480" width="120" height="30" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="dynamic_uniform" value="Uniforms" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f0fff0;strokeColor=#66b366" vertex="1" parent="1">
+          <mxGeometry x="280" y="520" width="80" height="25" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="dynamic_vertex" value="Particles" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f0fff0;strokeColor=#66b366" vertex="1" parent="1">
+          <mxGeometry x="370" y="520" width="80" height="25" as="geometry" />
+        </mxCell>
+        
+        <!-- Transient Pool -->
+        <mxCell id="transient_pool" value="Transient Pool" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f0;strokeColor=#cc6666;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="500" y="480" width="120" height="30" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="transient_staging" value="Staging" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff0f0;strokeColor=#cc6666" vertex="1" parent="1">
+          <mxGeometry x="480" y="520" width="80" height="25" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="transient_temp" value="Temp Buffers" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff0f0;strokeColor=#cc6666" vertex="1" parent="1">
+          <mxGeometry x="570" y="520" width="80" height="25" as="geometry" />
+        </mxCell>
+        
+        <!-- Memory Lifecycle -->
+        <mxCell id="lifecycle_title" value="Memory Lifecycle" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="100" y="580" width="140" height="25" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="alloc" value="Allocate" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6" vertex="1" parent="1">
+          <mxGeometry x="100" y="620" width="80" height="30" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="map" value="Map" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf" vertex="1" parent="1">
+          <mxGeometry x="200" y="620" width="80" height="30" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="use" value="Use" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366" vertex="1" parent="1">
+          <mxGeometry x="300" y="620" width="80" height="30" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="unmap" value="Unmap" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656" vertex="1" parent="1">
+          <mxGeometry x="400" y="620" width="80" height="30" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="free" value="Free" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450" vertex="1" parent="1">
+          <mxGeometry x="500" y="620" width="80" height="30" as="geometry" />
+        </mxCell>
+        
+        <!-- Memory Barriers -->
+        <mxCell id="barriers_title" value="Memory Barriers & Synchronization" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="300" y="680" width="240" height="25" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="pipeline_barrier" value="Pipeline Barriers" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffeeee;strokeColor=#cc6666" vertex="1" parent="1">
+          <mxGeometry x="200" y="720" width="100" height="30" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="memory_barrier" value="Memory Barriers" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffeeee;strokeColor=#cc6666" vertex="1" parent="1">
+          <mxGeometry x="320" y="720" width="100" height="30" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="image_barrier" value="Image Layout&#xa;Transitions" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffeeee;strokeColor=#cc6666" vertex="1" parent="1">
+          <mxGeometry x="440" y="720" width="100" height="30" as="geometry" />
+        </mxCell>
+        
+        <!-- Arrows for Memory Types to VMA -->
+        <mxCell id="vma1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;fillColor=#e1d5e7;strokeColor=#9673a6" edge="1" parent="1" source="device_local" target="vma">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="100" y="190" />
+              <mxPoint x="480" y="190" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        
+        <mxCell id="vma2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;fillColor=#dae8fc;strokeColor=#6c8ebf" edge="1" parent="1" source="host_visible" target="vma">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="220" y="190" />
+              <mxPoint x="520" y="190" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        
+        <mxCell id="vma3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;fillColor=#d5e8d4;strokeColor=#82b366" edge="1" parent="1" source="host_coherent" target="vma">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="340" y="190" />
+              <mxPoint x="560" y="190" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- Pool connections -->
+        <mxCell id="pool1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;fillColor=#e6f3ff;strokeColor=#4d9fff" edge="1" parent="1" source="static_pool" target="static_vertex">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="pool2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;fillColor=#e6f3ff;strokeColor=#4d9fff" edge="1" parent="1" source="static_pool" target="static_texture">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="pool3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;fillColor=#f0fff0;strokeColor=#66b366" edge="1" parent="1" source="dynamic_pool" target="dynamic_uniform">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="pool4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;fillColor=#f0fff0;strokeColor=#66b366" edge="1" parent="1" source="dynamic_pool" target="dynamic_vertex">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="pool5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;fillColor=#fff0f0;strokeColor=#cc6666" edge="1" parent="1" source="transient_pool" target="transient_staging">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="pool6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;fillColor=#fff0f0;strokeColor=#cc6666" edge="1" parent="1" source="transient_pool" target="transient_temp">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <!-- Lifecycle arrows -->
+        <mxCell id="life1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;fillColor=#e1d5e7;strokeColor=#9673a6" edge="1" parent="1" source="alloc" target="map">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="life2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;fillColor=#dae8fc;strokeColor=#6c8ebf" edge="1" parent="1" source="map" target="use">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="life3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;fillColor=#d5e8d4;strokeColor=#82b366" edge="1" parent="1" source="use" target="unmap">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="life4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;fillColor=#fff2cc;strokeColor=#d6b656" edge="1" parent="1" source="unmap" target="free">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <!-- Memory Management Rules -->
+        <mxCell id="rules" value="Memory Management Rules:&#xa;• Single allocation per resource&#xa;• Map/Unmap in pairs&#xa;• Validate memory budgets&#xa;• Use appropriate memory types&#xa;• Handle allocation failures&#xa;• Profile memory usage&#xa;• Avoid memory leaks&#xa;• Batch allocations when possible" style="text;html=1;strokeColor=#d6b656;fillColor=#fff2cc;align=left;verticalAlign=top;whiteSpace=wrap;rounded=1;fontSize=10" vertex="1" parent="1">
+          <mxGeometry x="50" y="770" width="280" height="160" as="geometry" />
+        </mxCell>
+        
+        <!-- Performance Tips -->
+        <mxCell id="performance" value="Performance Tips:&#xa;• Use staging buffers for uploads&#xa;• Prefer device-local memory for GPU resources&#xa;• Use persistent mapping for frequently updated buffers&#xa;• Implement sub-allocation for small buffers&#xa;• Use memory barriers sparingly&#xa;• Profile memory bandwidth usage&#xa;• Consider memory alignment requirements" style="text;html=1;strokeColor=#82b366;fillColor=#d5e8d4;align=left;verticalAlign=top;whiteSpace=wrap;rounded=1;fontSize=10" vertex="1" parent="1">
+          <mxGeometry x="360" y="770" width="320" height="160" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

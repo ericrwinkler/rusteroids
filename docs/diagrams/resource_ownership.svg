@@ -1,0 +1,116 @@
+<svg width="800" height="700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font: bold 18px sans-serif; fill: #333; }
+      .section-title { font: bold 14px sans-serif; fill: #555; }
+      .component { font: 11px sans-serif; fill: #333; }
+      .manager { fill: #e1d5e7; stroke: #9673a6; stroke-width: 2; }
+      .handle { fill: #dae8fc; stroke: #6c8ebf; stroke-width: 2; }
+      .resource { fill: #d5e8d4; stroke: #82b366; stroke-width: 2; }
+      .raii { fill: #fff2cc; stroke: #d6b656; stroke-width: 2; }
+      .arrow { stroke: #666; stroke-width: 1; fill: none; marker-end: url(#arrowhead); }
+      .owns-arrow { stroke: #d32f2f; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+    </style>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#666" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#d32f2f" />
+    </marker>
+  </defs>
+  
+  <!-- Title -->
+  <text x="400" y="30" text-anchor="middle" class="title">Resource Ownership Model</text>
+  
+  <!-- Resource Managers -->
+  <text x="50" y="70" class="section-title">Resource Managers (Single Owners)</text>
+  
+  <rect x="50" y="90" width="120" height="50" rx="5" class="manager"/>
+  <text x="110" y="110" text-anchor="middle" class="component">Buffer</text>
+  <text x="110" y="125" text-anchor="middle" class="component">Manager</text>
+  
+  <rect x="200" y="90" width="120" height="50" rx="5" class="manager"/>
+  <text x="260" y="110" text-anchor="middle" class="component">Image</text>
+  <text x="260" y="125" text-anchor="middle" class="component">Manager</text>
+  
+  <rect x="350" y="90" width="120" height="50" rx="5" class="manager"/>
+  <text x="410" y="110" text-anchor="middle" class="component">Pipeline</text>
+  <text x="410" y="125" text-anchor="middle" class="component">Manager</text>
+  
+  <rect x="500" y="90" width="120" height="50" rx="5" class="manager"/>
+  <text x="560" y="110" text-anchor="middle" class="component">Shader</text>
+  <text x="560" y="125" text-anchor="middle" class="component">Manager</text>
+  
+  <!-- Type-Safe Handles -->
+  <text x="50" y="200" class="section-title">Type-Safe Handles (Borrowers)</text>
+  
+  <rect x="80" y="220" width="100" height="40" rx="5" class="handle"/>
+  <text x="130" y="235" text-anchor="middle" class="component">BufferHandle</text>
+  <text x="130" y="250" text-anchor="middle" class="component">&lt;T&gt;</text>
+  
+  <rect x="220" y="220" width="100" height="40" rx="5" class="handle"/>
+  <text x="270" y="235" text-anchor="middle" class="component">ImageHandle</text>
+  <text x="270" y="250" text-anchor="middle" class="component">&lt;T&gt;</text>
+  
+  <rect x="360" y="220" width="100" height="40" rx="5" class="handle"/>
+  <text x="410" y="235" text-anchor="middle" class="component">PipelineHandle</text>
+  <text x="410" y="250" text-anchor="middle" class="component">&lt;T&gt;</text>
+  
+  <rect x="500" y="220" width="100" height="40" rx="5" class="handle"/>
+  <text x="550" y="235" text-anchor="middle" class="component">ShaderHandle</text>
+  <text x="550" y="250" text-anchor="middle" class="component">&lt;T&gt;</text>
+  
+  <!-- GPU Resources -->
+  <text x="50" y="320" class="section-title">GPU Resources (Owned Objects)</text>
+  
+  <rect x="80" y="340" width="100" height="40" rx="5" class="resource"/>
+  <text x="130" y="355" text-anchor="middle" class="component">VkBuffer</text>
+  <text x="130" y="370" text-anchor="middle" class="component">+ Memory</text>
+  
+  <rect x="220" y="340" width="100" height="40" rx="5" class="resource"/>
+  <text x="270" y="355" text-anchor="middle" class="component">VkImage</text>
+  <text x="270" y="370" text-anchor="middle" class="component">+ Memory</text>
+  
+  <rect x="360" y="340" width="100" height="40" rx="5" class="resource"/>
+  <text x="410" y="355" text-anchor="middle" class="component">VkPipeline</text>
+  <text x="410" y="370" text-anchor="middle" class="component">+ Layout</text>
+  
+  <rect x="500" y="340" width="100" height="40" rx="5" class="resource"/>
+  <text x="550" y="355" text-anchor="middle" class="component">VkShader</text>
+  <text x="550" y="370" text-anchor="middle" class="component">Module</text>
+  
+  <!-- RAII Guards -->
+  <text x="50" y="440" class="section-title">RAII Resource Guards</text>
+  
+  <rect x="200" y="460" width="150" height="50" rx="5" class="raii"/>
+  <text x="275" y="480" text-anchor="middle" class="component">ResourceGuard&lt;T&gt;</text>
+  <text x="275" y="495" text-anchor="middle" class="component">Drop → Auto Cleanup</text>
+  
+  <rect x="400" y="460" width="150" height="50" rx="5" class="raii"/>
+  <text x="475" y="480" text-anchor="middle" class="component">MappedBuffer&lt;T&gt;</text>
+  <text x="475" y="495" text-anchor="middle" class="component">Drop → Auto Unmap</text>
+  
+  <!-- Ownership arrows -->
+  <line x1="110" y1="140" x2="130" y2="220" class="owns-arrow"/>
+  <line x1="260" y1="140" x2="270" y2="220" class="owns-arrow"/>
+  <line x1="410" y1="140" x2="410" y2="220" class="owns-arrow"/>
+  <line x1="560" y1="140" x2="550" y2="220" class="owns-arrow"/>
+  
+  <line x1="130" y1="260" x2="130" y2="340" class="owns-arrow"/>
+  <line x1="270" y1="260" x2="270" y2="340" class="owns-arrow"/>
+  <line x1="410" y1="260" x2="410" y2="340" class="owns-arrow"/>
+  <line x1="550" y1="260" x2="550" y2="340" class="owns-arrow"/>
+  
+  <!-- RAII arrows -->
+  <line x1="275" y1="460" x2="200" y2="380" class="arrow"/>
+  <line x1="475" y1="460" x2="400" y2="380" class="arrow"/>
+  
+  <!-- Ownership Rules -->
+  <rect x="50" y="550" width="700" height="120" rx="5" fill="#f5f5f5" stroke="#ccc" stroke-width="1"/>
+  <text x="60" y="575" class="section-title">Ownership Rules:</text>
+  <text x="70" y="595" class="component">• Each resource has exactly one owner (Manager)</text>
+  <text x="70" y="610" class="component">• Handles provide safe, typed access without ownership</text>
+  <text x="70" y="625" class="component">• RAII guards ensure automatic resource cleanup</text>
+  <text x="70" y="640" class="component">• No raw Vulkan handles exposed to application code</text>
+  <text x="70" y="655" class="component">• Compile-time verification of resource lifetime</text>
+</svg>

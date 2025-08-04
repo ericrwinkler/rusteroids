@@ -14,3 +14,5 @@ Vulkan rendering features should include:
 
 
 When writing code, be sure to run a build and test it to ensure correctness. Use Rust's testing framework to write unit tests for components and systems.
+
+Always read the design documents and architecture diagrams provided in the `docs/` folder to understand the overall structure and design principles of the project. Follow the coding conventions and patterns established in the existing codebase.

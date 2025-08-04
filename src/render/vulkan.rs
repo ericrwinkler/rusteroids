@@ -589,7 +589,7 @@ impl VulkanContext {
                     .expect("Failed to begin command buffer");
                 let clear_values = [ash::vk::ClearValue {
                     color: ash::vk::ClearColorValue {
-                        float32: [0.1, 0.1, 0.1, 1.0], // Very dark grey background
+                        float32: [0.0, 0.0, 0.0, 1.0],
                     },
                 }];
                 let render_pass_info = ash::vk::RenderPassBeginInfo::builder()
@@ -737,7 +737,7 @@ impl VulkanContext {
             let clear_values = [
                 ash::vk::ClearValue {
                     color: ash::vk::ClearColorValue {
-                        float32: [0.1, 0.1, 0.1, 1.0], // Very dark grey background
+                        float32: [0.0, 0.0, 0.0, 1.0],
                     },
                 },
                 ash::vk::ClearValue {
@@ -765,24 +765,6 @@ impl VulkanContext {
                 ash::vk::PipelineBindPoint::GRAPHICS,
                 self.graphics_pipeline,
             );
-            
-            // Set viewport dynamically based on current surface capabilities
-            let viewport = ash::vk::Viewport {
-                x: 0.0,
-                y: 0.0,
-                width: surface_caps.current_extent.width as f32,
-                height: surface_caps.current_extent.height as f32,
-                min_depth: 0.0,
-                max_depth: 1.0,
-            };
-            device.cmd_set_viewport(command_buffer, 0, &[viewport]);
-            
-            // Set scissor rectangle dynamically
-            let scissor = ash::vk::Rect2D {
-                offset: ash::vk::Offset2D { x: 0, y: 0 },
-                extent: surface_caps.current_extent,
-            };
-            device.cmd_set_scissor(command_buffer, 0, &[scissor]);
             
             // Bind vertex buffer if available
             if let Some(ref vertex_buffer) = self.vertex_buffer {
@@ -1058,7 +1040,7 @@ impl VulkanContext {
                     .expect("Failed to begin command buffer");
                 let clear_values = [ash::vk::ClearValue {
                     color: ash::vk::ClearColorValue {
-                        float32: [0.1, 0.1, 0.1, 1.0], // Very dark grey background
+                        float32: [0.0, 0.0, 0.0, 1.0],
                     },
                 }];
                 let render_pass_info = ash::vk::RenderPassBeginInfo::builder()

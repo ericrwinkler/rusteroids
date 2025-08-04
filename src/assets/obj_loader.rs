@@ -88,6 +88,28 @@ impl ObjLoader {
             Self::calculate_normals(&mut vertices, &indices);
         }
         
+        // DEBUG: Print coordinate bounds to see if they're reasonable
+        if !vertices.is_empty() {
+            let mut min_x = vertices[0].position[0];
+            let mut max_x = vertices[0].position[0];
+            let mut min_y = vertices[0].position[1];
+            let mut max_y = vertices[0].position[1];
+            let mut min_z = vertices[0].position[2];
+            let mut max_z = vertices[0].position[2];
+            
+            for vertex in &vertices {
+                min_x = min_x.min(vertex.position[0]);
+                max_x = max_x.max(vertex.position[0]);
+                min_y = min_y.min(vertex.position[1]);
+                max_y = max_y.max(vertex.position[1]);
+                min_z = min_z.min(vertex.position[2]);
+                max_z = max_z.max(vertex.position[2]);
+            }
+            
+            println!("Model bounds: X({:.3} to {:.3}), Y({:.3} to {:.3}), Z({:.3} to {:.3})", 
+                     min_x, max_x, min_y, max_y, min_z, max_z);
+        }
+
         println!("Loaded OBJ: {} vertices, {} triangles", vertices.len(), indices.len() / 3);
         
         Ok(Mesh { vertices, indices })

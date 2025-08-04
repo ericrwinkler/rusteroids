@@ -34,9 +34,116 @@ pub struct VulkanContext {
     pub mesh_vertex_count: usize, // Track how many vertices we should render
     pub vertex_buffer: Option<Buffer>,
     pub index_buffer: Option<Buffer>,
+    pub mvp_matrix: [f32; 16], // Current Model-View-Projection matrix
+    // Depth buffer resources
+    pub depth_image: vk::Image,
+    pub depth_image_memory: vk::DeviceMemory,
+    pub depth_image_view: vk::ImageView,
 }
 
 impl VulkanContext {
+    // Helper function to find memory type index
+    fn find_memory_type(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        type_filter: u32,
+        properties: vk::MemoryPropertyFlags,
+    ) -> u32 {
+        let mem_properties = unsafe {
+            instance.get_physical_device_memory_properties(physical_device)
+        };
+        
+        for i in 0..mem_properties.memory_type_count {
+            if (type_filter & (1 << i)) != 0
+                && mem_properties.memory_types[i as usize]
+                    .property_flags
+                    .contains(properties)
+            {
+                return i;
+            }
+        }
+        
+        panic!("Failed to find suitable memory type");
+    }
+    
+    // Helper function to create depth buffer
+    fn create_depth_resources(
+        device: &ash::Device,
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        extent: vk::Extent2D,
+    ) -> (vk::Image, vk::DeviceMemory, vk::ImageView) {
+        let depth_format = vk::Format::D32_SFLOAT;
+        
+        // Create depth image
+        let image_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::TYPE_2D)
+            .extent(vk::Extent3D {
+                width: extent.width,
+                height: extent.height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .format(depth_format)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .samples(vk::SampleCountFlags::TYPE_1);
+            
+        let depth_image = unsafe {
+            device.create_image(&image_info, None)
+                .expect("Failed to create depth image")
+        };
+        
+        // Allocate memory for depth image
+        let mem_requirements = unsafe {
+            device.get_image_memory_requirements(depth_image)
+        };
+        
+        let mem_type_index = Self::find_memory_type(
+            instance,
+            physical_device,
+            mem_requirements.memory_type_bits,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
+        
+        let alloc_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(mem_requirements.size)
+            .memory_type_index(mem_type_index);
+            
+        let depth_image_memory = unsafe {
+            device.allocate_memory(&alloc_info, None)
+                .expect("Failed to allocate depth image memory")
+        };
+        
+        unsafe {
+            device.bind_image_memory(depth_image, depth_image_memory, 0)
+                .expect("Failed to bind depth image memory");
+        }
+        
+        // Create depth image view
+        let view_info = vk::ImageViewCreateInfo::builder()
+            .image(depth_image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(depth_format)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::DEPTH,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+            
+        let depth_image_view = unsafe {
+            device.create_image_view(&view_info, None)
+                .expect("Failed to create depth image view")
+        };
+        
+        (depth_image, depth_image_memory, depth_image_view)
+    }
+
     pub fn new(window: &mut WindowHandle) -> Self {
         // Vulkan: Entry and Instance
         let entry = unsafe { ash::Entry::load().unwrap() };
@@ -208,7 +315,7 @@ impl VulkanContext {
             })
             .collect();
 
-        // Step 5: Create a simple render pass
+        // Step 5: Create render pass with depth attachment
         let color_attachment = ash::vk::AttachmentDescription::builder()
             .format(surface_format.format)
             .samples(ash::vk::SampleCountFlags::TYPE_1)
@@ -217,15 +324,39 @@ impl VulkanContext {
             .stencil_load_op(ash::vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(ash::vk::AttachmentStoreOp::DONT_CARE)
             .initial_layout(ash::vk::ImageLayout::UNDEFINED)
-            .final_layout(ash::vk::ImageLayout::PRESENT_SRC_KHR);
+            .final_layout(ash::vk::ImageLayout::PRESENT_SRC_KHR)
+            .build();
+            
+        let depth_attachment = ash::vk::AttachmentDescription::builder()
+            .format(ash::vk::Format::D32_SFLOAT)
+            .samples(ash::vk::SampleCountFlags::TYPE_1)
+            .load_op(ash::vk::AttachmentLoadOp::CLEAR)
+            .store_op(ash::vk::AttachmentStoreOp::DONT_CARE)
+            .stencil_load_op(ash::vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(ash::vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(ash::vk::ImageLayout::UNDEFINED)
+            .final_layout(ash::vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+            .build();
+            
         let color_attachment_ref = ash::vk::AttachmentReference::builder()
             .attachment(0)
-            .layout(ash::vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+            .layout(ash::vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .build();
+            
+        let depth_attachment_ref = ash::vk::AttachmentReference::builder()
+            .attachment(1)
+            .layout(ash::vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+            .build();
+            
         let subpass = ash::vk::SubpassDescription::builder()
             .pipeline_bind_point(ash::vk::PipelineBindPoint::GRAPHICS)
-            .color_attachments(std::slice::from_ref(&color_attachment_ref));
+            .color_attachments(std::slice::from_ref(&color_attachment_ref))
+            .depth_stencil_attachment(&depth_attachment_ref)
+            .build();
+            
+        let attachments = [color_attachment, depth_attachment];
         let render_pass_info = ash::vk::RenderPassCreateInfo::builder()
-            .attachments(std::slice::from_ref(&color_attachment))
+            .attachments(&attachments)
             .subpasses(std::slice::from_ref(&subpass));
         let render_pass = unsafe {
             device
@@ -233,11 +364,19 @@ impl VulkanContext {
                 .expect("Failed to create render pass")
         };
 
-        // Step 6: Create framebuffers for each swapchain image view
+        // Create depth buffer resources
+        let (depth_image, depth_image_memory, depth_image_view) = Self::create_depth_resources(
+            &device,
+            &instance,
+            physical_device,
+            surface_caps.current_extent,
+        );
+
+        // Step 6: Create framebuffers for each swapchain image view with depth attachment
         let framebuffers: Vec<ash::vk::Framebuffer> = image_views
             .iter()
             .map(|&view| {
-                let attachments = [view];
+                let attachments = [view, depth_image_view];
                 let framebuffer_info = ash::vk::FramebufferCreateInfo::builder()
                     .render_pass(render_pass)
                     .attachments(&attachments)
@@ -281,8 +420,16 @@ impl VulkanContext {
                 .expect("Failed to create fragment shader module")
         };
 
-        // Step 9: Create pipeline layout
-        let pipeline_layout_info = ash::vk::PipelineLayoutCreateInfo::builder();
+        // Step 9: Create pipeline layout with push constants
+        let push_constant_range = ash::vk::PushConstantRange::builder()
+            .stage_flags(ash::vk::ShaderStageFlags::VERTEX)
+            .offset(0)
+            .size(64) // 4x4 matrix = 16 floats = 64 bytes
+            .build();
+        
+        let push_constant_ranges = [push_constant_range];
+        let pipeline_layout_info = ash::vk::PipelineLayoutCreateInfo::builder()
+            .push_constant_ranges(&push_constant_ranges);
         let pipeline_layout = unsafe {
             device
                 .create_pipeline_layout(&pipeline_layout_info, None)
@@ -359,10 +506,10 @@ impl VulkanContext {
         let rasterizer = ash::vk::PipelineRasterizationStateCreateInfo::builder()
             .depth_clamp_enable(false)
             .rasterizer_discard_enable(false)
-            .polygon_mode(ash::vk::PolygonMode::FILL)
+            .polygon_mode(ash::vk::PolygonMode::FILL) // Back to filled mode
             .line_width(1.0)
-            .cull_mode(ash::vk::CullModeFlags::BACK)
-            .front_face(ash::vk::FrontFace::CLOCKWISE)
+            .cull_mode(ash::vk::CullModeFlags::NONE) // Keep face culling disabled
+            .front_face(ash::vk::FrontFace::COUNTER_CLOCKWISE)
             .depth_bias_enable(false);
         let multisampling = ash::vk::PipelineMultisampleStateCreateInfo::builder()
             .sample_shading_enable(false)
@@ -383,6 +530,15 @@ impl VulkanContext {
         };
         let color_blending = ash::vk::PipelineColorBlendStateCreateInfo::builder()
             .attachments(std::slice::from_ref(&color_blend_attachment));
+            
+        // Enable depth testing with proper depth buffer
+        let depth_stencil = ash::vk::PipelineDepthStencilStateCreateInfo::builder()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(ash::vk::CompareOp::LESS_OR_EQUAL) // Try less restrictive comparison
+            .depth_bounds_test_enable(false)
+            .stencil_test_enable(false);
+            
         let pipeline_info = ash::vk::GraphicsPipelineCreateInfo::builder()
             .stages(&shader_stages)
             .vertex_input_state(&vertex_input_info)
@@ -390,6 +546,7 @@ impl VulkanContext {
             .viewport_state(&viewport_state)
             .rasterization_state(&rasterizer)
             .multisample_state(&multisampling)
+            .depth_stencil_state(&depth_stencil)  // Now enabled with depth buffer
             .color_blend_state(&color_blending)
             .layout(pipeline_layout)
             .render_pass(render_pass)
@@ -521,6 +678,15 @@ impl VulkanContext {
             mesh_vertex_count: 3, // Default to triangle
             vertex_buffer: None,
             index_buffer: None,
+            mvp_matrix: [
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ], // Identity matrix
+            depth_image,
+            depth_image_memory,
+            depth_image_view,
         }
     }
 
@@ -568,11 +734,19 @@ impl VulkanContext {
                 .get_physical_device_surface_capabilities(self.physical_device, self.surface)
                 .expect("Failed to get surface capabilities");
             
-            let clear_values = [ash::vk::ClearValue {
-                color: ash::vk::ClearColorValue {
-                    float32: [0.0, 0.0, 0.0, 1.0],
+            let clear_values = [
+                ash::vk::ClearValue {
+                    color: ash::vk::ClearColorValue {
+                        float32: [0.0, 0.0, 0.0, 1.0],
+                    },
                 },
-            }];
+                ash::vk::ClearValue {
+                    depth_stencil: ash::vk::ClearDepthStencilValue {
+                        depth: 1.0,
+                        stencil: 0,
+                    },
+                },
+            ];
             let render_pass_info = ash::vk::RenderPassBeginInfo::builder()
                 .render_pass(self.render_pass)
                 .framebuffer(self.framebuffers[image_index])
@@ -599,7 +773,26 @@ impl VulkanContext {
                 device.cmd_bind_vertex_buffers(command_buffer, 0, &vertex_buffers, &offsets);
             }
             
-            device.cmd_draw(command_buffer, self.mesh_vertex_count as u32, 1, 0, 0);
+            // Bind index buffer if available
+            if let Some(ref index_buffer) = self.index_buffer {
+                device.cmd_bind_index_buffer(command_buffer, index_buffer.buffer, 0, vk::IndexType::UINT32);
+            }
+            
+            // Push constants for MVP matrix
+            device.cmd_push_constants(
+                command_buffer,
+                self.pipeline_layout,
+                ash::vk::ShaderStageFlags::VERTEX,
+                0,
+                bytemuck::cast_slice(&self.mvp_matrix)
+            );
+            
+            // Use indexed rendering if we have an index buffer, otherwise regular draw
+            if self.index_buffer.is_some() {
+                device.cmd_draw_indexed(command_buffer, self.mesh_vertex_count as u32, 1, 0, 0, 0);
+            } else {
+                device.cmd_draw(command_buffer, self.mesh_vertex_count as u32, 1, 0, 0);
+            }
             device.cmd_end_render_pass(command_buffer);
             device.end_command_buffer(command_buffer)?;
         }
@@ -638,9 +831,12 @@ impl VulkanContext {
         Ok(())
     }
     
-    pub fn set_mesh_data(&mut self, vertices: &[crate::render::mesh::Vertex]) -> Result<(), ash::vk::Result> {
-        // Clean up any existing vertex buffer
+    pub fn set_mesh_data(&mut self, vertices: &[crate::render::mesh::Vertex], indices: &[u32]) -> Result<(), ash::vk::Result> {
+        // Clean up any existing buffers
         if let Some(mut buffer) = self.vertex_buffer.take() {
+            buffer.cleanup(&self.device);
+        }
+        if let Some(mut buffer) = self.index_buffer.take() {
             buffer.cleanup(&self.device);
         }
         
@@ -651,10 +847,24 @@ impl VulkanContext {
         let vertex_buffer = buffer_builder.create_vertex_buffer(vertices)?;
         self.vertex_buffer = Some(vertex_buffer);
         
-        // Update vertex count
-        self.mesh_vertex_count = vertices.len();
+        // Create index buffer
+        let index_buffer = buffer_builder.create_index_buffer(indices)?;
+        self.index_buffer = Some(index_buffer);
+        
+        // Update vertex count to index count for indexed rendering
+        self.mesh_vertex_count = indices.len();
         
         Ok(())
+    }
+
+    pub fn set_mvp_matrix(&mut self, mvp_matrix: &crate::util::math::Mat4) {
+        // Convert Mat4 to array format for push constants
+        self.mvp_matrix = [
+            mvp_matrix.m[0][0], mvp_matrix.m[1][0], mvp_matrix.m[2][0], mvp_matrix.m[3][0],
+            mvp_matrix.m[0][1], mvp_matrix.m[1][1], mvp_matrix.m[2][1], mvp_matrix.m[3][1],
+            mvp_matrix.m[0][2], mvp_matrix.m[1][2], mvp_matrix.m[2][2], mvp_matrix.m[3][2],
+            mvp_matrix.m[0][3], mvp_matrix.m[1][3], mvp_matrix.m[2][3], mvp_matrix.m[3][3],
+        ];
     }
 
     pub fn recreate_swapchain(&mut self, _window: &mut crate::render::window::WindowHandle) {
@@ -741,7 +951,11 @@ impl VulkanContext {
                 device.destroy_image_view(view, None);
             }
         }
+        // Clean up old depth buffer resources
         unsafe {
+            device.destroy_image_view(self.depth_image_view, None);
+            device.destroy_image(self.depth_image, None);
+            device.free_memory(self.depth_image_memory, None);
             swapchain_loader.destroy_swapchain(old_swapchain, None);
         }
 
@@ -778,10 +992,19 @@ impl VulkanContext {
                 }
             })
             .collect();
+            
+        // Recreate depth buffer with new surface capabilities
+        let (depth_image, depth_image_memory, depth_image_view) = Self::create_depth_resources(
+            &device,
+            &self.instance,
+            physical_device,
+            surface_caps.current_extent,
+        );
+        
         let framebuffers: Vec<ash::vk::Framebuffer> = image_views
             .iter()
             .map(|&view| {
-                let attachments = [view];
+                let attachments = [view, depth_image_view];
                 let framebuffer_info = ash::vk::FramebufferCreateInfo::builder()
                     .render_pass(render_pass)
                     .attachments(&attachments)
@@ -884,6 +1107,9 @@ impl VulkanContext {
         self.image_available_semaphores = image_available_semaphores;
         self.render_finished_semaphores = render_finished_semaphores;
         self.in_flight_fences = in_flight_fences;
+        self.depth_image = depth_image;
+        self.depth_image_memory = depth_image_memory;
+        self.depth_image_view = depth_image_view;
         self.current_frame = 0;
     }
 
@@ -908,6 +1134,10 @@ impl VulkanContext {
             device.destroy_shader_module(self.vert_shader_module, None);
             device.destroy_shader_module(self.frag_shader_module, None);
             device.destroy_render_pass(self.render_pass, None);
+            // Clean up depth buffer resources
+            device.destroy_image_view(self.depth_image_view, None);
+            device.destroy_image(self.depth_image, None);
+            device.free_memory(self.depth_image_memory, None);
             for &view in &self.image_views {
                 device.destroy_image_view(view, None);
             }

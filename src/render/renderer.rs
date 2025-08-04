@@ -189,9 +189,17 @@ impl Renderer {
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Only update mesh data if we haven't loaded one yet
         if !self.current_mesh_loaded {
-            self.vulkan_context.set_mesh_data(&mesh.vertices)?;
+            self.vulkan_context.set_mesh_data(&mesh.vertices, &mesh.indices)?;
             self.current_mesh_loaded = true;
         }
+        
+        // Compute MVP matrix: Projection * View * Model
+        let view_matrix = self.camera.get_view_matrix();
+        let projection_matrix = self.camera.get_projection_matrix();
+        let mvp_matrix = projection_matrix * view_matrix * *model_matrix;
+        
+        // Set MVP matrix in Vulkan context
+        self.vulkan_context.set_mvp_matrix(&mvp_matrix);
         
         // Create draw command
         let command = DrawCommand {

@@ -1,5 +1,7 @@
 // src/render/vulkan.rs
 use crate::render::window::WindowHandle;
+use crate::render::buffer::{Buffer, BufferBuilder};
+use crate::render::mesh::Vertex;
 use ash::extensions::khr::{Surface, Swapchain};
 use ash::{Entry, vk};
 
@@ -29,6 +31,9 @@ pub struct VulkanContext {
     pub render_finished_semaphores: Vec<vk::Semaphore>,
     pub in_flight_fences: Vec<vk::Fence>,
     pub current_frame: usize,
+    pub mesh_vertex_count: usize, // Track how many vertices we should render
+    pub vertex_buffer: Option<Buffer>,
+    pub index_buffer: Option<Buffer>,
 }
 
 impl VulkanContext {
@@ -298,7 +303,41 @@ impl VulkanContext {
                 .name(&entry_point)
                 .build(),
         ];
-        let vertex_input_info = ash::vk::PipelineVertexInputStateCreateInfo::builder();
+        
+        // Define vertex input description
+        let binding_descriptions = [ash::vk::VertexInputBindingDescription::builder()
+            .binding(0)
+            .stride(std::mem::size_of::<Vertex>() as u32)
+            .input_rate(ash::vk::VertexInputRate::VERTEX)
+            .build()];
+        
+        let attribute_descriptions = [
+            // Position attribute
+            ash::vk::VertexInputAttributeDescription::builder()
+                .binding(0)
+                .location(0)
+                .format(ash::vk::Format::R32G32B32_SFLOAT)
+                .offset(0)
+                .build(),
+            // Normal attribute
+            ash::vk::VertexInputAttributeDescription::builder()
+                .binding(0)
+                .location(1)
+                .format(ash::vk::Format::R32G32B32_SFLOAT)
+                .offset(12) // 3 * sizeof(f32)
+                .build(),
+            // UV attribute
+            ash::vk::VertexInputAttributeDescription::builder()
+                .binding(0)
+                .location(2)
+                .format(ash::vk::Format::R32G32_SFLOAT)
+                .offset(24) // 6 * sizeof(f32)
+                .build(),
+        ];
+        
+        let vertex_input_info = ash::vk::PipelineVertexInputStateCreateInfo::builder()
+            .vertex_binding_descriptions(&binding_descriptions)
+            .vertex_attribute_descriptions(&attribute_descriptions);
         let input_assembly = ash::vk::PipelineInputAssemblyStateCreateInfo::builder()
             .topology(ash::vk::PrimitiveTopology::TRIANGLE_LIST)
             .primitive_restart_enable(false);
@@ -479,6 +518,9 @@ impl VulkanContext {
             render_finished_semaphores,
             in_flight_fences,
             current_frame: 0,
+            mesh_vertex_count: 3, // Default to triangle
+            vertex_buffer: None,
+            index_buffer: None,
         }
     }
 
@@ -513,6 +555,55 @@ impl VulkanContext {
             Err(e) => return Err(e),
         };
 
+        // Re-record the command buffer for this frame with current mesh data
+        let command_buffer = command_buffers[image_index];
+        unsafe {
+            device.reset_command_buffer(command_buffer, ash::vk::CommandBufferResetFlags::empty())?;
+            
+            let begin_info = ash::vk::CommandBufferBeginInfo::builder();
+            device.begin_command_buffer(command_buffer, &begin_info)?;
+            
+            // Get current surface capabilities
+            let surface_caps = self.surface_loader
+                .get_physical_device_surface_capabilities(self.physical_device, self.surface)
+                .expect("Failed to get surface capabilities");
+            
+            let clear_values = [ash::vk::ClearValue {
+                color: ash::vk::ClearColorValue {
+                    float32: [0.0, 0.0, 0.0, 1.0],
+                },
+            }];
+            let render_pass_info = ash::vk::RenderPassBeginInfo::builder()
+                .render_pass(self.render_pass)
+                .framebuffer(self.framebuffers[image_index])
+                .render_area(ash::vk::Rect2D {
+                    offset: ash::vk::Offset2D { x: 0, y: 0 },
+                    extent: surface_caps.current_extent,
+                })
+                .clear_values(&clear_values);
+            device.cmd_begin_render_pass(
+                command_buffer,
+                &render_pass_info,
+                ash::vk::SubpassContents::INLINE,
+            );
+            device.cmd_bind_pipeline(
+                command_buffer,
+                ash::vk::PipelineBindPoint::GRAPHICS,
+                self.graphics_pipeline,
+            );
+            
+            // Bind vertex buffer if available
+            if let Some(ref vertex_buffer) = self.vertex_buffer {
+                let vertex_buffers = [vertex_buffer.buffer];
+                let offsets = [0];
+                device.cmd_bind_vertex_buffers(command_buffer, 0, &vertex_buffers, &offsets);
+            }
+            
+            device.cmd_draw(command_buffer, self.mesh_vertex_count as u32, 1, 0, 0);
+            device.cmd_end_render_pass(command_buffer);
+            device.end_command_buffer(command_buffer)?;
+        }
+
         let wait_semaphores = [image_available_semaphores[current_frame]];
         let signal_semaphores = [render_finished_semaphores[current_frame]];
         let command_buffers_to_submit = [command_buffers[image_index]];
@@ -544,6 +635,25 @@ impl VulkanContext {
         }
 
         self.current_frame = (self.current_frame + 1) % framebuffers_len;
+        Ok(())
+    }
+    
+    pub fn set_mesh_data(&mut self, vertices: &[crate::render::mesh::Vertex]) -> Result<(), ash::vk::Result> {
+        // Clean up any existing vertex buffer
+        if let Some(mut buffer) = self.vertex_buffer.take() {
+            buffer.cleanup(&self.device);
+        }
+        
+        // Create buffer builder
+        let buffer_builder = BufferBuilder::new(&self.device, &self.instance, self.physical_device);
+        
+        // Create vertex buffer
+        let vertex_buffer = buffer_builder.create_vertex_buffer(vertices)?;
+        self.vertex_buffer = Some(vertex_buffer);
+        
+        // Update vertex count
+        self.mesh_vertex_count = vertices.len();
+        
         Ok(())
     }
 

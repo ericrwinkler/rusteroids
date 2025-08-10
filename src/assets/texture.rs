@@ -1,1 +1,0 @@
-// Texture abstraction stub

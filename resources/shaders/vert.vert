@@ -2,6 +2,7 @@
 
 layout(push_constant) uniform PushConstants {
     mat4 mvp; // Model-View-Projection matrix
+    vec4 material_color; // Material base color (RGBA)
 } pushConstants;
 
 layout(location = 0) in vec3 inPosition;

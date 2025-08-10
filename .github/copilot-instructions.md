@@ -16,3 +16,5 @@ Vulkan rendering features should include:
 When writing code, be sure to run a build and test it to ensure correctness. Use Rust's testing framework to write unit tests for components and systems.
 
 Always read the design documents and architecture diagrams provided in the `docs/` folder to understand the overall structure and design principles of the project. Follow the coding conventions and patterns established in the existing codebase.
+
+Do not import new Cargo.toml dependencies without asking. We want to build our own libraries for asset loading, serialization, and other features to maintain control over the codebase and ensure compatibility with the ECS architecture.

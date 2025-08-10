@@ -1,0 +1,11 @@
+[package]
+name = "teapot_app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rust_engine = { path = "../crates/rust_engine" }
+glfw = "0.55"
+log = "0.4"
+env_logger = "0.11"
+thiserror = "1.0"

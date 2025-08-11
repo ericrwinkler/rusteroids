@@ -2,6 +2,7 @@
 
 layout(push_constant) uniform PushConstants {
     mat4 mvp; // Model-View-Projection matrix
+    mat3 normal_matrix; // Normal transformation matrix (padded to 48 bytes in memory)
     vec4 material_color; // Material base color (RGBA)
     vec4 light_direction; // Directional light direction + intensity (xyz = direction, w = intensity)
     vec4 light_color; // Light color (RGB) + ambient intensity (A)
@@ -21,7 +22,8 @@ void main() {
     
     // Calculate diffuse lighting
     vec3 normal = normalize(fragNormal);
-    float diff = max(dot(normal, -lightDir), 0.0); // Negative because light_direction points towards light
+    // Light direction should point FROM the light TO the surface
+    float diff = max(dot(normal, -lightDir), 0.0);
     
     // Use lower ambient lighting to make the lighting effect more visible
     vec3 ambient = ambientIntensity * 0.4 * lightColor; // Reduce ambient by 60%

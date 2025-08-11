@@ -204,7 +204,7 @@ impl IntegratedApp {
         let oscillation_period = 6.0; // seconds for full up-down-up cycle
         let oscillation_amplitude = 3.0; // how far up/down to move
         let base_height = -4.0; // Vulkan: negative Y = above teapot
-        
+
         let y_offset = (elapsed_seconds * 2.0 * std::f32::consts::PI / oscillation_period).sin() * oscillation_amplitude;
         let camera_y = base_height + y_offset;
         
@@ -216,9 +216,7 @@ impl IntegratedApp {
         self.camera.set_position(Vec3::new(camera_x, camera_y, camera_z));
         // Always look at the teapot at origin - use Vulkan Y-down up vector
         self.camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
-    }
-    
-    fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    }    fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Begin frame
         self.renderer.begin_frame();
         

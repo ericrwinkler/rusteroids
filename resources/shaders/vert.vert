@@ -2,6 +2,7 @@
 
 layout(push_constant) uniform PushConstants {
     mat4 mvp; // Model-View-Projection matrix
+    mat3 normal_matrix; // Normal matrix for proper normal transformation
     vec4 material_color; // Material base color (RGBA)
     vec4 light_direction; // Directional light direction + intensity (xyz = direction, w = intensity)
     vec4 light_color; // Light color (RGB) + ambient intensity (A)
@@ -16,6 +17,9 @@ layout(location = 1) out vec2 fragTexCoord;
 
 void main() {
     gl_Position = pushConstants.mvp * vec4(inPosition, 1.0);
-    fragNormal = inNormal; // For now, don't transform normals
+    
+    // Transform normal using the proper normal matrix (inverse transpose of model matrix)
+    fragNormal = normalize(pushConstants.normal_matrix * inNormal);
+    
     fragTexCoord = inTexCoord;
 }

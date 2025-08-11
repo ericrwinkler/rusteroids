@@ -84,8 +84,6 @@ impl Renderer {
                         color,
                         lighting.ambient_intensity,
                     );
-                    log::trace!("Set directional light: dir={:?}, intensity={}, color={:?}, ambient={}", 
-                               direction, first_light.intensity, color, lighting.ambient_intensity);
                 },
                 _ => {
                     // Point lights and other types not supported with current push constants
@@ -138,20 +136,25 @@ impl Renderer {
                 [mvp[(0, 3)], mvp[(1, 3)], mvp[(2, 3)], mvp[(3, 3)]],
             ];
             
+            // Convert model matrix to array format
+            let model_array = [
+                [model_matrix[(0, 0)], model_matrix[(1, 0)], model_matrix[(2, 0)], model_matrix[(3, 0)]],
+                [model_matrix[(0, 1)], model_matrix[(1, 1)], model_matrix[(2, 1)], model_matrix[(3, 1)]],
+                [model_matrix[(0, 2)], model_matrix[(1, 2)], model_matrix[(2, 2)], model_matrix[(3, 2)]],
+                [model_matrix[(0, 3)], model_matrix[(1, 3)], model_matrix[(2, 3)], model_matrix[(3, 3)]],
+            ];
+
             self.vulkan_renderer.set_mvp_matrix(mvp_array);
+            self.vulkan_renderer.set_model_matrix(model_array);
             
-            // Transform light direction to object space for proper lighting
+            // Set lighting in world space
             if let Some(ref lighting) = self.current_lighting {
                 if let Some(first_light) = lighting.lights.first() {
                     match first_light.light_type {
                         LightType::Directional => {
-                            // Transform light direction from world space to object space
-                            // Use inverse transpose of model matrix for proper normal transformation
-                            let model_inverse = model_matrix.try_inverse().unwrap_or(*model_matrix);
-                            let light_dir_world = Vec3::new(first_light.direction.x, first_light.direction.y, first_light.direction.z);
-                            let light_dir_object = model_inverse.transpose().transform_vector(&light_dir_world);
-                            
-                            let direction = [light_dir_object.x, light_dir_object.y, light_dir_object.z];
+                            // Keep light direction in world space (don't transform it)
+                            // The normal matrix will transform normals from object space to world space
+                            let direction = [first_light.direction.x, first_light.direction.y, first_light.direction.z];
                             let color = [first_light.color.x, first_light.color.y, first_light.color.z];
                             self.vulkan_renderer.set_directional_light(
                                 direction,
@@ -159,7 +162,7 @@ impl Renderer {
                                 color,
                                 lighting.ambient_intensity,
                             );
-                            log::trace!("Set object-space directional light: dir={:?}, intensity={}", 
+                            log::trace!("Set world-space directional light: dir={:?}, intensity={}", 
                                        direction, first_light.intensity);
                         },
                         _ => {

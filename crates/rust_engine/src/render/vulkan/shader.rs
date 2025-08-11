@@ -157,11 +157,11 @@ impl GraphicsPipeline {
             .logic_op_enable(false)
             .attachments(&color_blend_attachments);
             
-        // Pipeline layout with push constants for MVP matrix + material color + lighting
+        // Pipeline layout with push constants for MVP matrix + normal matrix + material color + lighting
         let push_constant_range = vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
             offset: 0,
-            size: 112, // sizeof(mat4) + sizeof(vec4) + sizeof(vec4) + sizeof(vec4) = 64 + 16 + 16 + 16 = 112 bytes
+            size: 160, // sizeof(mat4) + sizeof(mat3 with padding) + sizeof(vec4) + sizeof(vec4) + sizeof(vec4) = 64 + 48 + 16 + 16 + 16 = 160 bytes
         };
         
         let push_constant_ranges = [push_constant_range];

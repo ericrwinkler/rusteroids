@@ -8,10 +8,13 @@ use crate::render::mesh::Vertex;
 use std::path::Path;
 
 /// Push constants structure matching the shader interface
+/// GLSL mat3 has 16-byte column alignment, so we need to pad each column to vec4
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct PushConstants {
     mvp_matrix: [[f32; 4]; 4],      // 64 bytes
+    // GLSL mat3 is stored as 3 vec4s (each column padded to 16 bytes)
+    normal_matrix: [[f32; 4]; 3],   // 48 bytes - padded to match GLSL mat3 alignment
     material_color: [f32; 4],       // 16 bytes - RGBA color
     light_direction: [f32; 4],      // 16 bytes - XYZ direction + W intensity
     light_color: [f32; 4],          // 16 bytes - RGB color + A ambient intensity
@@ -211,6 +214,11 @@ impl VulkanRenderer {
                     [0.0, 0.0, 1.0, 0.0],
                     [0.0, 0.0, 0.0, 1.0],
                 ],
+                normal_matrix: [
+                    [1.0, 0.0, 0.0, 0.0], // Column 0: padded to vec4
+                    [0.0, 1.0, 0.0, 0.0], // Column 1: padded to vec4
+                    [0.0, 0.0, 1.0, 0.0], // Column 2: padded to vec4
+                ],
                 material_color: [1.0, 1.0, 1.0, 1.0], // Default white
                 light_direction: [-0.5, -1.0, -0.3, 0.8], // Default directional light (direction + intensity)
                 light_color: [1.0, 0.95, 0.9, 0.2], // Default warm white light + ambient intensity
@@ -220,7 +228,7 @@ impl VulkanRenderer {
     
     /// Update mesh data for rendering
     pub fn update_mesh(&mut self, vertices: &[Vertex], indices: &[u32]) -> VulkanResult<()> {
-        log::debug!("Updating mesh with {} vertices and {} indices", vertices.len(), indices.len());
+        log::trace!("Updating mesh with {} vertices and {} indices", vertices.len(), indices.len());
         
         // Wait for device to be idle before updating buffers
         self.wait_idle()?;
@@ -244,10 +252,60 @@ impl VulkanRenderer {
         Ok(())
     }
     
-    /// Set MVP matrix for rendering
+    /// Set MVP matrix and model matrix for rendering (needed to calculate normal matrix)
     pub fn set_mvp_matrix(&mut self, mvp: [[f32; 4]; 4]) {
         self.push_constants.mvp_matrix = mvp;
         log::trace!("MVP matrix updated");
+    }
+
+    /// Set model matrix and calculate normal matrix for proper lighting
+    ///
+    /// The normal matrix is used to transform normals from object space to world space.
+    /// It must be the inverse-transpose of the model matrix to handle non-uniform scaling correctly.
+    /// 
+    /// # Coordinate Spaces
+    /// - Input normals: Object space (from 3D model)
+    /// - Output normals: World space (for lighting calculations)
+    /// - Light direction: World space (fixed direction)
+    /// 
+    /// # Matrix Storage
+    /// GLSL expects column-major matrix storage, while nalgebra uses row-major indexing.
+    /// We apply an additional transpose to convert between these formats.
+    pub fn set_model_matrix(&mut self, model: [[f32; 4]; 4]) {
+        // Calculate the proper normal matrix as inverse-transpose of the 3x3 model matrix
+        // This ensures that normals are correctly transformed from object space to world space
+        
+        // Extract 3x3 part of model matrix
+        use nalgebra::Matrix3;
+        let mat3_model = Matrix3::new(
+            model[0][0], model[0][1], model[0][2],
+            model[1][0], model[1][1], model[1][2],
+            model[2][0], model[2][1], model[2][2],
+        );
+        
+        // Calculate inverse-transpose for normal transformation
+        // This is mathematically required to transform normals correctly,
+        // especially when the model matrix contains non-uniform scaling
+        let normal_matrix = if let Some(inverse) = mat3_model.try_inverse() {
+            inverse.transpose()
+        } else {
+            // Fallback to identity if matrix is not invertible
+            log::warn!("Model matrix is not invertible, using identity for normal matrix");
+            Matrix3::identity()
+        };
+        
+        // Convert to the padded format required for GLSL mat3 alignment
+        // GLSL matrices are column-major, so store columns of the normal matrix
+        // Additional transpose is needed to convert from nalgebra's row-major indexing
+        // to GLSL's column-major storage format
+        let transposed = normal_matrix.transpose();
+        self.push_constants.normal_matrix = [
+            [transposed[(0, 0)], transposed[(1, 0)], transposed[(2, 0)], 0.0],  // First column 
+            [transposed[(0, 1)], transposed[(1, 1)], transposed[(2, 1)], 0.0],  // Second column
+            [transposed[(0, 2)], transposed[(1, 2)], transposed[(2, 2)], 0.0],  // Third column
+        ];
+        
+        log::trace!("Normal matrix calculated as inverse-transpose of model matrix 3x3 part");
     }
     
     /// Set material color for rendering

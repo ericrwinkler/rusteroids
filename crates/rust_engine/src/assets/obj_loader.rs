@@ -116,10 +116,10 @@ impl ObjLoader {
                                 .and_then(|idx| tex_coords.get(idx))
                                 .unwrap_or(&[0.0, 0.0]);
                             
-                            // Get normal or use default
+                            // Get normal or use default (Vulkan Y-down default)
                             let normal = normal_idx
                                 .and_then(|idx| normals.get(idx))
-                                .unwrap_or(&[0.0, 1.0, 0.0]);
+                                .unwrap_or(&[0.0, -1.0, 0.0]);  // Vulkan Y-down default normal
                             
                             // Create vertex
                             let vertex = Vertex {
@@ -150,6 +150,109 @@ impl ObjLoader {
             return Err(ObjError::InvalidFormat("No vertices found in OBJ file".to_string()));
         }
         
+        // COORDINATE SYSTEM CONVERSION: TEMPORARILY DISABLED FOR DEBUGGING
+        // OBJ files typically use Y-up, right-handed coordinates
+        // Vulkan uses Y-down, Z-into-screen coordinates
+        log::info!("DEBUGGING: Skipping coordinate conversion for {} vertices", vertices.len());
+        // Temporarily disable coordinate conversion to debug rendering issue
+        /*
+        for vertex in &mut vertices {
+            // Convert position: OBJ Y-up to Vulkan Y-down
+            let pos = vertex.position;
+            vertex.position = [pos[0], -pos[1], pos[2]];  // Flip Y coordinate
+            
+            // Convert normal: match position coordinate conversion
+            let normal = vertex.normal;
+            vertex.normal = [normal[0], -normal[1], normal[2]];  // Flip Y component
+            
+            // Texture coordinates typically stay the same (UV mapping)
+            // vertex.tex_coord remains unchanged
+        }
+        */
+        
+        // FACE WINDING CONVERSION: TEMPORARILY DISABLED FOR DEBUGGING
+        // OBJ files may use counter-clockwise winding, but pipeline expects clockwise
+        // Temporarily disable winding conversion to debug rendering issue
+        log::info!("DEBUGGING: Skipping face winding conversion");
+        /*
+        log::info!("Converting face winding from OBJ convention to Vulkan pipeline expectation");
+        for triangle in indices.chunks_mut(3) {
+            if triangle.len() == 3 {
+                triangle.swap(1, 2);  // Convert CCW to CW winding
+            }
+        }
+        */
+
+        // Generate normals if the mesh doesn't have them
+        let needs_normals = vertices.iter().all(|v| v.normal == [0.0, -1.0, 0.0]);
+        if needs_normals {
+            log::info!("OBJ file has no normals, generating them automatically");
+            Self::generate_normals(&mut vertices, &indices);
+        }
+        
         Ok(Mesh::new(vertices, indices))
+    }
+    
+    /// Generate face normals for a mesh (using Vulkan coordinate system)
+    fn generate_normals(vertices: &mut [Vertex], indices: &[u32]) {
+        // First, zero out all normals
+        for vertex in vertices.iter_mut() {
+            vertex.normal = [0.0, 0.0, 0.0];
+        }
+        
+        // Calculate face normals and accumulate them to vertex normals
+        for triangle in indices.chunks(3) {
+            if triangle.len() != 3 { continue; }
+            
+            let i0 = triangle[0] as usize;
+            let i1 = triangle[1] as usize;
+            let i2 = triangle[2] as usize;
+            
+            if i0 >= vertices.len() || i1 >= vertices.len() || i2 >= vertices.len() {
+                continue;
+            }
+            
+            let v0 = vertices[i0].position;
+            let v1 = vertices[i1].position;
+            let v2 = vertices[i2].position;
+            
+            // Calculate two edge vectors
+            let edge1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+            let edge2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+            
+            // Calculate cross product for face normal (right-handed cross product)
+            let face_normal = [
+                edge1[1] * edge2[2] - edge1[2] * edge2[1],
+                edge1[2] * edge2[0] - edge1[0] * edge2[2],
+                edge1[0] * edge2[1] - edge1[1] * edge2[0],
+            ];
+            
+            // Add face normal to each vertex normal (for smooth shading)
+            vertices[i0].normal[0] += face_normal[0];
+            vertices[i0].normal[1] += face_normal[1];
+            vertices[i0].normal[2] += face_normal[2];
+            
+            vertices[i1].normal[0] += face_normal[0];
+            vertices[i1].normal[1] += face_normal[1];
+            vertices[i1].normal[2] += face_normal[2];
+            
+            vertices[i2].normal[0] += face_normal[0];
+            vertices[i2].normal[1] += face_normal[1];
+            vertices[i2].normal[2] += face_normal[2];
+        }
+        
+        // Normalize all vertex normals
+        for vertex in vertices.iter_mut() {
+            let normal = &mut vertex.normal;
+            let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+            if length > 0.0 {
+                normal[0] /= length;
+                normal[1] /= length;
+                normal[2] /= length;
+            } else {
+                // Fallback for degenerate normals (Vulkan Y-down convention)
+                *normal = [0.0, -1.0, 0.0];
+            }
+        }
     }
 }

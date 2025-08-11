@@ -3,6 +3,8 @@
 layout(push_constant) uniform PushConstants {
     mat4 mvp; // Model-View-Projection matrix
     vec4 material_color; // Material base color (RGBA)
+    vec4 light_direction; // Directional light direction + intensity (xyz = direction, w = intensity)
+    vec4 light_color; // Light color (RGB) + ambient intensity (A)
 } pushConstants;
 
 layout(location = 0) in vec3 inPosition;

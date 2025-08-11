@@ -349,6 +349,53 @@ pub struct DescriptorSetManager {
 }
 ```
 
+### Face Winding and Asset Compatibility Rules
+
+```rust
+// Rule: Different 3D assets may have different face winding conventions
+// Problem: OBJ files from different modeling software use inconsistent winding orders
+// Solution: Configure pipeline based on asset requirements, document expectations
+
+pub enum WindingOrder {
+    CounterClockwise,  // OpenGL/Blender convention (most common)
+    Clockwise,         // Some modeling software, CAD programs
+}
+
+// Rule: Pipeline configuration should match asset expectations
+impl GraphicsPipeline {
+    pub fn new_for_asset_type(winding: WindingOrder) -> PipelineBuilder {
+        let front_face = match winding {
+            WindingOrder::CounterClockwise => vk::FrontFace::COUNTER_CLOCKWISE,
+            WindingOrder::Clockwise => vk::FrontFace::CLOCKWISE,
+        };
+        
+        PipelineBuilder::new()
+            .rasterization(vk::PipelineRasterizationStateCreateInfo::builder()
+                .cull_mode(vk::CullModeFlags::BACK)  // Always cull back faces for performance
+                .front_face(front_face)              // Match asset winding order
+            )
+    }
+}
+
+// Diagnostic Rule: When faces disappear unexpectedly, check winding order
+// Symptoms:
+// - Missing/invisible triangles when viewing model from certain angles
+// - Interior faces visible through model surface  
+// - Model appears "inside-out" or with holes
+// 
+// Debug Process:
+// 1. Temporarily set cull_mode(vk::CullModeFlags::NONE) to see all faces
+// 2. If model renders correctly with no culling, winding order mismatch confirmed
+// 3. Toggle front_face between CLOCKWISE and COUNTER_CLOCKWISE
+// 4. Re-enable back face culling once correct winding determined
+//
+// Asset-Specific Notes:
+// - Utah Teapot OBJ: Uses CLOCKWISE winding (confirmed fix)
+// - Blender exports: Typically COUNTER_CLOCKWISE  
+// - 3ds Max exports: Often CLOCKWISE
+// - CAD software: Varies by vendor
+```
+
 ## Performance and Safety Rules
 
 ### Memory Management Rules
@@ -501,10 +548,277 @@ The following Draw.io diagrams illustrate key architectural concepts:
 
 ---
 
+## Coordinate System Standardization
+
+### Engine-Wide Coordinate System Policy
+
+**RULE: All coordinate-related code must use consistent Vulkan-native coordinates throughout the entire engine pipeline.**
+
+Our engine standardizes on **Vulkan's native coordinate system** to eliminate conversion confusion and ensure predictable rendering behavior. This system is used consistently across all modules: math utilities, asset loading, rendering, camera positioning, lighting, and applications.
+
+#### Vulkan Coordinate System (Engine Standard)
+- **+X axis**: Points to the right
+- **+Y axis**: Points downward (screen-space convention)
+- **+Z axis**: Points into the screen (away from viewer) 
+- **NDC Z range**: [0.0, 1.0] (Vulkan's native depth range)
+- **Face winding**: Depends on asset type (configurable in pipeline)
+
+#### Coordinate System Rules by Module
+
+##### 1. Foundation Math Module (`crates/rust_engine/src/foundation/math.rs`)
+- **RULE**: All matrix operations use Vulkan-native conventions
+- **Projection matrices**: Direct Vulkan perspective matrices (no OpenGL conversion)
+- **View matrices**: Right-handed look-at with Vulkan Y-down assumption
+- **Transforms**: Vulkan coordinate space throughout
+
+```rust
+// STANDARDIZED: Vulkan-native perspective matrix
+fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
+    // Direct Vulkan NDC: X[-1,1], Y[-1,1] (Y+ down), Z[0,1]
+    let tan_half_fovy = (fov_y * 0.5).tan();
+    let mut result = Mat4::zeros();
+    
+    result[(0, 0)] = 1.0 / (aspect * tan_half_fovy);
+    result[(1, 1)] = -1.0 / tan_half_fovy;  // Negative for Y-down
+    result[(2, 2)] = far / (far - near);
+    result[(2, 3)] = -(far * near) / (far - near);
+    result[(3, 2)] = 1.0;
+    
+    result
+}
+
+// STANDARDIZED: Vulkan-native look-at matrix
+fn look_at(eye: Vec3, target: Vec3, up: Vec3) -> Mat4 {
+    // Standard right-handed look-at assuming Y-down screen space
+    let forward = (target - eye).normalize();
+    let right = forward.cross(&up).normalize();
+    let camera_up = right.cross(&forward);
+    
+    // Build view matrix for Vulkan Y-down convention
+    // (Implementation handles Y-down expectation)
+}
+```
+
+##### 2. Asset Loading Module (`crates/rust_engine/src/assets/obj_loader.rs`)
+- **RULE**: Convert all loaded assets to Vulkan coordinate system on import
+- **Vertex positions**: Apply coordinate conversion during OBJ parsing
+- **Normals**: Convert normal vectors to match Vulkan handedness
+- **Face winding**: Detect and convert to expected pipeline winding
+
+```rust
+// STANDARDIZED: Asset coordinate conversion
+impl ObjLoader {
+    pub fn load_obj<P: AsRef<Path>>(path: P) -> Result<Mesh, ObjError> {
+        // ... parse OBJ file ...
+        
+        // CONVERSION RULE: Transform all positions to Vulkan coordinates
+        for vertex in &mut vertices {
+            vertex.position = Self::convert_to_vulkan_coords(vertex.position);
+            vertex.normal = Self::convert_normal_to_vulkan(vertex.normal);
+        }
+        
+        // WINDING RULE: Convert indices for consistent face winding
+        if needs_winding_conversion {
+            Self::convert_face_winding(&mut indices);
+        }
+        
+        Ok(Mesh::new(vertices, indices))
+    }
+    
+    /// Convert position from asset coordinate system to Vulkan
+    fn convert_to_vulkan_coords(pos: [f32; 3]) -> [f32; 3] {
+        // Example: OBJ Y-up to Vulkan Y-down conversion
+        [pos[0], -pos[1], pos[2]]  // Flip Y coordinate
+    }
+    
+    /// Convert normals to Vulkan coordinate system  
+    fn convert_normal_to_vulkan(normal: [f32; 3]) -> [f32; 3] {
+        // Convert normal vectors to match coordinate system change
+        [normal[0], -normal[1], normal[2]]  // Flip Y component
+    }
+    
+    /// Convert face winding if necessary
+    fn convert_face_winding(indices: &mut Vec<u32>) {
+        // Reverse triangle winding order if needed
+        for triangle in indices.chunks_mut(3) {
+            triangle.swap(1, 2);  // Convert CCW to CW or vice versa
+        }
+    }
+}
+```
+
+##### 3. Camera System (`crates/rust_engine/src/render/mod.rs`)
+- **RULE**: Camera positioning uses Vulkan coordinate conventions
+- **Position vectors**: Vulkan Y-down, Z-into-screen coordinate space
+- **Look-at calculations**: Consistent with Vulkan handedness
+
+```rust
+// STANDARDIZED: Camera in Vulkan coordinates
+impl Camera {
+    /// Create camera with Vulkan coordinate assumptions
+    pub fn perspective(position: Vec3, fov_degrees: f32, aspect: f32, near: f32, far: f32) -> Self {
+        Self {
+            position,  // Direct Vulkan coordinates
+            target: Vec3::zeros(),
+            up: Vec3::new(0.0, -1.0, 0.0),  // Y-down for Vulkan
+            fov: utils::deg_to_rad(fov_degrees),
+            aspect,
+            near,
+            far,
+        }
+    }
+    
+    /// Position camera above object looking down (Vulkan coordinates)
+    pub fn look_down_at_origin(height: f32, distance: f32) -> Self {
+        Self::perspective(
+            Vec3::new(0.0, -height, distance),  // Negative Y = above in Vulkan
+            45.0,
+            16.0/9.0,
+            0.1,
+            100.0
+        )
+    }
+}
+```
+
+##### 4. Vulkan Rendering Pipeline (`crates/rust_engine/src/render/vulkan/`)
+- **RULE**: Pipeline expects Vulkan-native coordinates (no additional conversion)
+- **Viewport**: Standard Vulkan viewport (no Y-flip needed)
+- **Face winding**: Configured based on standardized asset loading
+- **Depth range**: Native Vulkan [0,1] range
+
+```rust
+// STANDARDIZED: Vulkan pipeline configuration
+impl GraphicsPipeline {
+    pub fn new(/* ... */) -> VulkanResult<Self> {
+        // Standard Vulkan viewport (no flipping needed)
+        let viewport = vk::Viewport::builder()
+            .x(0.0)
+            .y(0.0)
+            .width(extent.width as f32)
+            .height(extent.height as f32)
+            .min_depth(0.0)  // Vulkan native depth range
+            .max_depth(1.0)
+            .build();
+        
+        // Face winding configured for standardized assets
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo::builder()
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)  // Standardized after asset conversion
+            .cull_mode(vk::CullModeFlags::BACK);
+    }
+}
+```
+
+##### 5. Application Layer (e.g., `teapot_app/src/main.rs`)
+- **RULE**: All camera positioning and scene setup uses Vulkan coordinates
+- **Camera placement**: Vulkan Y-down, Z-into-screen conventions  
+- **Lighting direction**: Consistent with Vulkan coordinate system
+
+```rust
+// STANDARDIZED: Application using Vulkan coordinates throughout
+impl IntegratedApp {
+    pub fn new() -> Self {
+        // Camera positioned using Vulkan coordinates
+        let mut camera = Camera::perspective(
+            Vec3::new(4.0, -6.0, 8.0),  // Vulkan: -Y=up, +Z=away from object
+            45.0,
+            800.0 / 600.0,
+            0.1,
+            100.0
+        );
+        
+        // Look at origin with Vulkan coordinate assumptions
+        camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
+        
+        // Lighting using Vulkan coordinate system
+        let lighting_env = LightingEnvironment::new()
+            .add_light(Light::directional(
+                Vec3::new(-0.5, -1.0, -0.3),  // Vulkan: -Y = from above
+                Vec3::new(1.0, 0.95, 0.9),
+                2.0,
+            ));
+    }
+}
+```
+
+#### Migration Strategy
+
+When standardizing existing coordinate systems:
+
+1. **Audit all coordinate usage** in each module
+2. **Convert at asset load time** (not during rendering)
+3. **Update camera positioning** to use Vulkan conventions
+4. **Verify pipeline configuration** matches standardized assets
+5. **Test rendering output** for correct orientation
+
+#### Debugging Coordinate Issues
+
+Common signs of coordinate system inconsistencies:
+- **Upside-down models**: Y-axis coordinate system mismatch
+- **Inside-out models**: Face winding or normal direction issues
+- **Camera positioning confusion**: Mixed coordinate system assumptions
+- **Lighting artifacts**: Light direction inconsistent with coordinate system
+
+**Debug Process:**
+1. Verify asset loading applies coordinate conversion
+2. Check camera positioning uses consistent coordinate system
+3. Confirm pipeline face winding matches converted assets
+4. Validate matrix calculations use same coordinate conventions throughout
+
+#### Coordinate System Testing
+
+```rust
+#[cfg(test)]
+mod coordinate_tests {
+    use super::*;
+    
+    #[test]
+    fn test_vulkan_coordinate_consistency() {
+        // Verify camera positioned "above" object has negative Y in Vulkan coords
+        let camera = Camera::perspective(Vec3::new(0.0, -5.0, 3.0), 45.0, 1.0, 0.1, 100.0);
+        assert!(camera.position.y < 0.0, "Camera 'above' should have negative Y in Vulkan");
+        
+        // Verify projection matrix produces correct NDC
+        let proj = Mat4::perspective(45.0_f32.to_radians(), 1.0, 0.1, 100.0);
+        // Test point transformations...
+    }
+    
+    #[test] 
+    fn test_asset_coordinate_conversion() {
+        // Test that OBJ loading converts coordinates properly
+        let mesh = ObjLoader::load_obj("test_assets/cube.obj").unwrap();
+        // Verify vertices are in expected coordinate system...
+    }
+}
+
+#### 5. Matrix Transformations
+
+Our rendering pipeline performs these coordinate transformations:
+1. **World → View**: `nalgebra::Matrix4::look_at_rh()` (right-handed view matrix)
+2. **View → Clip**: `nalgebra::Matrix4::new_perspective()` (handles Vulkan NDC conventions)
+3. **Clip → Screen**: Vulkan viewport transformation
+
+#### 6. Debugging Coordinate Issues
+
+When objects appear upside-down or from wrong angles:
+
+1. **Check Z-axis direction**: Ensure camera Z position makes sense for right-handed coords
+2. **Verify viewing direction**: Use negative Z for "forward" movement in right-handed system
+3. **Confirm up vector**: Usually `Vec3::new(0.0, 1.0, 0.0)` for Y-up orientation
+4. **Test with known positions**: Start with `(0, 0, -10)` looking at `(0, 0, 0)` for simple forward view
+
+#### 7. Integration Notes
+
+- **nalgebra**: Handles right-handed world/view coordinates
+- **Vulkan**: Receives properly converted matrices from nalgebra
+- **Our Engine**: Uses right-handed conventions throughout, relies on nalgebra for GPU compatibility
+
+---
+
 ## Compliance and Enforcement
 
 This document serves as our architectural contract. All code must comply with these rules, and any deviations must be documented and justified. Regular architectural reviews will ensure adherence to these principles.
 
 **Last Updated**: August 10, 2025
-**Version**: 1.1
-**Status**: Active - Updated with Synchronization Troubleshooting
+**Version**: 1.2
+**Status**: Active - Updated with Coordinate System Documentation

@@ -129,8 +129,8 @@ impl GraphicsPipeline {
             .rasterizer_discard_enable(false)
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::BACK)
-            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .cull_mode(vk::CullModeFlags::NONE)  // Disable culling for debugging
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)  // Standard OBJ files use CCW winding
             .depth_bias_enable(false);
             
         // Multisampling
@@ -142,7 +142,7 @@ impl GraphicsPipeline {
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::builder()
             .depth_test_enable(true)
             .depth_write_enable(true)
-            .depth_compare_op(vk::CompareOp::LESS)
+            .depth_compare_op(vk::CompareOp::LESS) // More forgiving depth test
             .depth_bounds_test_enable(false)
             .stencil_test_enable(false);
             
@@ -157,11 +157,11 @@ impl GraphicsPipeline {
             .logic_op_enable(false)
             .attachments(&color_blend_attachments);
             
-        // Pipeline layout with push constants for MVP matrix + material color
+        // Pipeline layout with push constants for MVP matrix + material color + lighting
         let push_constant_range = vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
             offset: 0,
-            size: 80, // sizeof(mat4) + sizeof(vec4) = 64 + 16 = 80 bytes
+            size: 112, // sizeof(mat4) + sizeof(vec4) + sizeof(vec4) + sizeof(vec4) = 64 + 16 + 16 + 16 = 112 bytes
         };
         
         let push_constant_ranges = [push_constant_range];

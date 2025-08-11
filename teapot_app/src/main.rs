@@ -1,6 +1,6 @@
 //! Teapot demo application
 //! 
-//! This demonstrates the engine's 3D rendering capabilities by displaying
+//! This demonstrates the engine's rendering capabilities by displaying
 //! a rotating teapot model.
 
 use rust_engine::assets::obj_loader::ObjLoader;
@@ -8,7 +8,7 @@ use rust_engine::render::{
     Camera,
     Mesh,
     Material,
-    lighting::{LightingEnvironment},
+    lighting::{LightingEnvironment, Light},
     Renderer,
     WindowHandle,
 };
@@ -40,19 +40,19 @@ impl IntegratedApp {
         let renderer = Renderer::new_from_window(&mut window);
         log::info!("Vulkan renderer created successfully");
         
-        // Create camera
+        // Create camera using Vulkan coordinate system
         log::info!("Creating camera...");
         let mut camera = Camera::perspective(
-            Vec3::new(2.0, 2.0, 10.0), // Position - moved camera further back
+            Vec3::new(4.0, -6.0, 8.0), // Vulkan: -Y = above origin, +Z = away from origin
             45.0, // FOV in degrees - will be converted to radians in update_projection_matrix
             800.0 / 600.0,
             0.1,
             100.0
         );
         
-        // Position camera to look at teapot using proper setter methods
-        camera.set_position(Vec3::new(2.0, 2.0, 10.0)); // Further away
-        camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        // Position camera to look at teapot using Vulkan coordinate conventions
+        camera.set_position(Vec3::new(4.0, -6.0, 8.0)); // Vulkan: -Y = above, +Z = away from origin
+        camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0)); // Vulkan Y-down up vector
         
         // Create material for teapot
         let teapot_material = Material::new()
@@ -60,8 +60,18 @@ impl IntegratedApp {
             .with_metallic(0.1)  // Metallic
             .with_roughness(0.3); // Roughness
         
-        // Create lighting environment with warm indoor lighting
-        let lighting_env = LightingEnvironment::indoor_warm();
+        // Create custom lighting environment with single strong directional light
+        // NOTE: Current renderer only supports ONE light (uses first directional light only)
+        // Multiple lights require expanding push constants or using uniform buffers
+        let lighting_env = LightingEnvironment::new()
+            // Low ambient for dramatic contrast
+            .with_ambient(Vec3::new(0.15, 0.12, 0.18), 0.1) // Slightly blue ambient
+            // Main directional light from upper-left-front using Vulkan coordinates
+            .add_light(Light::directional(
+                Vec3::new(-0.5, -1.0, 0.3),  // Vulkan: -Y = from above, +Z = toward viewer
+                Vec3::new(1.0, 0.95, 0.9),   // Warm white color
+                2.0,                         // Strong intensity for clear lighting
+            ));
         
         Self {
             window,
@@ -84,7 +94,8 @@ impl IntegratedApp {
         }
         
         // Load teapot OBJ model
-        match ObjLoader::load_obj("resources/models/teapot.obj") {
+        // Load teapot mesh with pre-generated normals
+        match ObjLoader::load_obj("resources/models/teapot_with_normals.obj") {
             Ok(mut mesh) => {
                 // Check if vertices are reasonable (not too large/small)
                 let mut min_pos = [f32::MAX; 3];
@@ -158,9 +169,9 @@ impl IntegratedApp {
                         }
                     }
                     WindowEvent::Key(Key::Space, _, Action::Press, _) => {
-                        // Reset camera position
-                        self.camera.set_position(Vec3::new(0.0, 2.0, 8.0));
-                        self.camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+                        // Reset camera position using Vulkan coordinates
+                        self.camera.set_position(Vec3::new(0.0, -2.0, 8.0));  // Vulkan: -Y = above
+                        self.camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
                     }
                     _ => {}
                 }
@@ -196,16 +207,27 @@ impl IntegratedApp {
     }
     
     fn update_scene(&mut self) {
-        // Simple camera positioning - better angle for teapot viewing, further away
-        let camera_x = 2.0;  // Slightly to the side
-        let camera_z = 10.0; // Further distance for better view
-        let camera_y = 2.0;  // Slightly elevated to match initialization
+        // Calculate elapsed time for smooth animations
+        let elapsed_seconds = self.start_time.elapsed().as_secs_f32();
         
-        // Use proper setter methods to ensure matrices are updated
+        // Camera oscillation: move up and down slowly (period of 6 seconds)
+        let oscillation_period = 6.0; // seconds for full up-down-up cycle
+        let oscillation_amplitude = 3.0; // how far up/down to move
+        let base_height = -4.0; // Vulkan: negative Y = above teapot
+        
+        let y_offset = (elapsed_seconds * 2.0 * std::f32::consts::PI / oscillation_period).sin() * oscillation_amplitude;
+        let camera_y = base_height + y_offset;
+        
+        // Keep camera at fixed X and Z distance, but vary height
+        let camera_x = 4.0;   // To the right for perspective  
+        let camera_z = 8.0;   // Away from object (Vulkan: +Z = away from origin)
+        
+        // Update camera position to oscillate up and down using Vulkan coordinates
         self.camera.set_position(Vec3::new(camera_x, camera_y, camera_z));
-        self.camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        // Always look at the teapot at origin - use Vulkan Y-down up vector
+        self.camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
         
-        log::debug!("Camera position: ({}, {}, {})", camera_x, camera_y, camera_z);
+        log::debug!("Camera height: {:.2} (offset: {:.2}) - Vulkan: negative Y = above teapot", camera_y, y_offset);
     }
     
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -218,14 +240,36 @@ impl IntegratedApp {
         
         // Render teapot if loaded
         if let Some(ref teapot_mesh) = self.teapot_mesh {
-            // Rotate around Y axis for spinning, and flip right-side up with X rotation
+            // Rotate around Y axis for spinning - no additional transforms needed 
+            // since assets are now loaded in correct Vulkan coordinate system
             let rotation_y = self.total_rotation;
-            let rotation_x = std::f32::consts::PI; // 180 degrees to flip it right-side up
-            
-            let model_matrix = Mat4::rotation_y(rotation_y) * Mat4::rotation_x(rotation_x);
+            let model_matrix = Mat4::rotation_y(rotation_y);
             
             log::debug!("Rendering teapot with {} vertices, rotation: {:.2}", 
                        teapot_mesh.vertices.len(), rotation_y.to_degrees());
+            
+            // Log coordinate system debug info
+            log::debug!("=== COORDINATE SYSTEM DEBUG ===");
+            log::debug!("Camera position: ({:.2}, {:.2}, {:.2})", 
+                       self.camera.position.x, self.camera.position.y, self.camera.position.z);
+            log::debug!("Camera target: ({:.2}, {:.2}, {:.2})", 
+                       self.camera.target.x, self.camera.target.y, self.camera.target.z);
+            log::debug!("Camera up vector: ({:.2}, {:.2}, {:.2})", 
+                       self.camera.up.x, self.camera.up.y, self.camera.up.z);
+            
+            // Log first few vertex positions from the mesh
+            for (i, vertex) in teapot_mesh.vertices.iter().take(3).enumerate() {
+                log::debug!("Vertex {}: world pos({:.2}, {:.2}, {:.2})", 
+                           i, vertex.position[0], vertex.position[1], vertex.position[2]);
+            }
+            
+            // Log model matrix
+            log::debug!("Model matrix (rotation_y: {:.2} deg):", rotation_y.to_degrees());
+            for row in 0..4 {
+                log::debug!("  [{:.3}, {:.3}, {:.3}, {:.3}]", 
+                           model_matrix[(row, 0)], model_matrix[(row, 1)], 
+                           model_matrix[(row, 2)], model_matrix[(row, 3)]);
+            }
             
             // Submit teapot for rendering
             self.renderer.draw_mesh_3d(

@@ -230,10 +230,41 @@ impl Mat4Ext for Mat4 {
     }
     
     fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
-        nalgebra::Matrix4::new_perspective(aspect, fov_y, near, far)
+        // Native Vulkan perspective matrix
+        // Vulkan NDC: X[-1,1], Y[-1,1] (Y+ down), Z[0,1]
+        let tan_half_fovy = (fov_y * 0.5).tan();
+        
+        let mut result = Mat4::zeros();
+        result[(0, 0)] = 1.0 / (aspect * tan_half_fovy);
+        result[(1, 1)] = -1.0 / tan_half_fovy;  // Negative for Vulkan Y-down
+        result[(2, 2)] = far / (near - far);     // Maps Z to [0,1] range for Vulkan  
+        result[(2, 3)] = (near * far) / (near - far);  // Translation component
+        result[(3, 2)] = -1.0;  // FIXED: Should be -1.0 for proper perspective divide
+        
+        result
     }
     
     fn look_at(eye: Vec3, target: Vec3, up: Vec3) -> Mat4 {
-        nalgebra::Matrix4::look_at_rh(&Point3::from(eye), &Point3::from(target), &up)
+        // Right-handed look-at matrix for Vulkan coordinate system
+        // Vulkan uses Y-down, Z-into-screen convention
+        let forward = (target - eye).normalize();
+        let right = forward.cross(&up).normalize();
+        let camera_up = right.cross(&forward);
+        
+        let translation = Mat4::new(
+            1.0, 0.0, 0.0, -eye.x,
+            0.0, 1.0, 0.0, -eye.y,
+            0.0, 0.0, 1.0, -eye.z,
+            0.0, 0.0, 0.0, 1.0,
+        );
+        
+        let rotation = Mat4::new(
+            right.x, right.y, right.z, 0.0,
+            camera_up.x, camera_up.y, camera_up.z, 0.0,
+            -forward.x, -forward.y, -forward.z, 0.0,  // Negative forward for right-handed
+            0.0, 0.0, 0.0, 1.0,
+        );
+        
+        rotation * translation
     }
 }

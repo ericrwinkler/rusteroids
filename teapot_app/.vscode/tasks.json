@@ -1,0 +1,11 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "run teapot demo",
+			"type": "shell",
+			"command": "cargo run",
+			"group": "test"
+		}
+	]
+}

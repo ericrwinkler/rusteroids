@@ -69,13 +69,52 @@ impl Renderer {
     /// Set the lighting environment
     pub fn set_lighting(&mut self, lighting: &LightingEnvironment) {
         self.current_lighting = Some(lighting.clone());
+        
+        // Update the Vulkan renderer with lighting data
+        // LIMITATION: Current push constants only support ONE directional light
+        // Multiple lights require expanding push constants (limited to ~128 bytes) or uniform buffers
+        if let Some(first_light) = lighting.lights.first() {
+            match first_light.light_type {
+                LightType::Directional => {
+                    let direction = [first_light.direction.x, first_light.direction.y, first_light.direction.z];
+                    let color = [first_light.color.x, first_light.color.y, first_light.color.z];
+                    self.vulkan_renderer.set_directional_light(
+                        direction,
+                        first_light.intensity,
+                        color,
+                        lighting.ambient_intensity,
+                    );
+                    log::trace!("Set directional light: dir={:?}, intensity={}, color={:?}, ambient={}", 
+                               direction, first_light.intensity, color, lighting.ambient_intensity);
+                },
+                _ => {
+                    // Point lights and other types not supported with current push constants
+                    log::warn!("Only directional lights supported in push constants. Found: {:?}", first_light.light_type);
+                    log::info!("To use multiple lights, need to implement uniform buffer lighting system");
+                }
+            }
+        } else {
+            // No lights in environment, use default lighting
+            self.vulkan_renderer.set_directional_light(
+                [0.0, 1.0, 0.0],  // Default light pointing downward (+Y in right-handed system)
+                0.3,              // Mild default intensity
+                [1.0, 1.0, 1.0],  // White light
+                lighting.ambient_intensity,
+            );
+            log::trace!("No directional lights found, using default downward light");
+        }
+        
+        // Log limitation for multiple lights
+        if lighting.lights.len() > 1 {
+            log::warn!("LightingEnvironment contains {} lights, but only the first directional light is used", lighting.lights.len());
+            log::info!("Multiple light support requires expanding push constants or implementing uniform buffer system");
+        }
+        
         log::trace!("Lighting set with {} lights", lighting.lights.len());
     }
     
     /// Draw a 3D mesh with transform and material
     pub fn draw_mesh_3d(&mut self, mesh: &Mesh, model_matrix: &Mat4, material: &Material) -> Result<(), Box<dyn std::error::Error>> {
-        log::trace!("Drawing 3D mesh with {} vertices", mesh.vertices.len());
-        
         // Update mesh data in Vulkan renderer
         self.vulkan_renderer.update_mesh(&mesh.vertices, &mesh.indices)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
@@ -83,7 +122,6 @@ impl Renderer {
         // Set material color in Vulkan renderer
         let material_color = [material.base_color[0], material.base_color[1], material.base_color[2], material.alpha];
         self.vulkan_renderer.set_material_color(material_color);
-        log::trace!("Material color set to {:?}", material_color);
         
         // Calculate MVP matrix if we have a camera
         if let Some(ref camera) = self.current_camera {
@@ -101,6 +139,35 @@ impl Renderer {
             ];
             
             self.vulkan_renderer.set_mvp_matrix(mvp_array);
+            
+            // Transform light direction to object space for proper lighting
+            if let Some(ref lighting) = self.current_lighting {
+                if let Some(first_light) = lighting.lights.first() {
+                    match first_light.light_type {
+                        LightType::Directional => {
+                            // Transform light direction from world space to object space
+                            // Use inverse transpose of model matrix for proper normal transformation
+                            let model_inverse = model_matrix.try_inverse().unwrap_or(*model_matrix);
+                            let light_dir_world = Vec3::new(first_light.direction.x, first_light.direction.y, first_light.direction.z);
+                            let light_dir_object = model_inverse.transpose().transform_vector(&light_dir_world);
+                            
+                            let direction = [light_dir_object.x, light_dir_object.y, light_dir_object.z];
+                            let color = [first_light.color.x, first_light.color.y, first_light.color.z];
+                            self.vulkan_renderer.set_directional_light(
+                                direction,
+                                first_light.intensity,
+                                color,
+                                lighting.ambient_intensity,
+                            );
+                            log::trace!("Set object-space directional light: dir={:?}, intensity={}", 
+                                       direction, first_light.intensity);
+                        },
+                        _ => {
+                            log::warn!("Only directional lights are currently supported in push constants");
+                        }
+                    }
+                }
+            }
         }
         
         // Draw the frame
@@ -128,17 +195,12 @@ impl Renderer {
     /// Render the world (legacy method for engine integration)
     pub fn render(&mut self, _world: &World) -> Result<(), RenderError> {
         // Legacy rendering path - just count frames
-        if self.frame_count % 60 == 0 {
-            log::debug!("Rendering frame {}", self.frame_count);
-        }
-        
         self.frame_count += 1;
         Ok(())
     }
     
     /// Resize the renderer
-    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), RenderError> {
-        log::debug!("Renderer resize to {}x{}", width, height);
+    pub fn resize(&mut self, _width: u32, _height: u32) -> Result<(), RenderError> {
         // TODO: Implement resize
         Ok(())
     }
@@ -170,12 +232,12 @@ pub struct Camera {
 }
 
 impl Camera {
-    /// Create a new perspective camera
+    /// Create a new perspective camera (using Vulkan coordinate system)
     pub fn perspective(position: Vec3, fov_degrees: f32, aspect: f32, near: f32, far: f32) -> Self {
         Self {
             position,
             target: Vec3::zeros(),
-            up: Vec3::new(0.0, 1.0, 0.0),
+            up: Vec3::new(0.0, -1.0, 0.0),  // Vulkan Y-down convention
             fov: utils::deg_to_rad(fov_degrees),
             aspect,
             near,
@@ -223,9 +285,9 @@ impl Camera {
 impl Default for Camera {
     fn default() -> Self {
         Self {
-            position: Vec3::new(0.0, 0.0, 3.0),
+            position: Vec3::new(0.0, -3.0, 3.0),  // Vulkan: negative Y = above, positive Z = away from origin
             target: Vec3::zeros(),
-            up: Vec3::new(0.0, 1.0, 0.0),
+            up: Vec3::new(0.0, -1.0, 0.0),  // Vulkan Y-down convention
             fov: std::f32::consts::FRAC_PI_4,
             aspect: 16.0 / 9.0,
             near: 0.1,

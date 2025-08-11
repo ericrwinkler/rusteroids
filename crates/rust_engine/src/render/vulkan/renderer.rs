@@ -11,8 +11,10 @@ use std::path::Path;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct PushConstants {
-    mvp_matrix: [[f32; 4]; 4],  // 64 bytes
-    material_color: [f32; 4],   // 16 bytes - RGBA color
+    mvp_matrix: [[f32; 4]; 4],      // 64 bytes
+    material_color: [f32; 4],       // 16 bytes - RGBA color
+    light_direction: [f32; 4],      // 16 bytes - XYZ direction + W intensity
+    light_color: [f32; 4],          // 16 bytes - RGB color + A ambient intensity
 }
 
 // Safe to implement Pod and Zeroable for PushConstants since it only contains f32 arrays
@@ -210,6 +212,8 @@ impl VulkanRenderer {
                     [0.0, 0.0, 0.0, 1.0],
                 ],
                 material_color: [1.0, 1.0, 1.0, 1.0], // Default white
+                light_direction: [-0.5, -1.0, -0.3, 0.8], // Default directional light (direction + intensity)
+                light_color: [1.0, 0.95, 0.9, 0.2], // Default warm white light + ambient intensity
             },
         })
     }
@@ -250,6 +254,14 @@ impl VulkanRenderer {
     pub fn set_material_color(&mut self, color: [f32; 4]) {
         self.push_constants.material_color = color;
         log::trace!("Material color updated to {:?}", color);
+    }
+    
+    /// Set directional light for rendering
+    pub fn set_directional_light(&mut self, direction: [f32; 3], intensity: f32, color: [f32; 3], ambient_intensity: f32) {
+        self.push_constants.light_direction = [direction[0], direction[1], direction[2], intensity];
+        self.push_constants.light_color = [color[0], color[1], color[2], ambient_intensity];
+        log::trace!("Directional light updated: dir={:?}, intensity={}, color={:?}, ambient={}", 
+                   direction, intensity, color, ambient_intensity);
     }
     
     /// Draw a frame

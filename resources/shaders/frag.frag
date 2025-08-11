@@ -3,6 +3,8 @@
 layout(push_constant) uniform PushConstants {
     mat4 mvp; // Model-View-Projection matrix
     vec4 material_color; // Material base color (RGBA)
+    vec4 light_direction; // Directional light direction + intensity (xyz = direction, w = intensity)
+    vec4 light_color; // Light color (RGB) + ambient intensity (A)
 } pushConstants;
 
 layout(location = 0) in vec3 fragNormal;
@@ -11,11 +13,25 @@ layout(location = 1) in vec2 fragTexCoord;
 layout(location = 0) out vec4 fragColor;
 
 void main() {
-    // Simple lighting based on normal
-    vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
-    float diff = max(dot(normalize(fragNormal), lightDir), 0.0);
+    // Extract lighting parameters
+    vec3 lightDir = normalize(pushConstants.light_direction.xyz);
+    float lightIntensity = pushConstants.light_direction.w;
+    vec3 lightColor = pushConstants.light_color.rgb;
+    float ambientIntensity = pushConstants.light_color.a;
     
-    // Use material color from push constants with simple diffuse lighting
-    vec3 color = pushConstants.material_color.rgb * (0.3 + 0.7 * diff);
+    // Calculate diffuse lighting
+    vec3 normal = normalize(fragNormal);
+    float diff = max(dot(normal, -lightDir), 0.0); // Negative because light_direction points towards light
+    
+    // Use lower ambient lighting to make the lighting effect more visible
+    vec3 ambient = ambientIntensity * 0.4 * lightColor; // Reduce ambient by 60%
+    vec3 diffuse = diff * lightIntensity * lightColor;
+    vec3 lighting = ambient + diffuse;
+    
+    // Clamp lighting to reasonable range
+    lighting = clamp(lighting, 0.0, 2.0);
+    
+    // Apply lighting to material color
+    vec3 color = pushConstants.material_color.rgb * lighting;
     fragColor = vec4(color, pushConstants.material_color.a);
 }

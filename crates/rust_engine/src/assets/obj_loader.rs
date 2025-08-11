@@ -150,12 +150,9 @@ impl ObjLoader {
             return Err(ObjError::InvalidFormat("No vertices found in OBJ file".to_string()));
         }
         
-        // COORDINATE SYSTEM CONVERSION: TEMPORARILY DISABLED FOR DEBUGGING
+        // COORDINATE SYSTEM CONVERSION
         // OBJ files typically use Y-up, right-handed coordinates
         // Vulkan uses Y-down, Z-into-screen coordinates
-        log::info!("DEBUGGING: Skipping coordinate conversion for {} vertices", vertices.len());
-        // Temporarily disable coordinate conversion to debug rendering issue
-        /*
         for vertex in &mut vertices {
             // Convert position: OBJ Y-up to Vulkan Y-down
             let pos = vertex.position;
@@ -168,20 +165,12 @@ impl ObjLoader {
             // Texture coordinates typically stay the same (UV mapping)
             // vertex.tex_coord remains unchanged
         }
-        */
         
-        // FACE WINDING CONVERSION: TEMPORARILY DISABLED FOR DEBUGGING
-        // OBJ files may use counter-clockwise winding, but pipeline expects clockwise
-        // Temporarily disable winding conversion to debug rendering issue
-        log::info!("DEBUGGING: Skipping face winding conversion");
-        /*
-        log::info!("Converting face winding from OBJ convention to Vulkan pipeline expectation");
-        for triangle in indices.chunks_mut(3) {
-            if triangle.len() == 3 {
-                triangle.swap(1, 2);  // Convert CCW to CW winding
-            }
-        }
-        */
+        // FACE WINDING CONVERSION
+        // When we flip Y coordinates above, we effectively mirror the model,
+        // which automatically reverses the triangle winding order.
+        // So we don't need to manually swap triangle indices.
+        // The Y-flip already converts CCW→CW winding correctly.
 
         // Generate normals if the mesh doesn't have them
         let needs_normals = vertices.iter().all(|v| v.normal == [0.0, -1.0, 0.0]);

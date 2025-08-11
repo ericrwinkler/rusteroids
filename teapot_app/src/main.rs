@@ -122,16 +122,6 @@ impl IntegratedApp {
                 
                 log::info!("Loaded teapot mesh successfully with {} vertices and {} indices", 
                           mesh.vertices.len(), mesh.indices.len());
-                log::debug!("Teapot bounds - min: ({:.2}, {:.2}, {:.2}), max: ({:.2}, {:.2}, {:.2})", 
-                           min_pos[0], min_pos[1], min_pos[2], max_pos[0], max_pos[1], max_pos[2]);
-                log::debug!("Max extent: {:.2}, scaling applied: {}", max_extent, max_extent > 10.0);
-                
-                // Log first few vertices for debugging
-                for (i, vertex) in mesh.vertices.iter().take(3).enumerate() {
-                    log::debug!("Vertex {}: pos({:.2}, {:.2}, {:.2}), normal({:.2}, {:.2}, {:.2})", 
-                               i, vertex.position[0], vertex.position[1], vertex.position[2],
-                               vertex.normal[0], vertex.normal[1], vertex.normal[2]);
-                }
                 
                 self.teapot_mesh = Some(mesh);
             }
@@ -226,8 +216,6 @@ impl IntegratedApp {
         self.camera.set_position(Vec3::new(camera_x, camera_y, camera_z));
         // Always look at the teapot at origin - use Vulkan Y-down up vector
         self.camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
-        
-        log::debug!("Camera height: {:.2} (offset: {:.2}) - Vulkan: negative Y = above teapot", camera_y, y_offset);
     }
     
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -244,32 +232,6 @@ impl IntegratedApp {
             // since assets are now loaded in correct Vulkan coordinate system
             let rotation_y = self.total_rotation;
             let model_matrix = Mat4::rotation_y(rotation_y);
-            
-            log::debug!("Rendering teapot with {} vertices, rotation: {:.2}", 
-                       teapot_mesh.vertices.len(), rotation_y.to_degrees());
-            
-            // Log coordinate system debug info
-            log::debug!("=== COORDINATE SYSTEM DEBUG ===");
-            log::debug!("Camera position: ({:.2}, {:.2}, {:.2})", 
-                       self.camera.position.x, self.camera.position.y, self.camera.position.z);
-            log::debug!("Camera target: ({:.2}, {:.2}, {:.2})", 
-                       self.camera.target.x, self.camera.target.y, self.camera.target.z);
-            log::debug!("Camera up vector: ({:.2}, {:.2}, {:.2})", 
-                       self.camera.up.x, self.camera.up.y, self.camera.up.z);
-            
-            // Log first few vertex positions from the mesh
-            for (i, vertex) in teapot_mesh.vertices.iter().take(3).enumerate() {
-                log::debug!("Vertex {}: world pos({:.2}, {:.2}, {:.2})", 
-                           i, vertex.position[0], vertex.position[1], vertex.position[2]);
-            }
-            
-            // Log model matrix
-            log::debug!("Model matrix (rotation_y: {:.2} deg):", rotation_y.to_degrees());
-            for row in 0..4 {
-                log::debug!("  [{:.3}, {:.3}, {:.3}, {:.3}]", 
-                           model_matrix[(row, 0)], model_matrix[(row, 1)], 
-                           model_matrix[(row, 2)], model_matrix[(row, 3)]);
-            }
             
             // Submit teapot for rendering
             self.renderer.draw_mesh_3d(

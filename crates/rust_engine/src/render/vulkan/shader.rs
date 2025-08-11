@@ -129,8 +129,8 @@ impl GraphicsPipeline {
             .rasterizer_discard_enable(false)
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::NONE)  // Disable culling for debugging
-            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)  // Standard OBJ files use CCW winding
+            .cull_mode(vk::CullModeFlags::BACK)  // Enable back-face culling
+            .front_face(vk::FrontFace::CLOCKWISE)  // OBJ files converted to clockwise winding
             .depth_bias_enable(false);
             
         // Multisampling

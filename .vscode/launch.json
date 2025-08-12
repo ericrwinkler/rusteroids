@@ -4,11 +4,12 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug Vulkan Asteroids",
-            "program": "${workspaceFolder}/target/debug/vulkan_triangle.exe",
+            "name": "Debug Teapot App",
+            "program": "${workspaceFolder}/target/debug/teapot_app.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "stopOnEntry": false
+            "stopOnEntry": false,
+            "preLaunchTask": "cargo build"
         }
     ]
 }

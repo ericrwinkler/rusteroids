@@ -168,10 +168,13 @@ impl IntegratedApp {
             }
             
             if framebuffer_resized {
+                log::info!("Framebuffer resized detected, recreating swapchain...");
                 // Recreate swapchain for the new window size
                 self.renderer.recreate_swapchain(&mut self.window);
                 framebuffer_resized = false;
-                continue;
+                
+                // Don't continue - let the app try to render normally
+                // If the swapchain is still out of date, the render function will handle it
             }
             
             // Update time for animations

@@ -486,6 +486,55 @@ impl VulkanContext {
     pub fn graphics_queue_family(&self) -> u32 {
         self.physical_device.graphics_family
     }
+    
+    /// Recreate the swapchain (for window resizing)
+    pub fn recreate_swapchain(&mut self, window: &crate::render::vulkan::Window) -> VulkanResult<()> {
+        // Wait for device to be idle before recreating swapchain
+        unsafe {
+            self.device.device.device_wait_idle().map_err(VulkanError::Api)?;
+        }
+        
+        // Get new window size
+        let window_size = window.get_framebuffer_size();
+        let window_extent = vk::Extent2D {
+            width: window_size.0,
+            height: window_size.1,
+        };
+        
+        // Get the old swapchain handle before replacement
+        let old_swapchain = self.swapchain.as_ref().map(|s| s.handle()).unwrap_or(vk::SwapchainKHR::null());
+        
+        // Store a copy to manually destroy later if needed
+        let old_swapchain_to_destroy = if old_swapchain != vk::SwapchainKHR::null() {
+            Some((old_swapchain, self.device.swapchain_loader.clone()))
+        } else {
+            None
+        };
+        
+        // Create new swapchain using the old one for proper recreation
+        let new_swapchain = crate::render::vulkan::Swapchain::recreate(
+            &self.instance.instance,
+            self.device.device.clone(),
+            self.surface,
+            &self.surface_loader,
+            &self.physical_device,
+            window_extent,
+            old_swapchain,
+        )?;
+        
+        // Replace the old swapchain with the new one
+        // The old swapchain will be automatically destroyed when dropped
+        self.swapchain = Some(new_swapchain);
+        
+        // Manually destroy the old swapchain to avoid ERROR_NATIVE_WINDOW_IN_USE_KHR
+        if let Some((old_swapchain_handle, swapchain_loader)) = old_swapchain_to_destroy {
+            unsafe {
+                swapchain_loader.destroy_swapchain(old_swapchain_handle, None);
+            }
+        }
+        
+        Ok(())
+    }
 }
 
 impl Drop for VulkanContext {

@@ -336,14 +336,22 @@ impl VulkanRenderer {
         // and use per-image semaphores for render_finished
         let acquire_semaphore = &frame_sync.image_available;
         
-        // Acquire the next image
-        let (image_index, _) = unsafe {
+        // Acquire the next image - handle ERROR_OUT_OF_DATE_KHR
+        let (image_index, _) = match unsafe {
             self.context.swapchain_loader().acquire_next_image(
                 self.context.swapchain().handle(),
                 u64::MAX,
                 acquire_semaphore.handle(),
                 vk::Fence::null(),
-            ).map_err(VulkanError::Api)?
+            )
+        } {
+            Ok(result) => result,
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                log::warn!("Swapchain out of date during acquire_next_image - swapchain recreation needed");
+                // Return a special error to indicate swapchain recreation is needed
+                return Err(VulkanError::Api(vk::Result::ERROR_OUT_OF_DATE_KHR));
+            }
+            Err(e) => return Err(VulkanError::Api(e)),
         };
         
         // Get the image-specific sync object for render finished semaphore
@@ -417,7 +425,7 @@ impl VulkanRenderer {
             ).map_err(VulkanError::Api)?;
         }
         
-        // Present
+        // Present - handle ERROR_OUT_OF_DATE_KHR
         let wait_semaphores = [image_sync.render_finished.handle()];
         let swapchains = [self.context.swapchain().handle()];
         let image_indices = [image_index];
@@ -426,16 +434,74 @@ impl VulkanRenderer {
             .swapchains(&swapchains)
             .image_indices(&image_indices);
             
-        unsafe {
+        match unsafe {
             self.context.swapchain_loader().queue_present(
                 self.context.present_queue(),
                 &present_info
-            ).map_err(VulkanError::Api)?;
+            )
+        } {
+            Ok(_) => {},
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                log::warn!("Swapchain out of date during queue_present - swapchain recreation needed");
+                // Return a special error to indicate swapchain recreation is needed
+                return Err(VulkanError::Api(vk::Result::ERROR_OUT_OF_DATE_KHR));
+            }
+            Err(e) => return Err(VulkanError::Api(e)),
         }
         
         // Advance to next frame
         self.current_frame = (self.current_frame + 1) % self.max_frames_in_flight;
         
+        Ok(())
+    }
+    
+    /// Recreate the swapchain (for window resizing)
+    /// This should be called when ERROR_OUT_OF_DATE_KHR is encountered
+    pub fn recreate_swapchain(&mut self, window: &crate::render::vulkan::Window) -> VulkanResult<()> {
+        log::info!("Recreating swapchain for window resize...");
+        
+        // Wait for device to be idle before recreation
+        self.wait_idle()?;
+        
+        // Recreate the swapchain in the context
+        self.context.recreate_swapchain(window)?;
+        
+        // Recreate framebuffers and depth buffers for the new swapchain
+        self.recreate_framebuffers()?;
+        
+        log::info!("Swapchain recreation complete");
+        Ok(())
+    }
+    
+    /// Recreate framebuffers and depth buffers for the current swapchain
+    fn recreate_framebuffers(&mut self) -> VulkanResult<()> {
+        log::debug!("Recreating framebuffers and depth buffers...");
+        
+        // Clear old framebuffers and depth buffers (they will be dropped automatically)
+        self.framebuffers.clear();
+        self.depth_buffers.clear();
+        
+        // Create new framebuffers and depth buffers for each swapchain image
+        for image_view in self.context.swapchain().image_views() {
+            let depth_buffer = DepthBuffer::new(
+                self.context.raw_device(),
+                &self.context.instance(),
+                self.context.physical_device().device,
+                self.context.swapchain().extent(),
+            )?;
+            
+            let framebuffer = Framebuffer::new(
+                self.context.raw_device(),
+                self.render_pass.handle(),
+                &[*image_view, depth_buffer.image_view()],
+                self.context.swapchain().extent(),
+            )?;
+            
+            self.depth_buffers.push(depth_buffer);
+            self.framebuffers.push(framebuffer);
+        }
+        
+        log::debug!("Framebuffers and depth buffers recreated successfully");
         Ok(())
     }
     

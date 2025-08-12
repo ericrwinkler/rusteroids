@@ -174,8 +174,17 @@ impl Renderer {
         }
         
         // Draw the frame
-        self.vulkan_renderer.draw_frame()
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        match self.vulkan_renderer.draw_frame() {
+            Ok(()) => {},
+            Err(vulkan::VulkanError::Api(ash::vk::Result::ERROR_OUT_OF_DATE_KHR)) => {
+                log::warn!("Swapchain out of date during render - requesting recreation");
+                // The swapchain is out of date, we should recreate it
+                // For now, we'll just log this and continue
+                // The application should handle window resize events properly
+                return Ok(()); // Skip this frame
+            }
+            Err(e) => return Err(Box::new(e) as Box<dyn std::error::Error>),
+        }
         
         Ok(())
     }
@@ -190,9 +199,14 @@ impl Renderer {
     }
     
     /// Recreate swapchain (for window resizing)
-    pub fn recreate_swapchain(&mut self, _window_handle: &mut WindowHandle) {
+    pub fn recreate_swapchain(&mut self, window_handle: &mut WindowHandle) {
         log::info!("Recreating swapchain");
-        // TODO: Implement swapchain recreation
+        
+        // Get the Vulkan window from the handle and pass it to Vulkan renderer
+        let vulkan_window = window_handle.vulkan_window_mut();
+        if let Err(e) = self.vulkan_renderer.recreate_swapchain(vulkan_window) {
+            log::error!("Failed to recreate swapchain: {:?}", e);
+        }
     }
     
     /// Render the world (legacy method for engine integration)

@@ -214,6 +214,10 @@ pub trait Mat4Ext {
     
     /// Create a look-at view matrix
     fn look_at(eye: Vec3, target: Vec3, up: Vec3) -> Mat4;
+    
+    /// Create the intermediate coordinate system transformation for Vulkan
+    /// This implements the X matrix from the guide to prepare coordinates for Vulkan's conventions
+    fn vulkan_coordinate_transform() -> Mat4;
 }
 
 impl Mat4Ext for Mat4 {
@@ -230,16 +234,24 @@ impl Mat4Ext for Mat4 {
     }
     
     fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
-        // Native Vulkan perspective matrix
-        // Vulkan NDC: X[-1,1], Y[-1,1] (Y+ down), Z[0,1]
+        // Proper Vulkan perspective matrix following Johannes Unterguggenberger's guide
+        // https://johannesugb.github.io/gpu-programming/setting-up-a-proper-vulkan-projection-matrix/
+        // This implements the P matrix from Equation 3 in the guide
         let tan_half_fovy = (fov_y * 0.5).tan();
         
         let mut result = Mat4::zeros();
-        result[(0, 0)] = 1.0 / (aspect * tan_half_fovy);
-        result[(1, 1)] = -1.0 / tan_half_fovy;  // Negative for Vulkan Y-down
-        result[(2, 2)] = far / (near - far);     // Maps Z to [0,1] range for Vulkan  
-        result[(2, 3)] = (near * far) / (near - far);  // Translation component
-        result[(3, 2)] = -1.0;  // FIXED: Should be -1.0 for proper perspective divide
+        
+        // Following the guide's formula exactly:
+        // P = [a⁻¹/tan(φ/2)    0              0                    0           ]
+        //     [0               1/tan(φ/2)     0                    0           ]
+        //     [0               0              f/(f-n)              -nf/(f-n)   ]
+        //     [0               0              1                    0           ]
+        
+        result[(0, 0)] = 1.0 / (aspect * tan_half_fovy);  // a⁻¹/tan(φ/2) where a⁻¹ is aspect ratio
+        result[(1, 1)] = 1.0 / tan_half_fovy;             // 1/tan(φ/2) - positive, no Y-flip here
+        result[(2, 2)] = far / (far - near);               // f/(f-n) - depth mapping to [0,1]
+        result[(2, 3)] = -(near * far) / (far - near);     // -nf/(f-n) - depth offset
+        result[(3, 2)] = 1.0;                              // Perspective divide trigger
         
         result
     }
@@ -266,5 +278,25 @@ impl Mat4Ext for Mat4 {
         );
         
         rotation * translation
+    }
+    
+    fn vulkan_coordinate_transform() -> Mat4 {
+        // Intermediate coordinate system transformation from Johannes Unterguggenberger's guide
+        // This implements the X matrix from Equation 2 in the guide:
+        // X = [1   0   0  0]⁻¹
+        //     [0  -1   0  0]
+        //     [0   0  -1  0] 
+        //     [0   0   0  1]
+        // 
+        // The inverse flips Y and Z axes to align with Vulkan's expectations:
+        // - X axis remains unchanged (right is right)  
+        // - Y axis flipped (up becomes down for Vulkan Y-down)
+        // - Z axis flipped (forward becomes into screen for Vulkan Z-forward)
+        Mat4::new(
+            1.0,  0.0,  0.0, 0.0,
+            0.0, -1.0,  0.0, 0.0,
+            0.0,  0.0, -1.0, 0.0,
+            0.0,  0.0,  0.0, 1.0,
+        )
     }
 }

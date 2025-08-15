@@ -124,8 +124,12 @@ impl Renderer {
         // Calculate MVP matrix if we have a camera
         if let Some(ref camera) = self.current_camera {
             let view_matrix = camera.get_view_matrix();
+            let coord_transform = Mat4::vulkan_coordinate_transform();
             let projection_matrix = camera.get_projection_matrix();
-            let mvp = projection_matrix * view_matrix * *model_matrix;
+            
+            // Follow Johannes Unterguggenberger's guide: C = P * X * V * M
+            // where P=projection, X=coordinate transform, V=view, M=model
+            let mvp = projection_matrix * coord_transform * view_matrix * *model_matrix;
             
             // Convert Mat4 to array format for Vulkan renderer
             // nalgebra matrices are column-major, we need to transpose for row access
@@ -259,7 +263,7 @@ impl Camera {
         Self {
             position,
             target: Vec3::zeros(),
-            up: Vec3::new(0.0, -1.0, 0.0),  // Vulkan Y-down convention
+            up: Vec3::new(0.0, 1.0, 0.0),  // Standard Y-up in view space, coordinate transform handles Vulkan conventions
             fov: utils::deg_to_rad(fov_degrees),
             aspect,
             near,
@@ -301,18 +305,27 @@ impl Camera {
         Mat4::perspective(self.fov, self.aspect, self.near, self.far)
     }
     
-    /// Get view-projection matrix
+    /// Get view-projection matrix following Johannes Unterguggenberger's guide
+    /// This implements C = P * X * V where:
+    /// - V is the view matrix (world to view space)
+    /// - X is the coordinate system transform for Vulkan
+    /// - P is the perspective projection matrix
     pub fn get_view_projection_matrix(&self) -> Mat4 {
-        self.get_projection_matrix() * self.get_view_matrix()
+        let view_matrix = self.get_view_matrix();
+        let coord_transform = Mat4::vulkan_coordinate_transform();
+        let projection_matrix = self.get_projection_matrix();
+        
+        // Combine matrices in proper order: P * X * V
+        projection_matrix * coord_transform * view_matrix
     }
 }
 
 impl Default for Camera {
     fn default() -> Self {
         Self {
-            position: Vec3::new(0.0, -3.0, 3.0),  // Vulkan: negative Y = above, positive Z = away from origin
+            position: Vec3::new(0.0, 3.0, 3.0),  // Standard Y-up: positive Y = above, positive Z = away from origin
             target: Vec3::zeros(),
-            up: Vec3::new(0.0, -1.0, 0.0),  // Vulkan Y-down convention
+            up: Vec3::new(0.0, 1.0, 0.0),  // Standard Y-up convention, coordinate transform handles Vulkan
             fov: std::f32::consts::FRAC_PI_4,
             aspect: 16.0 / 9.0,
             near: 0.1,

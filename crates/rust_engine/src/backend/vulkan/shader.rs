@@ -183,7 +183,7 @@ use ash::{vk, Device};
 use std::path::Path;
 use std::fs::File;
 use std::io::Read;
-use crate::render::vulkan::{VulkanResult, VulkanError};
+use crate::backend::vulkan::{VulkanResult, VulkanError};
 
 /// SPIR-V shader module wrapper with automatic resource management
 /// 

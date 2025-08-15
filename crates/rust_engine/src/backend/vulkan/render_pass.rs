@@ -179,7 +179,7 @@
 //! make Vulkan attractive for high-performance rendering applications.
 
 use ash::{vk, Device};
-use crate::render::vulkan::{VulkanResult, VulkanError};
+use crate::backend::vulkan::{VulkanResult, VulkanError};
 
 /// Vulkan render pass wrapper with automatic resource management
 /// 

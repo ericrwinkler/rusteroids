@@ -203,7 +203,7 @@
 //! the performance characteristics that make Vulkan attractive for real-time rendering.
 
 use ash::{vk, Device};
-use crate::render::vulkan::{VulkanResult, VulkanError};
+use crate::backend::vulkan::{VulkanResult, VulkanError};
 
 /// Vulkan command pool wrapper with automatic resource management
 /// 

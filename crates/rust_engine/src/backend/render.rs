@@ -127,5 +127,5 @@ pub trait WindowBackendAccess {
     ///
     /// # Returns
     /// Reference to backend-specific window type, or None if not available
-    fn get_vulkan_window(&mut self) -> Option<&mut crate::render::vulkan::Window>;
+    fn get_vulkan_window(&mut self) -> Option<&mut crate::backend::vulkan::Window>;
 }

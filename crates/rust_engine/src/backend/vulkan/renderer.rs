@@ -211,7 +211,7 @@
 //! as application requirements evolve.
 
 use ash::vk;
-use crate::render::vulkan::*;
+use crate::backend::vulkan::*;
 use crate::render::mesh::Vertex;
 
 /// Shader push constants structure with proper GLSL alignment
@@ -874,7 +874,7 @@ impl VulkanRenderer {
     
     /// Recreate the swapchain (for window resizing)
     /// This should be called when ERROR_OUT_OF_DATE_KHR is encountered
-    pub fn recreate_swapchain(&mut self, window: &crate::render::vulkan::Window) -> VulkanResult<()> {
+    pub fn recreate_swapchain(&mut self, window: &crate::backend::vulkan::Window) -> VulkanResult<()> {
         log::info!("Recreating swapchain for window resize...");
         
         // Wait for device to be idle before recreation
@@ -968,7 +968,7 @@ impl crate::render::RenderBackend for VulkanRenderer {
         self.get_swapchain_extent()
     }
     
-    fn update_mesh(&mut self, vertices: &[crate::render::Vertex], indices: &[u32]) -> crate::render::backend::BackendResult<()> {
+    fn update_mesh(&mut self, vertices: &[crate::render::Vertex], indices: &[u32]) -> crate::backend::BackendResult<()> {
         self.update_mesh(vertices, indices)
             .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))
     }
@@ -989,17 +989,17 @@ impl crate::render::RenderBackend for VulkanRenderer {
         self.set_directional_light(direction, intensity, color, ambient_intensity);
     }
     
-    fn draw_frame(&mut self) -> crate::render::backend::BackendResult<()> {
+    fn draw_frame(&mut self) -> crate::backend::BackendResult<()> {
         self.draw_frame()
             .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))
     }
     
-    fn wait_idle(&self) -> crate::render::backend::BackendResult<()> {
+    fn wait_idle(&self) -> crate::backend::BackendResult<()> {
         self.wait_idle()
             .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))
     }
     
-    fn recreate_swapchain(&mut self, window_handle: &mut dyn crate::render::WindowBackendAccess) -> crate::render::backend::BackendResult<()> {
+    fn recreate_swapchain(&mut self, window_handle: &mut dyn crate::render::WindowBackendAccess) -> crate::backend::BackendResult<()> {
         if let Some(vulkan_window) = window_handle.get_vulkan_window() {
             self.recreate_swapchain(vulkan_window)
                 .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))

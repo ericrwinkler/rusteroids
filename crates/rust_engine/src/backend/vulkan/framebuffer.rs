@@ -21,7 +21,7 @@
 //! appropriate abstraction levels, and clean integration with other rendering components.
 
 use ash::{vk, Device};
-use crate::render::vulkan::{VulkanResult, VulkanError};
+use crate::backend::vulkan::{VulkanResult, VulkanError};
 
 /// Framebuffer wrapper with RAII cleanup
 pub struct Framebuffer {

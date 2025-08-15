@@ -9,7 +9,7 @@ use ash::extensions::khr::{Surface, Swapchain as SwapchainLoader};
 use ash::vk;
 use std::ffi::{CStr, CString};
 use thiserror::Error;
-use crate::render::vulkan::swapchain::Swapchain;
+use crate::backend::vulkan::swapchain::Swapchain;
 
 /// Vulkan context errors
 #[derive(Error, Debug)]
@@ -46,7 +46,7 @@ pub struct VulkanInstance {
 }
 
 impl VulkanInstance {
-    pub fn new(window: &crate::render::vulkan::Window, app_name: &str, enable_validation: bool) -> VulkanResult<Self> {
+    pub fn new(window: &crate::backend::vulkan::Window, app_name: &str, enable_validation: bool) -> VulkanResult<Self> {
         let entry = unsafe { Entry::load() }
             .map_err(|e| VulkanError::InitializationFailed(format!("Failed to load Vulkan: {:?}", e)))?;
         
@@ -408,11 +408,11 @@ pub struct VulkanContext {
     pub surface_loader: Surface,
     pub physical_device: PhysicalDeviceInfo,
     pub device: LogicalDevice,
-    pub swapchain: Option<crate::render::vulkan::Swapchain>,
+    pub swapchain: Option<crate::backend::vulkan::Swapchain>,
 }
 
 impl VulkanContext {
-    pub fn new(window: &mut crate::render::vulkan::Window, app_name: &str) -> VulkanResult<Self> {
+    pub fn new(window: &mut crate::backend::vulkan::Window, app_name: &str) -> VulkanResult<Self> {
         // Create Vulkan instance
         let instance = VulkanInstance::new(window, app_name, cfg!(debug_assertions))?;
 
@@ -436,7 +436,7 @@ impl VulkanContext {
             height: window_size.1,
         };
         
-        let swapchain = crate::render::vulkan::Swapchain::new(
+        let swapchain = crate::backend::vulkan::Swapchain::new(
             &instance.instance,
             device.device.clone(),
             surface,
@@ -521,7 +521,7 @@ impl VulkanContext {
     }
     
     /// Recreate the swapchain (for window resizing)
-    pub fn recreate_swapchain(&mut self, window: &crate::render::vulkan::Window) -> VulkanResult<()> {
+    pub fn recreate_swapchain(&mut self, window: &crate::backend::vulkan::Window) -> VulkanResult<()> {
         // Wait for device to be idle before recreating swapchain
         unsafe {
             self.device.device.device_wait_idle().map_err(VulkanError::Api)?;
@@ -538,7 +538,7 @@ impl VulkanContext {
         let old_swapchain = self.swapchain.as_ref().map(|s| s.handle()).unwrap_or(vk::SwapchainKHR::null());
         
         // Create new swapchain using the old one for proper recreation
-        let new_swapchain = crate::render::vulkan::Swapchain::recreate(
+        let new_swapchain = crate::backend::vulkan::Swapchain::recreate(
             &self.instance.instance,
             self.device.device.clone(),
             self.surface,

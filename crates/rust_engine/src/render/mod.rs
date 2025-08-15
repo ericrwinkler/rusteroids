@@ -30,8 +30,6 @@ pub mod coordinates;
 pub mod renderer_config;
 pub mod shader_config;
 pub mod window;
-pub mod backend;
-pub mod vulkan;
 
 pub use mesh::{Mesh, Vertex};
 pub use material::Material;
@@ -39,7 +37,7 @@ pub use lighting::{Light, LightType, LightingEnvironment};
 pub use coordinates::{CoordinateSystem, CoordinateConverter};
 pub use renderer_config::VulkanRendererConfig;
 pub use shader_config::ShaderConfig;
-pub use backend::{RenderBackend, WindowBackendAccess};
+pub use crate::backend::{RenderBackend, WindowBackendAccess};
 pub use window::WindowHandle;
 
 use thiserror::Error;
@@ -105,10 +103,10 @@ impl Renderer {
         // Safe downcast to Vulkan window using the RenderSurface trait
         let render_surface = window_handle.render_surface();
         let vulkan_window = render_surface.as_any_mut()
-            .downcast_mut::<vulkan::Window>()
+            .downcast_mut::<crate::backend::vulkan::Window>()
             .expect("Expected Vulkan window backend");
         
-        let vulkan_renderer = vulkan::VulkanRenderer::new(vulkan_window, config)
+        let vulkan_renderer = crate::backend::vulkan::VulkanRenderer::new(vulkan_window, config)
             .expect("Failed to create Vulkan renderer"); // FIXME: Should return Result instead of panicking
         
         Self {

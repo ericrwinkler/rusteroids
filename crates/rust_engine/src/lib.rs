@@ -46,6 +46,11 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(clippy::module_name_repetitions, clippy::similar_names, clippy::too_many_arguments)]
 
+// Core engine modules
+pub mod core;
+pub mod backend;
+
+// Legacy module organization (maintained for compatibility)
 pub mod foundation;
 pub mod ecs;
 pub mod assets;
@@ -75,5 +80,7 @@ pub mod prelude {
         assets::{Asset, AssetHandle, AssetManager},
         render::{Renderer, Camera, Mesh, Material},
         input::{InputManager, KeyCode, MouseButton},
+        // New unified config system
+        core::config::{ApplicationConfig, VulkanRendererConfig, ShaderConfig},
     };
 }

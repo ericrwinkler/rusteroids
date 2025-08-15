@@ -23,7 +23,7 @@
 
 use ash::{vk, Device};
 use std::collections::HashMap;
-use crate::render::vulkan::{VulkanError, VulkanResult};
+use crate::backend::vulkan::{VulkanError, VulkanResult};
 
 /// Descriptor set layout builder for creating reusable layouts
 pub struct DescriptorSetLayoutBuilder {

@@ -430,7 +430,7 @@ impl MemoryBarrierBuilder {
 /// Priority: Low - implement for advanced debugging support
 
 use ash::Device;
-use crate::render::vulkan::{VulkanResult, VulkanError};
+use crate::backend::vulkan::{VulkanResult, VulkanError};
 
 /// GPU-GPU synchronization primitive with automatic resource management
 /// 

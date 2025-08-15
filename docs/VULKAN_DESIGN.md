@@ -1,5 +1,97 @@
 # Vulkan Rendering Engine Architecture Document
 
+## Recent Major Updates (August 2025)
+
+### ✅ Aspect Ratio Fix Implementation
+**Status**: COMPLETED
+**Problem**: Teapot appeared visually squished during window resizing despite correct aspect ratio calculations
+**Root Cause**: Graphics pipeline created with static viewport/scissor, never updated during swapchain recreation
+**Solution**: 
+- Added dynamic viewport/scissor setting during rendering using current swapchain extent
+- Configured graphics pipeline with `VK_DYNAMIC_STATE_VIEWPORT` and `VK_DYNAMIC_STATE_SCISSOR` support
+- Removed extent parameter from pipeline creation since viewport is now set dynamically
+
+**Technical Changes**:
+```rust
+// In renderer.rs draw_frame():
+let viewport = vk::Viewport::builder()
+    .x(0.0)
+    .y(0.0)
+    .width(extent.width as f32)
+    .height(extent.height as f32)
+    .min_depth(0.0)
+    .max_depth(1.0);
+
+let scissor = vk::Rect2D::builder()
+    .offset(vk::Offset2D { x: 0, y: 0 })
+    .extent(extent);
+
+device.cmd_set_viewport(command_buffer, 0, &[viewport.build()]);
+device.cmd_set_scissor(command_buffer, 0, &[scissor.build()]);
+
+// In shader.rs pipeline creation:
+let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
+    .dynamic_states(&dynamic_states);
+```
+
+### ✅ Johannes Unterguggenberger Guide Compliance
+**Status**: COMPLETED
+**Problem**: Our projection matrix implementation didn't follow academic/industry standard Vulkan practices
+**Reference**: [Setting Up a Proper Vulkan Projection Matrix](https://johannesugb.github.io/gpu-programming/setting-up-a-proper-vulkan-projection-matrix/)
+**Changes Made**:
+
+1. **Corrected Projection Matrix Formula**:
+```rust
+// OLD (incorrect):
+result[(1, 1)] = -1.0 / tan_half_fovy;  // Manual Y-flip
+result[(2, 2)] = far / (near - far);    // Wrong depth mapping
+result[(3, 2)] = -1.0;                  // Wrong sign
+
+// NEW (guide-compliant):
+result[(1, 1)] = 1.0 / tan_half_fovy;        // Positive Y
+result[(2, 2)] = far / (far - near);         // Correct depth to [0,1]
+result[(2, 3)] = -(near * far) / (far - near); // Correct depth offset
+result[(3, 2)] = 1.0;                        // Perspective divide trigger
+```
+
+2. **Added Intermediate Coordinate Transform**:
+```rust
+fn vulkan_coordinate_transform() -> Mat4 {
+    // X matrix from the guide - flips Y and Z for Vulkan conventions
+    Mat4::new(
+        1.0,  0.0,  0.0, 0.0,
+        0.0, -1.0,  0.0, 0.0,  // Y-flip: up -> down
+        0.0,  0.0, -1.0, 0.0,  // Z-flip: forward -> into screen
+        0.0,  0.0,  0.0, 1.0,
+    )
+}
+```
+
+3. **Updated Matrix Chain to C = P × X × V × M**:
+```rust
+// Follow guide's complete transformation chain
+let mvp = projection_matrix * coord_transform * view_matrix * *model_matrix;
+```
+
+4. **Corrected Camera Coordinate System**:
+```rust
+// Camera now uses standard Y-up in view space
+up: Vec3::new(0.0, 1.0, 0.0),  // Standard Y-up convention
+position: Vec3::new(0.0, 3.0, 3.0),  // Positive Y = above
+```
+
+**Benefits**:
+- Mathematical correctness matching academic standards
+- Clear separation between view space (Y-up) and Vulkan specifics (coordinate transform)
+- Easier to maintain and adapt for other graphics APIs
+- Industry-standard approach used in real graphics engines
+
+### ✅ Previous Lighting System Fix
+**Status**: COMPLETED (documented)
+**Problem**: Lighting appeared to rotate with objects instead of staying fixed in world space
+**Solution**: Proper normal matrix calculation using inverse-transpose with correct matrix transposition for GLSL compatibility
+
 ## Overview
 
 This document defines the architectural principles, design rules, and implementation guidelines for the Rusteroids Vulkan rendering engine. This serves as our contract and rulebook for maintaining consistency and quality throughout development.
@@ -566,37 +658,133 @@ Our engine standardizes on **Vulkan's native coordinate system** to eliminate co
 #### Coordinate System Rules by Module
 
 ##### 1. Foundation Math Module (`crates/rust_engine/src/foundation/math.rs`)
-- **RULE**: All matrix operations use Vulkan-native conventions
-- **Projection matrices**: Direct Vulkan perspective matrices (no OpenGL conversion)
-- **View matrices**: Right-handed look-at with Vulkan Y-down assumption
-- **Transforms**: Vulkan coordinate space throughout
+- **RULE**: All matrix operations use Vulkan-compliant conventions following Johannes Unterguggenberger's guide
+- **Projection matrices**: Mathematically correct Vulkan perspective matrices
+- **View matrices**: Standard right-handed look-at with coordinate transform handling Vulkan conventions
+- **Transforms**: Proper coordinate space separation between view space and Vulkan requirements
 
 ```rust
-// STANDARDIZED: Vulkan-native perspective matrix
+// UPDATED: Vulkan-compliant perspective matrix (follows academic guide)
 fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
-    // Direct Vulkan NDC: X[-1,1], Y[-1,1] (Y+ down), Z[0,1]
+    // Implements P matrix from Johannes Unterguggenberger's guide exactly
     let tan_half_fovy = (fov_y * 0.5).tan();
     let mut result = Mat4::zeros();
     
-    result[(0, 0)] = 1.0 / (aspect * tan_half_fovy);
-    result[(1, 1)] = -1.0 / tan_half_fovy;  // Negative for Y-down
-    result[(2, 2)] = far / (far - near);
-    result[(2, 3)] = -(far * near) / (far - near);
-    result[(3, 2)] = 1.0;
+    result[(0, 0)] = 1.0 / (aspect * tan_half_fovy);  // a⁻¹/tan(φ/2)
+    result[(1, 1)] = 1.0 / tan_half_fovy;             // 1/tan(φ/2) - no Y-flip here
+    result[(2, 2)] = far / (far - near);              // f/(f-n) - maps Z to [0,1]
+    result[(2, 3)] = -(near * far) / (far - near);    // -nf/(f-n) - depth offset
+    result[(3, 2)] = 1.0;                             // Perspective divide trigger
     
     result
 }
 
-// STANDARDIZED: Vulkan-native look-at matrix
+// NEW: Intermediate coordinate system transformation (X matrix from guide)
+fn vulkan_coordinate_transform() -> Mat4 {
+    // Handles conversion from standard Y-up view space to Vulkan Y-down conventions
+    Mat4::new(
+        1.0,  0.0,  0.0, 0.0,  // X unchanged
+        0.0, -1.0,  0.0, 0.0,  // Y flipped: up -> down
+        0.0,  0.0, -1.0, 0.0,  // Z flipped: forward -> into screen
+        0.0,  0.0,  0.0, 1.0,
+    )
+}
+
+// UPDATED: Standard look-at matrix (Y-up view space)
 fn look_at(eye: Vec3, target: Vec3, up: Vec3) -> Mat4 {
-    // Standard right-handed look-at assuming Y-down screen space
+    // Standard right-handed look-at, coordinate transform handles Vulkan specifics
     let forward = (target - eye).normalize();
     let right = forward.cross(&up).normalize();
     let camera_up = right.cross(&forward);
-    
-    // Build view matrix for Vulkan Y-down convention
-    // (Implementation handles Y-down expectation)
+    // ... standard implementation
 }
+```
+
+##### 2. Render Module (`crates/rust_engine/src/render/mod.rs`)
+- **RULE**: Camera uses standard Y-up conventions, relies on coordinate transform for Vulkan compatibility
+- **Matrix Chain**: Implements complete C = P × X × V × M transformation from guide
+- **Separation of Concerns**: View space logic separate from Vulkan-specific transformations
+
+```rust
+// UPDATED: Camera with standard Y-up convention
+impl Camera {
+    pub fn perspective(position: Vec3, fov_degrees: f32, aspect: f32, near: f32, far: f32) -> Self {
+        Self {
+            position,
+            target: Vec3::zeros(),
+            up: Vec3::new(0.0, 1.0, 0.0),  // Standard Y-up in view space
+            // coordinate transform handles Vulkan conventions
+        }
+    }
+    
+    // NEW: Proper matrix chain following guide
+    pub fn get_view_projection_matrix(&self) -> Mat4 {
+        let view_matrix = self.get_view_matrix();
+        let coord_transform = Mat4::vulkan_coordinate_transform();
+        let projection_matrix = self.get_projection_matrix();
+        
+        // C = P * X * V (complete transformation from guide)
+        projection_matrix * coord_transform * view_matrix
+    }
+}
+
+// UPDATED: MVP calculation with coordinate transform
+let mvp = projection_matrix * coord_transform * view_matrix * *model_matrix;
+```
+
+##### 3. Vulkan Renderer (`crates/rust_engine/src/render/vulkan/renderer.rs`)
+- **RULE**: Dynamic viewport/scissor for proper aspect ratio handling
+- **Pipeline Configuration**: Supports dynamic state for viewport updates during swapchain recreation
+- **Resource Management**: Handles window resizing without pipeline recreation
+
+```rust
+// NEW: Dynamic viewport/scissor setting
+pub fn draw_frame(&mut self) -> VulkanResult<()> {
+    let extent = self.context.swapchain().extent();
+    
+    // Set viewport dynamically based on current swapchain extent
+    let viewport = vk::Viewport::builder()
+        .x(0.0).y(0.0)
+        .width(extent.width as f32)
+        .height(extent.height as f32)
+        .min_depth(0.0).max_depth(1.0);
+    
+    let scissor = vk::Rect2D::builder()
+        .offset(vk::Offset2D { x: 0, y: 0 })
+        .extent(extent);
+    
+    unsafe {
+        device.cmd_set_viewport(command_buffer, 0, &[viewport.build()]);
+        device.cmd_set_scissor(command_buffer, 0, &[scissor.build()]);
+    }
+}
+```
+
+##### 4. Graphics Pipeline (`crates/rust_engine/src/render/vulkan/shader.rs`)
+- **RULE**: Pipeline configured for dynamic viewport/scissor state
+- **Winding Order**: Configurable based on asset requirements (clockwise for Utah teapot)
+- **Face Culling**: Back-face culling enabled with proper winding order detection
+
+```rust
+// NEW: Dynamic state configuration
+let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
+    .dynamic_states(&dynamic_states);
+
+// Pipeline creation with dynamic state support
+let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
+    .stages(&shader_stages)
+    .vertex_input_state(&vertex_input_info)
+    .input_assembly_state(&input_assembly)
+    .viewport_state(&viewport_state)  // Count only, actual viewport set dynamically
+    .rasterization_state(&rasterizer)
+    .multisample_state(&multisampling)
+    .depth_stencil_state(&depth_stencil)
+    .color_blend_state(&color_blending)
+    .dynamic_state(&dynamic_state)  // Enable dynamic viewport/scissor
+    .layout(layout)
+    .render_pass(render_pass)
+    .subpass(0);
 ```
 
 ##### 2. Asset Loading Module (`crates/rust_engine/src/assets/obj_loader.rs`)

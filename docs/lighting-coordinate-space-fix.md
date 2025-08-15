@@ -1,5 +1,9 @@
 # Lighting Coordinate Space Fix Documentation
 
+## Status: ✅ COMPLETED AND INTEGRATED
+
+This document describes the lighting system fix that resolved world-space lighting issues. The solution has been successfully integrated with recent coordinate system updates and continues to work correctly with the new Johannes Unterguggenberger guide-compliant projection matrices and dynamic viewport system.
+
 ## Problem Summary
 
 The teapot lighting was appearing to rotate with the object instead of staying fixed in world space. This meant that as the teapot rotated, the lighting direction would "stick" to the teapot surfaces instead of creating the expected lighting changes as surfaces faced toward or away from a fixed world-space light.
@@ -115,6 +119,36 @@ The debugging process involved several key steps:
 - Light direction naturally specified in world coordinates
 - Camera-independent lighting behavior
 - Standard practice in graphics programming
+
+## Integration with Recent Updates
+
+### Compatibility with New Coordinate System ✅
+The lighting system fix continues to work correctly with recent coordinate system updates:
+
+- **Johannes Unterguggenberger Guide Compliance**: Normal transformations remain in world space, independent of the new coordinate transform matrix
+- **Dynamic Viewport System**: Lighting calculations are unaffected by viewport changes during window resizing
+- **Standard Y-Up Camera**: Normal matrices work correctly with the new standard Y-up view space approach
+
+### Current Push Constants Integration
+```rust
+#[repr(C)]
+struct PushConstants {
+    mvp_matrix: [[f32; 4]; 4],      // 64 bytes - now includes coordinate transform
+    normal_matrix: [[f32; 4]; 3],   // 48 bytes - inverse-transpose (THIS FIX)
+    material_color: [f32; 4],       // 16 bytes - RGBA
+    light_direction: [f32; 3],      // 12 bytes - world space directional light
+    light_intensity: f32,           // 4 bytes  
+    light_color: [f32; 3],          // 12 bytes - RGB
+    ambient_intensity: f32,         // 4 bytes
+}
+// Total: 160 bytes - efficiently packed near push constant limit
+```
+
+### Validation Status ✅
+- **Visual Quality**: Lighting remains fixed in world space during all object rotations
+- **Mathematical Correctness**: Normal matrix calculation verified with new coordinate systems
+- **Performance**: No performance regression with coordinate system updates
+- **Integration**: Works seamlessly with aspect ratio fixes and viewport changes
 
 ## Future Considerations
 

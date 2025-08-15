@@ -116,10 +116,10 @@ impl ObjLoader {
                                 .and_then(|idx| tex_coords.get(idx))
                                 .unwrap_or(&[0.0, 0.0]);
                             
-                            // Get normal or use default (Vulkan Y-down default)
+                            // Get normal or use default (zero normal indicates missing)
                             let normal = normal_idx
                                 .and_then(|idx| normals.get(idx))
-                                .unwrap_or(&[0.0, -1.0, 0.0]);  // Vulkan Y-down default normal
+                                .unwrap_or(&[0.0, 0.0, 0.0]);  // Zero normal indicates missing
                             
                             // Create vertex
                             let vertex = Vertex {
@@ -150,30 +150,8 @@ impl ObjLoader {
             return Err(ObjError::InvalidFormat("No vertices found in OBJ file".to_string()));
         }
         
-        // COORDINATE SYSTEM CONVERSION
-        // OBJ files typically use Y-up, right-handed coordinates
-        // Vulkan uses Y-down, Z-into-screen coordinates
-        for vertex in &mut vertices {
-            // Convert position: OBJ Y-up to Vulkan Y-down
-            let pos = vertex.position;
-            vertex.position = [pos[0], -pos[1], pos[2]];  // Flip Y coordinate
-            
-            // Convert normal: match position coordinate conversion
-            let normal = vertex.normal;
-            vertex.normal = [normal[0], -normal[1], normal[2]];  // Flip Y component
-            
-            // Texture coordinates typically stay the same (UV mapping)
-            // vertex.tex_coord remains unchanged
-        }
-        
-        // FACE WINDING CONVERSION
-        // When we flip Y coordinates above, we effectively mirror the model,
-        // which automatically reverses the triangle winding order.
-        // So we don't need to manually swap triangle indices.
-        // The Y-flip already converts CCW→CW winding correctly.
-
         // Generate normals if the mesh doesn't have them
-        let needs_normals = vertices.iter().all(|v| v.normal == [0.0, -1.0, 0.0]);
+        let needs_normals = vertices.iter().all(|v| v.normal == [0.0, 0.0, 0.0]);
         if needs_normals {
             log::info!("OBJ file has no normals, generating them automatically");
             Self::generate_normals(&mut vertices, &indices);

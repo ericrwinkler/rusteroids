@@ -21,23 +21,29 @@
 //! ## Current Limitations (FIXME)
 //!
 //! - **Backend Coupling**: Some application-specific logic leaks through the abstraction
-//! - **Single Backend**: Only Vulkan backend implemented (abstraction not fully utilized)
 //! - **Push Constant Limitations**: Complex rendering features constrained by 160-byte limit
 
 pub mod mesh;
 pub mod material;
 pub mod lighting;
+pub mod coordinates;
+pub mod renderer_config;
+pub mod shader_config;
 pub mod window;
+pub mod backend;
 pub mod vulkan;
 
 pub use mesh::{Mesh, Vertex};
 pub use material::Material;
 pub use lighting::{Light, LightType, LightingEnvironment};
+pub use coordinates::{CoordinateSystem, CoordinateConverter};
+pub use renderer_config::VulkanRendererConfig;
+pub use shader_config::ShaderConfig;
+pub use backend::{RenderBackend, WindowBackendAccess};
 pub use window::WindowHandle;
 
 use thiserror::Error;
 use crate::engine::{RendererConfig, WindowConfig}; // FIXME: Engine coupling - should be library-agnostic
-use crate::ecs::World; // FIXME: ECS coupling - rendering system shouldn't know about ECS
 use crate::foundation::math::{Vec3, Mat4, Mat4Ext, utils};
 
 /// # Main Renderer
@@ -59,9 +65,9 @@ use crate::foundation::math::{Vec3, Mat4, Mat4Ext, utils};
 /// interface over the complex Vulkan rendering pipeline. It maintains minimal
 /// state and delegates actual rendering work to the Vulkan backend.
 pub struct Renderer {
-    /// Low-level Vulkan rendering implementation
-    /// FIXME: Should be abstracted as `Box<dyn RenderBackend>` for multi-backend support
-    vulkan_renderer: vulkan::VulkanRenderer,
+    /// Backend abstraction for graphics rendering
+    /// FIXME: Should support dynamic backend selection at runtime
+    backend: Box<dyn RenderBackend>,
     
     /// Currently active camera for 3D rendering
     /// FIXME: Should support multiple cameras for multi-viewport rendering
@@ -77,19 +83,20 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Create a new renderer from a window handle
+    /// Create a new renderer from a window handle with configuration
     ///
     /// This is the preferred construction method as it maintains clear ownership
-    /// of the window resource and doesn't couple to engine-specific configuration.
+    /// of the window resource and allows applications to configure the renderer.
     ///
     /// # Arguments
     /// * `window_handle` - Mutable reference to window handle for Vulkan surface creation
+    /// * `config` - Renderer configuration with application-specific settings
     ///
     /// # Design Notes
     /// This method represents good separation of concerns - it only requires
-    /// what's necessary (a window) and doesn't depend on application-specific configs.
-    pub fn new_from_window(window_handle: &mut WindowHandle) -> Self {
-        log::info!("Initializing Vulkan renderer");
+    /// what's necessary (a window and config) and doesn't depend on engine-specific configs.
+    pub fn new_from_window(window_handle: &mut WindowHandle, config: &VulkanRendererConfig) -> Self {
+        log::info!("Initializing Vulkan renderer for '{}'", config.application_name);
         
         // Create Vulkan renderer using backend access
         // IMPLEMENTATION NOTE: This uses internal backend access with type-safe downcasting
@@ -101,11 +108,11 @@ impl Renderer {
             .downcast_mut::<vulkan::Window>()
             .expect("Expected Vulkan window backend");
         
-        let vulkan_renderer = vulkan::VulkanRenderer::new(vulkan_window)
+        let vulkan_renderer = vulkan::VulkanRenderer::new(vulkan_window, config)
             .expect("Failed to create Vulkan renderer"); // FIXME: Should return Result instead of panicking
         
         Self {
-            vulkan_renderer,
+            backend: Box::new(vulkan_renderer),
             current_camera: None,
             current_lighting: None,
             frame_count: 0,
@@ -132,7 +139,7 @@ impl Renderer {
             &window_config.title,
         );
 
-        Ok(Self::new_from_window(&mut window_handle))
+        Ok(Self::new_from_window(&mut window_handle, &VulkanRendererConfig::default()))
     }
     
     /// Begin a new frame
@@ -200,7 +207,7 @@ impl Renderer {
                     // FIXME: Manual array conversion - should have helper methods
                     let direction = [first_light.direction.x, first_light.direction.y, first_light.direction.z];
                     let color = [first_light.color.x, first_light.color.y, first_light.color.z];
-                    self.vulkan_renderer.set_directional_light(
+                    self.backend.set_directional_light(
                         direction,
                         first_light.intensity,
                         color,
@@ -215,7 +222,7 @@ impl Renderer {
             }
         } else {
             // FIXME: Hardcoded default lighting - should be configurable
-            self.vulkan_renderer.set_directional_light(
+            self.backend.set_directional_light(
                 [0.0, 1.0, 0.0],  // Default light pointing downward (+Y in right-handed system)
                 0.3,              // Mild default intensity
                 [1.0, 1.0, 1.0],  // White light
@@ -278,14 +285,14 @@ impl Renderer {
         // Update mesh data - PERFORMANCE ISSUE: This happens on every draw call
         // Meshes should be uploaded once and referenced by handle for efficiency
         // FIXME: Implement mesh caching/handle system to avoid redundant uploads
-        self.vulkan_renderer.update_mesh(&mesh.vertices, &mesh.indices)
+        self.backend.update_mesh(&mesh.vertices, &mesh.indices)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         
         // Set material properties
         // FIXME: Material should be an object that can be applied as a unit,
         // not individual property calls that can get out of sync
         let material_color = [material.base_color[0], material.base_color[1], material.base_color[2], material.alpha];
-        self.vulkan_renderer.set_material_color(material_color);
+        self.backend.set_material_color(material_color);
         
         // ARCHITECTURAL DEPENDENCY: Requires camera to be set beforehand
         // This creates a fragile runtime dependency that could be compile-time checked
@@ -329,8 +336,8 @@ impl Renderer {
 
             // VULKAN COUPLING: These method calls directly expose the backend implementation
             // A library-agnostic design would use generic "set_transform_matrix" calls
-            self.vulkan_renderer.set_mvp_matrix(mvp_array);
-            self.vulkan_renderer.set_model_matrix(model_array);
+            self.backend.set_mvp_matrix(mvp_array);
+            self.backend.set_model_matrix(model_array);
             
             // ARCHITECTURAL ANTI-PATTERN: Setting lighting data per mesh draw
             // Lighting should be set once per frame, not once per object
@@ -346,7 +353,7 @@ impl Renderer {
                             
                             // PERFORMANCE ISSUE: This call happens for every mesh, not once per frame
                             // FIXME: Move lighting setup to begin_frame() or a dedicated set_scene_lighting()
-                            self.vulkan_renderer.set_directional_light(
+                            self.backend.set_directional_light(
                                 direction,
                                 first_light.intensity,
                                 color,
@@ -370,25 +377,21 @@ impl Renderer {
         }
         
         // Execute the actual draw call
-        // ERROR HANDLING ISSUE: Vulkan-specific errors leak to high-level API
-        // The renderer should abstract away backend-specific error types
-        match self.vulkan_renderer.draw_frame() {
+        // IMPROVED ERROR HANDLING: Backend abstraction now properly handles errors
+        match self.backend.draw_frame() {
             Ok(()) => {
                 // Success - frame has been submitted and will be presented
                 log::trace!("Successfully drew mesh with {} vertices", mesh.vertices.len());
             },
-            Err(vulkan::VulkanError::Api(ash::vk::Result::ERROR_OUT_OF_DATE_KHR)) => {
-                // VULKAN-SPECIFIC ERROR: Swapchain lifecycle management leaks implementation details
-                // This should be handled transparently by the renderer, not exposed to applications
+            Err(RenderError::BackendError(ref err_msg)) if err_msg.contains("ERROR_OUT_OF_DATE_KHR") => {
+                // Backend reports swapchain out of date - handle gracefully
                 log::warn!("Swapchain out of date during render - requesting recreation");
                 // FIXME: Automatic swapchain recreation should happen transparently
-                // Current solution is a bandaid that skips frames
                 return Ok(()); // Skip this frame to avoid crashes
             }
-            // ABSTRACTION VIOLATION: Converting backend-specific errors to generic errors
-            // reveals that the error abstraction is incomplete
+            // Backend abstraction now provides clean error handling
             Err(e) => {
-                log::error!("Vulkan rendering error: {:?}", e);
+                log::error!("Backend rendering error: {:?}", e);
                 return Err(Box::new(e) as Box<dyn std::error::Error>);
             }
         }
@@ -444,15 +447,11 @@ impl Renderer {
         log::info!("Recreating swapchain for window resize");
         
         // INTERNAL BACKEND ACCESS: Use safe downcasting via RenderSurface trait
-        // This replaces the old vulkan_window_mut() abstraction violation with safe internal access
-        let render_surface = window_handle.render_surface();
-        let vulkan_window = render_surface.as_any_mut()
-            .downcast_mut::<vulkan::Window>()
-            .expect("Expected Vulkan window backend");
+        // Backend now handles swapchain recreation internally
         
         // FIXME: Error handling should be more robust
         // Failed swapchain recreation should either retry or gracefully degrade
-        if let Err(e) = self.vulkan_renderer.recreate_swapchain(vulkan_window) {
+        if let Err(e) = self.backend.recreate_swapchain(window_handle) {
             log::error!("Failed to recreate swapchain: {:?}", e);
             // FIXME: What should we do if swapchain recreation fails?
             // Current behavior is to continue with broken state
@@ -477,16 +476,13 @@ impl Renderer {
     /// FIXME: This should return a generic RenderArea struct, not raw dimensions
     pub fn get_swapchain_extent(&self) -> (u32, u32) {
         // ABSTRACTION LEAK: Exposing Vulkan swapchain details
-        self.vulkan_renderer.get_swapchain_extent()
+        self.backend.get_swapchain_extent()
     }
     
     /// Legacy ECS rendering method
     ///
     /// Provides compatibility with the old ECS-based rendering system.
     /// Currently does minimal work and is primarily used for engine integration.
-    ///
-    /// # Arguments
-    /// * `_world` - ECS world (currently unused)
     ///
     /// # Returns
     /// Result indicating success or rendering error
@@ -498,7 +494,7 @@ impl Renderer {
     ///
     /// FIXME: This legacy method should eventually be removed once all applications
     /// migrate to the new explicit draw_mesh_3d() API.
-    pub fn render(&mut self, _world: &World) -> Result<(), RenderError> {
+    pub fn render(&mut self) -> Result<(), RenderError> {
         // Legacy rendering path - minimal implementation for backward compatibility
         log::trace!("Legacy render call - frame {}", self.frame_count);
         self.frame_count += 1;
@@ -828,4 +824,11 @@ pub enum RenderError {
     /// or managed properly, typically due to memory constraints or invalid data.
     #[error("Resource creation failed: {0}")]
     ResourceCreationFailed(String),
+    
+    /// Backend-specific error occurred
+    ///
+    /// Wraps backend-specific errors (Vulkan, OpenGL, etc.) in a generic form
+    /// for consistent error handling across different graphics backends.
+    #[error("Backend error: {0}")]
+    BackendError(String),
 }

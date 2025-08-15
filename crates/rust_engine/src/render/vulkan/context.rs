@@ -81,9 +81,13 @@ impl VulkanInstance {
             extensions.push(DebugUtils::name().as_ptr());
         }
 
-        // Get validation layers
+        // Get validation layers - including synchronization validation for development
         let layer_names = if cfg!(debug_assertions) && enable_validation {
-            vec![CString::new("VK_LAYER_KHRONOS_validation").unwrap()]
+            vec![
+                CString::new("VK_LAYER_KHRONOS_validation").unwrap(),
+                // Note: VK_LAYER_KHRONOS_synchronization2 is typically enabled via 
+                // VK_LAYER_KHRONOS_validation with synchronization validation features
+            ]
         } else {
             vec![]
         };
@@ -92,7 +96,36 @@ impl VulkanInstance {
             .map(|name| name.as_ptr())
             .collect();
 
-        // Create instance
+        // Enable synchronization validation features for development builds
+        #[cfg(debug_assertions)]
+        let mut validation_features = if enable_validation {
+            Some(vk::ValidationFeaturesEXT::builder()
+                .enabled_validation_features(&[
+                    vk::ValidationFeatureEnableEXT::SYNCHRONIZATION_VALIDATION,
+                    vk::ValidationFeatureEnableEXT::BEST_PRACTICES,
+                ]))
+        } else {
+            None
+        };
+
+        // Create instance with synchronization validation
+        #[cfg(debug_assertions)]
+        let mut create_info_builder = vk::InstanceCreateInfo::builder()
+            .application_info(&app_info)
+            .enabled_extension_names(&extensions)
+            .enabled_layer_names(&layer_names_ptrs);
+
+        #[cfg(debug_assertions)]
+        if enable_validation {
+            if let Some(ref mut features) = validation_features {
+                create_info_builder = create_info_builder.push_next(features);
+            }
+        }
+
+        #[cfg(debug_assertions)]
+        let create_info = create_info_builder;
+
+        #[cfg(not(debug_assertions))]
         let create_info = vk::InstanceCreateInfo::builder()
             .application_info(&app_info)
             .enabled_extension_names(&extensions)

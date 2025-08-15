@@ -183,37 +183,253 @@
 //! - **CPU Stalling**: Excessive fence waits block CPU progress
 //! - **GPU Bubbles**: Poor synchronization creates GPU idle time
 //! - **Over-Synchronization**: Too many barriers reduce parallelism
-//! 
-//! The module's design encourages efficient synchronization patterns.
-//! 
-//! ## Integration Quality:
-//! 
-//! ### Command Queue Integration
-//! Synchronization objects integrate cleanly with queue submission:
-//! - Semaphore wait/signal stages properly specified
-//! - Fence integration with command buffer completion
-//! - Queue family ownership transfer handling
-//! 
-//! ### Swapchain Integration
-//! Frame synchronization works seamlessly with presentation:
-//! - Image acquisition semaphore coordination
-//! - Presentation semaphore signaling
-//! - Out-of-date swapchain handling
-//! 
-//! ## Design Goals Assessment:
-//! 
-//! 1. ✅ **Correctness**: Prevents common synchronization errors
-//! 2. ✅ **Performance**: Minimal overhead over raw Vulkan sync
-//! 3. ✅ **Resource Safety**: RAII prevents sync object leaks
-//! 4. ✅ **Ease of Use**: Simplifies complex multi-frame synchronization
-//! 5. ✅ **Vulkan Compliance**: Follows synchronization best practices
-//! 6. ⚠️ **Advanced Features**: Limited to basic synchronization patterns
-//! 
-//! This module successfully tackles one of Vulkan's most challenging aspects and
-//! provides a solid foundation for correct and efficient GPU/CPU coordination in
-//! high-performance rendering applications.
+//! - **Under-Synchronization**: Missing barriers can cause race conditions
+//!
+//! ## Memory Barrier Utilities
+//!
+//! Common memory barrier patterns for typical GPU operations:
+//!
+//! ```rust
+//! use crate::render::vulkan::MemoryBarrierBuilder;
+//!
+//! // Host write followed by shader read (buffer updates)
+//! let barrier = MemoryBarrierBuilder::buffer_host_write_to_shader_read();
+//!
+//! // Transfer write followed by vertex attribute read (mesh updates)  
+//! let barrier = MemoryBarrierBuilder::buffer_transfer_to_vertex_read();
+//!
+//! // Compute write followed by fragment shader read (compute→graphics)
+//! let barrier = MemoryBarrierBuilder::buffer_compute_write_to_fragment_read();
+//! ```
 
-use ash::{vk, Device};
+use ash::vk;
+
+/// Memory barrier builder for common synchronization patterns
+/// 
+/// Provides pre-configured memory barriers for typical GPU operations to prevent
+/// synchronization hazards (WAR, WAW, RAW, WRW, RRW) identified by validation layers.
+pub struct MemoryBarrierBuilder;
+
+impl MemoryBarrierBuilder {
+    /// Host write → Shader read barrier (for uniform buffer updates)
+    /// 
+    /// Use when CPU has written to a buffer and GPU shaders need to read it.
+    /// Prevents RAW (Read-After-Write) hazards.
+    pub fn buffer_host_write_to_shader_read() -> vk::MemoryBarrier {
+        vk::MemoryBarrier::builder()
+            .src_access_mask(vk::AccessFlags::HOST_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ)
+            .build()
+    }
+    
+    /// Transfer write → Vertex attribute read barrier (for vertex buffer updates)
+    /// 
+    /// Use after copying data to vertex/index buffers before drawing.
+    /// Prevents RAW hazards between transfer and vertex input stages.
+    pub fn buffer_transfer_to_vertex_read() -> vk::MemoryBarrier {
+        vk::MemoryBarrier::builder()
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(vk::AccessFlags::VERTEX_ATTRIBUTE_READ)
+            .build()
+    }
+    
+    /// Transfer write → Index read barrier (for index buffer updates)
+    /// 
+    /// Use after copying data to index buffers before drawing.
+    /// Prevents RAW hazards between transfer and index input stages.
+    pub fn buffer_transfer_to_index_read() -> vk::MemoryBarrier {
+        vk::MemoryBarrier::builder()
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(vk::AccessFlags::INDEX_READ)
+            .build()
+    }
+    
+    /// Host write → Transfer read barrier (for staging buffer operations)
+    /// 
+    /// Use when CPU has written to staging buffer before GPU transfer.
+    /// Ensures host writes are visible to transfer operations.
+    pub fn buffer_host_write_to_transfer_read() -> vk::MemoryBarrier {
+        vk::MemoryBarrier::builder()
+            .src_access_mask(vk::AccessFlags::HOST_WRITE)
+            .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
+            .build()
+    }
+    
+    /// Compute write → Fragment shader read barrier (for compute→graphics)
+    /// 
+    /// Use when compute shaders write to buffers/images that fragment shaders read.
+    /// Prevents RAW hazards between compute and graphics pipelines.
+    pub fn buffer_compute_write_to_fragment_read() -> vk::MemoryBarrier {
+        vk::MemoryBarrier::builder()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ)
+            .build()
+    }
+    
+    /// Color attachment write → Shader read barrier (for render-to-texture)
+    /// 
+    /// Use when rendering to a texture that will be sampled in subsequent passes.
+    /// Prevents WAR/RAW hazards in multi-pass rendering.
+    pub fn image_color_write_to_shader_read() -> vk::MemoryBarrier {
+        vk::MemoryBarrier::builder()
+            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ)
+            .build()
+    }
+}
+
+/// FIXME: Timeline semaphore implementation needed for enhanced synchronization
+/// 
+/// Timeline semaphores provide more precise synchronization control compared to binary semaphores.
+/// They enable better validation and can reduce synchronization overhead in complex scenarios.
+/// 
+/// Benefits:
+/// - More granular synchronization control with monotonic counters
+/// - Better validation layer integration for hazard detection
+/// - Reduced CPU-GPU synchronization overhead
+/// - Support for out-of-order execution patterns
+/// 
+/// Implementation should include:
+/// ```rust,ignore
+/// pub struct TimelineSemaphore {
+///     device: Arc<ash::Device>,
+///     semaphore: vk::Semaphore,
+///     counter: AtomicU64,
+/// }
+/// 
+/// impl TimelineSemaphore {
+///     pub fn new(device: Arc<ash::Device>) -> VulkanResult<Self> {
+///         let mut timeline_create_info = vk::SemaphoreTypeCreateInfo::builder()
+///             .semaphore_type(vk::SemaphoreType::TIMELINE)
+///             .initial_value(0);
+///             
+///         let create_info = vk::SemaphoreCreateInfo::builder()
+///             .push_next(&mut timeline_create_info);
+///             
+///         let semaphore = unsafe {
+///             device.create_semaphore(&create_info, None)
+///                 .map_err(VulkanError::Api)?
+///         };
+///         
+///         Ok(Self {
+///             device,
+///             semaphore,
+///             counter: AtomicU64::new(0),
+///         })
+///     }
+///     
+///     pub fn signal_value(&self) -> u64 {
+///         self.counter.fetch_add(1, Ordering::SeqCst) + 1
+///     }
+///     
+///     pub fn wait_for_value(&self, value: u64, timeout: u64) -> VulkanResult<()> {
+///         let wait_info = vk::SemaphoreWaitInfo::builder()
+///             .semaphores(&[self.semaphore])
+///             .values(&[value]);
+///             
+///         unsafe {
+///             self.device.wait_semaphores(&wait_info, timeout)
+///                 .map_err(VulkanError::Api)
+///         }
+///     }
+/// }
+/// ```
+/// 
+/// Priority: Medium - implement when adding advanced rendering features
+
+/// FIXME: Development-time hazard detection utilities needed
+/// 
+/// Add runtime validation for synchronization hazards during development builds.
+/// Helps catch synchronization issues that validation layers might miss or 
+/// provides more specific context about engine-level synchronization patterns.
+/// 
+/// Implementation should include:
+/// ```rust,ignore
+/// #[cfg(debug_assertions)]
+/// pub struct SyncValidator {
+///     last_write_stage: HashMap<vk::Buffer, vk::PipelineStageFlags>,
+///     last_read_stage: HashMap<vk::Buffer, vk::PipelineStageFlags>,
+///     image_layouts: HashMap<vk::Image, vk::ImageLayout>,
+/// }
+/// 
+/// #[cfg(debug_assertions)]
+/// impl SyncValidator {
+///     pub fn new() -> Self {
+///         Self {
+///             last_write_stage: HashMap::new(),
+///             last_read_stage: HashMap::new(),
+///             image_layouts: HashMap::new(),
+///         }
+///     }
+///     
+///     /// Validate buffer access patterns for potential hazards
+///     pub fn validate_buffer_access(&mut self, buffer: vk::Buffer, stage: vk::PipelineStageFlags, is_write: bool) {
+///         if is_write {
+///             // Check for WAR (Write-After-Read) hazards
+///             if let Some(last_read) = self.last_read_stage.get(&buffer) {
+///                 if stage.intersects(*last_read) {
+///                     log::warn!("Potential WAR hazard detected for buffer {:?}: write stage {:?} conflicts with previous read stage {:?}", 
+///                               buffer, stage, last_read);
+///                 }
+///             }
+///             
+///             // Check for WAW (Write-After-Write) hazards
+///             if let Some(last_write) = self.last_write_stage.get(&buffer) {
+///                 if stage.intersects(*last_write) {
+///                     log::warn!("Potential WAW hazard detected for buffer {:?}: write stage {:?} conflicts with previous write stage {:?}", 
+///                               buffer, stage, last_write);
+///                 }
+///             }
+///             
+///             self.last_write_stage.insert(buffer, stage);
+///         } else {
+///             // Check for RAW (Read-After-Write) hazards
+///             if let Some(last_write) = self.last_write_stage.get(&buffer) {
+///                 if stage.intersects(*last_write) {
+///                     log::warn!("Potential RAW hazard detected for buffer {:?}: read stage {:?} conflicts with previous write stage {:?}", 
+///                               buffer, stage, last_write);
+///                 }
+///             }
+///             
+///             self.last_read_stage.insert(buffer, stage);
+///         }
+///     }
+///     
+///     /// Validate image layout transitions
+///     pub fn validate_image_layout(&mut self, image: vk::Image, old_layout: vk::ImageLayout, new_layout: vk::ImageLayout) {
+///         if let Some(current_layout) = self.image_layouts.get(&image) {
+///             if *current_layout != old_layout {
+///                 log::warn!("Image layout mismatch for image {:?}: expected {:?}, got {:?}", 
+///                           image, current_layout, old_layout);
+///             }
+///         }
+///         self.image_layouts.insert(image, new_layout);
+///     }
+///     
+///     /// Reset tracking state (call at frame boundaries)
+///     pub fn reset_frame(&mut self) {
+///         self.last_write_stage.clear();
+///         self.last_read_stage.clear();
+///         // Keep image layouts as they persist across frames
+///     }
+/// }
+/// ```
+/// 
+/// Integration points:
+/// - CommandRecorder should call validate_buffer_access() for each operation
+/// - Image transitions should call validate_image_layout()
+/// - Frame boundaries should call reset_frame()
+/// - Only enabled in debug builds to avoid production overhead
+/// 
+/// Benefits:
+/// - Catches engine-specific synchronization patterns
+/// - Provides detailed context for debugging synchronization issues
+/// - Complements validation layer reporting with application-specific details
+/// - Helps identify over-synchronization patterns during development
+/// 
+/// Priority: Low - implement for advanced debugging support
+
+use ash::Device;
 use crate::render::vulkan::{VulkanResult, VulkanError};
 
 /// GPU-GPU synchronization primitive with automatic resource management

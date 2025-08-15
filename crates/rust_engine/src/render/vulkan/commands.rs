@@ -48,6 +48,63 @@
 //! - Pool reset for bulk command buffer reset operations
 //! - Multiple pools for different queue families or thread usage
 //! 
+//! ### FIXME: Thread-Safe Command Pool Management Needed
+//! 
+//! Current implementation uses a single command pool per renderer, which limits
+//! concurrent command buffer recording. Multi-threaded rendering scenarios require
+//! thread-safe command pool access or per-thread command pools.
+//! 
+//! Enhancement needed:
+//! ```rust,ignore
+//! /// Thread-safe command pool management for concurrent command recording
+//! pub struct ThreadSafeCommandPool {
+//!     pools: Vec<Mutex<CommandPool>>,
+//!     current_index: AtomicUsize,
+//! }
+//! 
+//! impl ThreadSafeCommandPool {
+//!     pub fn new(device: Arc<ash::Device>, queue_family: u32, pool_count: usize) -> VulkanResult<Self> {
+//!         let pools = (0..pool_count)
+//!             .map(|_| Mutex::new(CommandPool::new(device.clone(), queue_family)?))
+//!             .collect::<Result<Vec<_>, _>>()?;
+//!             
+//!         Ok(Self {
+//!             pools,
+//!             current_index: AtomicUsize::new(0),
+//!         })
+//!     }
+//!     
+//!     pub fn get_pool(&self) -> &Mutex<CommandPool> {
+//!         let index = self.current_index.fetch_add(1, Ordering::Relaxed) % self.pools.len();
+//!         &self.pools[index]
+//!     }
+//!     
+//!     /// Get exclusive access to a command pool for recording
+//!     pub fn with_pool<F, R>(&self, f: F) -> R 
+//!     where F: FnOnce(&mut CommandPool) -> R {
+//!         let pool = self.get_pool();
+//!         let mut guard = pool.lock().unwrap();
+//!         f(&mut *guard)
+//!     }
+//! }
+//! ```
+//! 
+//! Benefits:
+//! - Enables concurrent command buffer recording from multiple threads
+//! - Round-robin pool selection distributes load evenly
+//! - Maintains proper synchronization without contention
+//! - Supports scalable multi-threaded rendering architectures
+//! 
+//! Priority: Low - implement when adding multi-threaded rendering
+//! 
+//! ### Validation Integration Notes
+//! 
+//! Command recording benefits from synchronization validation layers:
+//! - Detects improper command buffer state transitions
+//! - Validates pipeline barrier placement and access patterns
+//! - Identifies queue family ownership transfer issues
+//! - Reports command buffer recording hazards
+//! 
 //! ### Command Recording Pattern
 //! The `CommandRecorder` implements a builder-like pattern for command recording:
 //! ```rust
@@ -341,6 +398,36 @@ impl CommandRecorder {
     pub fn cmd_draw_indexed(&mut self, index_count: u32, instance_count: u32, first_index: u32, vertex_offset: i32, first_instance: u32) {
         unsafe {
             self.device.cmd_draw_indexed(self.command_buffer, index_count, instance_count, first_index, vertex_offset, first_instance);
+        }
+    }
+    
+    /// Copy buffer to buffer
+    pub fn cmd_copy_buffer(&mut self, src_buffer: vk::Buffer, dst_buffer: vk::Buffer, regions: &[vk::BufferCopy]) {
+        unsafe {
+            self.device.cmd_copy_buffer(self.command_buffer, src_buffer, dst_buffer, regions);
+        }
+    }
+    
+    /// Pipeline barrier for synchronization
+    pub fn cmd_pipeline_barrier(
+        &mut self,
+        src_stage_mask: vk::PipelineStageFlags,
+        dst_stage_mask: vk::PipelineStageFlags,
+        dependency_flags: vk::DependencyFlags,
+        memory_barriers: &[vk::MemoryBarrier],
+        buffer_memory_barriers: &[vk::BufferMemoryBarrier],
+        image_memory_barriers: &[vk::ImageMemoryBarrier],
+    ) {
+        unsafe {
+            self.device.cmd_pipeline_barrier(
+                self.command_buffer,
+                src_stage_mask,
+                dst_stage_mask,
+                dependency_flags,
+                memory_barriers,
+                buffer_memory_barriers,
+                image_memory_barriers,
+            );
         }
     }
 }

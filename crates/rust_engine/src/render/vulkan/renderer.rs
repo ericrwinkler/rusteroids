@@ -213,7 +213,6 @@
 use ash::vk;
 use crate::render::vulkan::*;
 use crate::render::mesh::Vertex;
-use std::path::Path;
 
 /// Shader push constants structure with proper GLSL alignment
 /// 
@@ -287,11 +286,11 @@ pub struct VulkanRenderer {
 }
 
 impl VulkanRenderer {
-    /// Create new Vulkan renderer
-    pub fn new(window: &mut Window) -> VulkanResult<Self> {
+    /// Create new Vulkan renderer with configuration
+    pub fn new(window: &mut Window, config: &crate::render::VulkanRendererConfig) -> VulkanResult<Self> {
         log::debug!("Creating VulkanContext...");
         // Create Vulkan context
-        let context = VulkanContext::new(window, "Rusteroids")?;
+        let context = VulkanContext::new(window, &config.application_name)?;
         log::debug!("VulkanContext created successfully");
         
         log::debug!("Creating RenderPass...");
@@ -303,38 +302,26 @@ impl VulkanRenderer {
         log::debug!("RenderPass created successfully");
         
         log::debug!("Loading shaders...");
-        // Load shaders - use paths that work from both root and teapot_app directories
-        let vertex_shader_path = if Path::new("target/shaders/vert.spv").exists() {
-            Path::new("target/shaders/vert.spv")
-        } else {
-            Path::new("../target/shaders/vert.spv")
-        };
-        
-        let fragment_shader_path = if Path::new("target/shaders/frag.spv").exists() {
-            Path::new("target/shaders/frag.spv")
-        } else {
-            Path::new("../target/shaders/frag.spv")
-        };
-        
+        // Load shaders using configuration
         let vertex_shader = ShaderModule::from_file(
             context.raw_device(),
-            vertex_shader_path
+            &config.shaders.vertex_shader_path
         ).map_err(|e| {
-            log::error!("Failed to load vertex shader: {:?}", e);
+            log::error!("Failed to load vertex shader from '{}': {:?}", config.shaders.vertex_shader_path, e);
             e
         })?;
         
         let fragment_shader = ShaderModule::from_file(
             context.raw_device(),
-            fragment_shader_path
+            &config.shaders.fragment_shader_path
         ).map_err(|e| {
-            log::error!("Failed to load fragment shader: {:?}", e);
+            log::error!("Failed to load fragment shader from '{}': {:?}", config.shaders.fragment_shader_path, e);
             e
         })?;
         log::debug!("Shaders loaded successfully");
         
-        // Get vertex input state
-        let (binding_desc, attr_desc) = Vertex::get_input_state();
+        // Get vertex input state from Vulkan backend
+        let (binding_desc, attr_desc) = VulkanVertexLayout::get_input_state();
         let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder()
             .vertex_binding_descriptions(&[binding_desc])
             .vertex_attribute_descriptions(&attr_desc)
@@ -380,45 +367,29 @@ impl VulkanRenderer {
             framebuffers.push(framebuffer);
         }
         
-        log::debug!("Creating buffers...");
-        // Create test triangle vertices with proper attributes
-        let vertices = vec![
-            Vertex { 
-                position: [0.0, -0.5, 0.0], 
-                normal: [0.0, 0.0, 1.0],
-                tex_coord: [0.5, 1.0]
-            },
-            Vertex { 
-                position: [0.5, 0.5, 0.0], 
-                normal: [0.0, 0.0, 1.0],
-                tex_coord: [1.0, 0.0]
-            },
-            Vertex { 
-                position: [-0.5, 0.5, 0.0], 
-                normal: [0.0, 0.0, 1.0],
-                tex_coord: [0.0, 0.0]
-            },
-        ];
+        log::debug!("Creating synchronization objects...");
+        // Create initial empty buffers (will be replaced when meshes are uploaded)
+        let empty_vertices = vec![Vertex { 
+            position: [0.0; 3], 
+            normal: [0.0; 3],
+            tex_coord: [0.0; 2]
+        }];
+        let empty_indices = vec![0u32];
         
-        let indices = vec![0, 1, 2];
-        
-        // Create buffers
         let vertex_buffer = VertexBuffer::new(
             context.raw_device(),
             context.instance().clone(),
             context.physical_device().device,
-            &vertices,
+            &empty_vertices,
         )?;
         
         let index_buffer = IndexBuffer::new(
             context.raw_device(),
             context.instance().clone(),
             context.physical_device().device,
-            &indices,
+            &empty_indices,
         )?;
-        log::debug!("Buffers created successfully");
         
-        log::debug!("Creating synchronization objects...");
         // Create synchronization objects
         // Per-image sync objects (one per swapchain image) - for semaphores
         let image_count = context.swapchain().image_count() as usize;
@@ -428,7 +399,7 @@ impl VulkanRenderer {
         }
         
         // Per-frame sync objects (for frames in flight) - for fences
-        let max_frames_in_flight = 2;
+        let max_frames_in_flight = config.max_frames_in_flight;
         let mut frame_sync_objects = Vec::new();
         for _ in 0..max_frames_in_flight {
             frame_sync_objects.push(FrameSync::new(context.raw_device())?);
@@ -468,29 +439,214 @@ impl VulkanRenderer {
         })
     }
     
-    /// Update mesh data for rendering
+    /// Update mesh data for rendering with proper staging buffer synchronization
+    /// 
+    /// Uses staging buffers with proper memory barriers instead of recreating buffers.
+    /// This prevents validation errors by ensuring proper resource synchronization.
+    /// Follows Johannes Unterguggenberger's synchronization validation recommendations.
     pub fn update_mesh(&mut self, vertices: &[Vertex], indices: &[u32]) -> VulkanResult<()> {
         log::trace!("Updating mesh with {} vertices and {} indices", vertices.len(), indices.len());
         
-        // Wait for device to be idle before updating buffers
-        self.wait_idle()?;
+        // Enhanced synchronization: Wait for ALL in-flight frames to complete
+        // This ensures no command buffers are using the buffers we're about to update
+        for frame_sync in &self.frame_sync_objects {
+            let fence_status = unsafe {
+                self.context.device().device.get_fence_status(frame_sync.in_flight.handle())
+            };
+            
+            match fence_status {
+                Ok(false) => {
+                    // Fence is not ready (unsignaled), need to wait
+                    log::trace!("Waiting for frame's GPU work to complete before buffer update");
+                    frame_sync.in_flight.wait(u64::MAX)?;
+                },
+                Ok(true) => {
+                    // Fence is signaled, safe to proceed
+                    log::trace!("Frame fence already signaled, safe to update buffers");
+                },
+                Err(e) => {
+                    return Err(VulkanError::Api(e));
+                }
+            }
+        }
         
-        // Create new vertex buffer
-        self.vertex_buffer = VertexBuffer::new(
+        // Calculate required buffer sizes
+        let vertex_buffer_size = (vertices.len() * std::mem::size_of::<Vertex>()) as u64;
+        let index_buffer_size = (indices.len() * std::mem::size_of::<u32>()) as u64;
+        
+        // Check if we need to resize buffers
+        let vertex_buffer_current_size = self.vertex_buffer.size();
+        let index_buffer_current_size = self.index_buffer.size();
+        
+        if vertex_buffer_size > vertex_buffer_current_size {
+            log::debug!("Recreating vertex buffer: {} -> {} bytes", vertex_buffer_current_size, vertex_buffer_size);
+            // Only recreate if we need a larger buffer
+            self.vertex_buffer = VertexBuffer::new(
+                self.context.raw_device(),
+                self.context.instance().clone(),
+                self.context.physical_device().device,
+                vertices,
+            )?;
+        } else {
+            // Update existing buffer with staging buffer and proper barriers
+            self.update_vertex_buffer_with_staging(vertices)?;
+        }
+        
+        if index_buffer_size > index_buffer_current_size {
+            log::debug!("Recreating index buffer: {} -> {} bytes", index_buffer_current_size, index_buffer_size);
+            // Only recreate if we need a larger buffer
+            self.index_buffer = IndexBuffer::new(
+                self.context.raw_device(),
+                self.context.instance().clone(),
+                self.context.physical_device().device,
+                indices,
+            )?;
+        } else {
+            // Update existing buffer with staging buffer and proper barriers
+            self.update_index_buffer_with_staging(indices)?;
+        }
+        
+        log::trace!("Mesh update completed with proper synchronization");
+        Ok(())
+    }
+    
+    /// Update vertex buffer using staging buffer with proper memory barriers
+    fn update_vertex_buffer_with_staging(&mut self, vertices: &[Vertex]) -> VulkanResult<()> {
+        // Create staging buffer
+        let staging_buffer = StagingBuffer::new(
             self.context.raw_device(),
             self.context.instance().clone(),
             self.context.physical_device().device,
-            vertices,
+            bytemuck::cast_slice(vertices),
         )?;
         
-        // Create new index buffer
-        self.index_buffer = IndexBuffer::new(
+        // Record copy command with barriers
+        let mut recorder = self.command_pool.begin_single_time()?;
+        
+        // Memory barrier: Host write → Transfer read
+        let host_to_transfer_barrier = MemoryBarrierBuilder::buffer_host_write_to_transfer_read();
+        recorder.cmd_pipeline_barrier(
+            vk::PipelineStageFlags::HOST,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[host_to_transfer_barrier],
+            &[],
+            &[],
+        );
+        
+        // Copy from staging to vertex buffer
+        let copy_region = vk::BufferCopy::builder()
+            .src_offset(0)
+            .dst_offset(0)
+            .size((vertices.len() * std::mem::size_of::<Vertex>()) as u64)
+            .build();
+            
+        recorder.cmd_copy_buffer(
+            staging_buffer.handle(),
+            self.vertex_buffer.handle(),
+            &[copy_region],
+        );
+        
+        // Memory barrier: Transfer write → Vertex attribute read
+        let transfer_to_vertex_barrier = MemoryBarrierBuilder::buffer_transfer_to_vertex_read();
+        recorder.cmd_pipeline_barrier(
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::VERTEX_INPUT,
+            vk::DependencyFlags::empty(),
+            &[transfer_to_vertex_barrier],
+            &[],
+            &[],
+        );
+        
+        // Submit and wait for completion
+        let command_buffer = recorder.end()?;
+        let submit_info = vk::SubmitInfo::builder()
+            .command_buffers(&[command_buffer])
+            .build();
+            
+        unsafe {
+            self.context.device().device.queue_submit(
+                self.context.graphics_queue(),
+                &[submit_info],
+                vk::Fence::null(),
+            ).map_err(VulkanError::Api)?;
+            
+            // Wait for the transfer to complete
+            self.context.device().device.queue_wait_idle(self.context.graphics_queue())
+                .map_err(VulkanError::Api)?;
+        }
+        
+        // Staging buffer is automatically dropped here
+        Ok(())
+    }
+    
+    /// Update index buffer using staging buffer with proper memory barriers
+    fn update_index_buffer_with_staging(&mut self, indices: &[u32]) -> VulkanResult<()> {
+        // Create staging buffer
+        let staging_buffer = StagingBuffer::new(
             self.context.raw_device(),
             self.context.instance().clone(),
             self.context.physical_device().device,
-            indices,
+            bytemuck::cast_slice(indices),
         )?;
         
+        // Record copy command with barriers
+        let mut recorder = self.command_pool.begin_single_time()?;
+        
+        // Memory barrier: Host write → Transfer read
+        let host_to_transfer_barrier = MemoryBarrierBuilder::buffer_host_write_to_transfer_read();
+        recorder.cmd_pipeline_barrier(
+            vk::PipelineStageFlags::HOST,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[host_to_transfer_barrier],
+            &[],
+            &[],
+        );
+        
+        // Copy from staging to index buffer
+        let copy_region = vk::BufferCopy::builder()
+            .src_offset(0)
+            .dst_offset(0)
+            .size((indices.len() * std::mem::size_of::<u32>()) as u64)
+            .build();
+            
+        recorder.cmd_copy_buffer(
+            staging_buffer.handle(),
+            self.index_buffer.handle(),
+            &[copy_region],
+        );
+        
+        // Memory barrier: Transfer write → Index read
+        let transfer_to_index_barrier = MemoryBarrierBuilder::buffer_transfer_to_index_read();
+        recorder.cmd_pipeline_barrier(
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::VERTEX_INPUT,
+            vk::DependencyFlags::empty(),
+            &[transfer_to_index_barrier],
+            &[],
+            &[],
+        );
+        
+        // Submit and wait for completion
+        let command_buffer = recorder.end()?;
+        let submit_info = vk::SubmitInfo::builder()
+            .command_buffers(&[command_buffer])
+            .build();
+            
+        unsafe {
+            self.context.device().device.queue_submit(
+                self.context.graphics_queue(),
+                &[submit_info],
+                vk::Fence::null(),
+            ).map_err(VulkanError::Api)?;
+            
+            // Wait for the transfer to complete
+            self.context.device().device.queue_wait_idle(self.context.graphics_queue())
+                .map_err(VulkanError::Api)?;
+        }
+        
+        // Staging buffer is automatically dropped here
         Ok(())
     }
     
@@ -800,5 +956,55 @@ impl Drop for VulkanRenderer {
         // 8. context (VulkanContext - destroys device, then instance)
         
         log::debug!("VulkanRenderer cleanup complete");
+    }
+}
+
+/// Implementation of RenderBackend trait for VulkanRenderer
+///
+/// This implementation provides the backend abstraction layer that allows
+/// the high-level renderer to work with Vulkan through a clean interface.
+impl crate::render::RenderBackend for VulkanRenderer {
+    fn get_swapchain_extent(&self) -> (u32, u32) {
+        self.get_swapchain_extent()
+    }
+    
+    fn update_mesh(&mut self, vertices: &[crate::render::Vertex], indices: &[u32]) -> crate::render::backend::BackendResult<()> {
+        self.update_mesh(vertices, indices)
+            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))
+    }
+    
+    fn set_mvp_matrix(&mut self, mvp: [[f32; 4]; 4]) {
+        self.set_mvp_matrix(mvp);
+    }
+    
+    fn set_model_matrix(&mut self, model: [[f32; 4]; 4]) {
+        self.set_model_matrix(model);
+    }
+    
+    fn set_material_color(&mut self, color: [f32; 4]) {
+        self.set_material_color(color);
+    }
+    
+    fn set_directional_light(&mut self, direction: [f32; 3], intensity: f32, color: [f32; 3], ambient_intensity: f32) {
+        self.set_directional_light(direction, intensity, color, ambient_intensity);
+    }
+    
+    fn draw_frame(&mut self) -> crate::render::backend::BackendResult<()> {
+        self.draw_frame()
+            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))
+    }
+    
+    fn wait_idle(&self) -> crate::render::backend::BackendResult<()> {
+        self.wait_idle()
+            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))
+    }
+    
+    fn recreate_swapchain(&mut self, window_handle: &mut dyn crate::render::WindowBackendAccess) -> crate::render::backend::BackendResult<()> {
+        if let Some(vulkan_window) = window_handle.get_vulkan_window() {
+            self.recreate_swapchain(vulkan_window)
+                .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))
+        } else {
+            Err(crate::render::RenderError::BackendError("No Vulkan window available".to_string()))
+        }
     }
 }

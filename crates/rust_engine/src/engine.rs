@@ -107,7 +107,7 @@ impl Engine {
     
     /// Render the current frame
     pub fn render(&mut self) -> Result<(), AppError> {
-        self.renderer.render(&self.world)
+        self.renderer.render()
             .map_err(|e| AppError::Custom(format!("Render error: {}", e)))
     }
     

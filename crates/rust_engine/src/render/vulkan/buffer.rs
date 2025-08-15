@@ -285,7 +285,7 @@ impl VertexBuffer {
             instance,
             physical_device,
             size,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
+            vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
         
@@ -326,7 +326,7 @@ impl IndexBuffer {
             instance,
             physical_device,
             size,
-            vk::BufferUsageFlags::INDEX_BUFFER,
+            vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
         
@@ -346,6 +346,56 @@ impl IndexBuffer {
     /// Get index count
     pub fn index_count(&self) -> u32 {
         self.index_count
+    }
+    
+    /// Get buffer size
+    pub fn size(&self) -> vk::DeviceSize {
+        self.buffer.size()
+    }
+}
+
+/// Staging buffer for efficient data transfers to GPU
+/// 
+/// Staging buffers use host-visible memory for CPU writes, then copy to
+/// device-local memory for optimal GPU performance. This is the recommended
+/// pattern for dynamic vertex/index buffer updates.
+pub struct StagingBuffer {
+    buffer: Buffer,
+}
+
+impl StagingBuffer {
+    /// Create staging buffer with data
+    pub fn new(
+        device: Device,
+        instance: Instance,
+        physical_device: vk::PhysicalDevice,
+        data: &[u8],
+    ) -> VulkanResult<Self> {
+        let size = data.len() as vk::DeviceSize;
+        
+        let buffer = Buffer::new(
+            device,
+            instance,
+            physical_device,
+            size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        
+        // Write data to staging buffer
+        buffer.write_data(data)?;
+        
+        Ok(Self { buffer })
+    }
+    
+    /// Get buffer handle
+    pub fn handle(&self) -> vk::Buffer {
+        self.buffer.handle()
+    }
+    
+    /// Get size
+    pub fn size(&self) -> vk::DeviceSize {
+        self.buffer.size()
     }
 }
 

@@ -59,7 +59,6 @@
 //! - Efficient memory usage and GPU resource management
 
 use crate::assets::{Asset, AssetError};
-use ash::vk;
 
 /// 3D vertex data structure for rendering
 /// 
@@ -89,6 +88,10 @@ pub struct Vertex {
     pub tex_coord: [f32; 2],
 }
 
+// Safe to implement Pod and Zeroable for Vertex since it only contains f32 arrays
+unsafe impl bytemuck::Pod for Vertex {}
+unsafe impl bytemuck::Zeroable for Vertex {}
+
 impl Vertex {
     /// Create a new vertex
     pub fn new(position: [f32; 3], normal: [f32; 3], tex_coord: [f32; 2]) -> Self {
@@ -97,97 +100,6 @@ impl Vertex {
             normal,
             tex_coord,
         }
-    }
-    
-    /// Get vertex input binding description for Vulkan backend
-    /// 
-    /// **ARCHITECTURE VIOLATION**: This method exposes Vulkan-specific types at the high-level API.
-    /// 
-    /// In a proper library-agnostic design, vertex layout information should be handled
-    /// by backend-specific modules, not exposed through the core vertex structure.
-    /// Applications using different backends shouldn't need to know about Vulkan types.
-    /// 
-    /// **FIXME**: Move to `vulkan/vertex_layout.rs` and implement as:
-    /// ```rust
-    /// impl VulkanVertexLayout for Vertex {
-    ///     fn get_binding_description() -> vk::VertexInputBindingDescription { ... }
-    /// }
-    /// ```
-    /// 
-    /// This method should be removed from the public API and replaced with a generic
-    /// vertex description system that each backend can interpret appropriately.
-    pub fn get_binding_description() -> vk::VertexInputBindingDescription {
-        vk::VertexInputBindingDescription {
-            binding: 0,
-            stride: std::mem::size_of::<Vertex>() as u32,
-            input_rate: vk::VertexInputRate::VERTEX,
-        }
-    }
-    
-    /// Get vertex input attribute descriptions for Vulkan backend
-    /// 
-    /// **ARCHITECTURE VIOLATION**: Returns Vulkan-specific types from high-level API.
-    /// 
-    /// This method hardcodes Vulkan vertex attribute formats and locations, making it
-    /// impossible to use this vertex structure with other rendering backends without
-    /// dragging in Vulkan dependencies.
-    /// 
-    /// **FIXME**: Replace with generic vertex attribute description system:
-    /// ```rust
-    /// pub fn get_attributes() -> VertexAttributes {
-    ///     VertexAttributes::new()
-    ///         .add_attribute(AttributeType::Position, Format::Float3)
-    ///         .add_attribute(AttributeType::Normal, Format::Float3)  
-    ///         .add_attribute(AttributeType::TexCoord, Format::Float2)
-    /// }
-    /// ```
-    /// 
-    /// Each backend can then translate these generic attributes to their specific formats.
-    pub fn get_attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
-        [
-            // Position attribute (location = 0)
-            vk::VertexInputAttributeDescription {
-                binding: 0,
-                location: 0,
-                format: vk::Format::R32G32B32_SFLOAT,
-                offset: 0,
-            },
-            // Normal attribute (location = 1)
-            vk::VertexInputAttributeDescription {
-                binding: 0,
-                location: 1,
-                format: vk::Format::R32G32B32_SFLOAT,
-                offset: 12, // 3 * sizeof(f32)
-            },
-            // Texture coordinate attribute (location = 2)
-            vk::VertexInputAttributeDescription {
-                binding: 0,
-                location: 2,
-                format: vk::Format::R32G32_SFLOAT,
-                offset: 24, // 6 * sizeof(f32)
-            },
-        ]
-    }
-    
-    /// Create vertex input state create info for Vulkan pipeline creation
-    /// 
-    /// **ARCHITECTURE VIOLATION**: This convenience method combines Vulkan-specific data
-    /// and exposes backend implementation details to high-level application code.
-    /// 
-    /// The method name suggests it's creating "input state" but doesn't clarify that
-    /// this is specifically for Vulkan graphics pipeline creation, making the API
-    /// confusing for users who might expect backend-agnostic functionality.
-    /// 
-    /// **FIXME**: Remove this method entirely. Vulkan pipeline creation should happen
-    /// entirely within the Vulkan backend module using internal vertex layout utilities.
-    /// 
-    /// Applications should only interact with `Vertex` as a pure data structure,
-    /// without needing knowledge of how different backends handle vertex layouts.
-    pub fn get_input_state() -> (vk::VertexInputBindingDescription, [vk::VertexInputAttributeDescription; 3]) {
-        let binding_description = Self::get_binding_description();
-        let attribute_descriptions = Self::get_attribute_descriptions();
-        
-        (binding_description, attribute_descriptions)
     }
 }
 

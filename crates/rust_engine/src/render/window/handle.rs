@@ -237,3 +237,14 @@ impl WindowHandle {
         vulkan_window as &mut dyn RenderSurface
     }
 }
+
+/// Implementation of WindowBackendAccess for WindowHandle
+///
+/// Provides access to backend-specific window operations needed by the renderer.
+impl crate::render::WindowBackendAccess for WindowHandle {
+    fn get_vulkan_window(&mut self) -> Option<&mut crate::render::vulkan::Window> {
+        // Try to downcast to VulkanWindow directly
+        let any_backend = self.backend.as_any_mut();
+        any_backend.downcast_mut::<crate::render::vulkan::Window>()
+    }
+}

@@ -10,6 +10,9 @@ use rust_engine::render::{
     Material,
     lighting::{LightingEnvironment, Light},
     Renderer,
+    VulkanRendererConfig,
+    ShaderConfig,
+    CoordinateConverter,
     WindowHandle,
 };
 use rust_engine::foundation::math::{Vec3, Mat4, Mat4Ext};
@@ -37,7 +40,13 @@ impl IntegratedApp {
         
         // Create renderer
         log::info!("Creating Vulkan renderer...");
-        let renderer = Renderer::new_from_window(&mut window);
+        let renderer_config = VulkanRendererConfig::new("Rusteroids - Teapot Demo")
+            .with_version(1, 0, 0)
+            .with_shader_paths(
+                ShaderConfig::with_path_resolution("vert.spv", "frag.spv").vertex_shader_path,
+                ShaderConfig::with_path_resolution("vert.spv", "frag.spv").fragment_shader_path
+            );
+        let renderer = Renderer::new_from_window(&mut window, &renderer_config);
         log::info!("Vulkan renderer created successfully");
         
         // Create camera using Vulkan coordinate system
@@ -119,6 +128,10 @@ impl IntegratedApp {
                         vertex.position[2] *= scale_factor;
                     }
                 }
+                
+                // Convert from OBJ coordinates (Y-up) to Vulkan coordinates (Y-down)
+                let converter = CoordinateConverter::default();
+                converter.convert_mesh(&mut mesh.vertices);
                 
                 log::info!("Loaded teapot mesh successfully with {} vertices and {} indices", 
                           mesh.vertices.len(), mesh.indices.len());

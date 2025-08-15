@@ -673,10 +673,14 @@ impl Camera {
     ///
     /// # Automatic Change Detection
     /// Only logs aspect ratio changes when the difference is significant
-    /// (> f32::EPSILON) to reduce log noise during window resize events.
+    /// (> 0.01) to reduce log noise during window resize events.
     pub fn set_aspect_ratio(&mut self, aspect: f32) {
-        if (self.aspect - aspect).abs() > f32::EPSILON {
+        // Use a larger threshold to prevent spam during window resize
+        if (self.aspect - aspect).abs() > 0.01 {
             log::info!("Camera aspect ratio changed: {:.3} → {:.3}", self.aspect, aspect);
+            self.aspect = aspect;
+        } else {
+            // Still update the aspect ratio, just don't log it
             self.aspect = aspect;
         }
     }

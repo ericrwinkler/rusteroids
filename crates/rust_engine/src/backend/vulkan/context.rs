@@ -78,6 +78,9 @@ impl VulkanInstance {
         // Add debug extensions for debug builds
         #[cfg(debug_assertions)]
         if enable_validation {
+            // Note: VK_EXT_debug_utils warning is expected and safe for debug builds.
+            // This extension is intended for development/debugging use and should be
+            // disabled in release builds (which this #[cfg(debug_assertions)] ensures).
             extensions.push(DebugUtils::name().as_ptr());
         }
 
@@ -379,6 +382,10 @@ impl LogicalDevice {
         };
 
         let swapchain_loader = SwapchainLoader::new(instance, &device);
+        
+        // Note: You may see validation warnings about vkGetDeviceProcAddr() trying to grab
+        // instance-level functions like vkGetPhysicalDevicePresentRectanglesKHR. This is a
+        // known issue with ash's swapchain loader initialization and can be safely ignored.
 
         Ok(Self {
             device,
@@ -403,12 +410,12 @@ impl Drop for LogicalDevice {
 
 /// Main Vulkan context that owns all core Vulkan resources
 pub struct VulkanContext {
-    pub instance: VulkanInstance,
     pub surface: vk::SurfaceKHR,
     pub surface_loader: Surface,
     pub physical_device: PhysicalDeviceInfo,
-    pub device: LogicalDevice,
     pub swapchain: Option<crate::backend::vulkan::Swapchain>,
+    pub device: LogicalDevice,
+    pub instance: VulkanInstance,
 }
 
 impl VulkanContext {
@@ -568,9 +575,13 @@ impl Drop for VulkanContext {
                 // Swapchain drop will be called automatically
             }
             
-            // Now destroy the surface
+            // Now destroy the surface before device cleanup
             self.surface_loader.destroy_surface(self.surface, None);
         }
-        // Instance cleanup happens in VulkanInstance::Drop
+        // Fields will drop in reverse declaration order:
+        // 1. instance (VulkanInstance - last, contains the instance)
+        // 2. device (LogicalDevice - second-to-last, destroys the device)
+        // 3. swapchain, physical_device, surface_loader, surface (already handled above)
+        // This ensures device is destroyed before instance
     }
 }

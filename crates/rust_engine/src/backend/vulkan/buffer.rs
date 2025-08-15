@@ -189,6 +189,10 @@ impl Buffer {
         )?;
         
         // Allocate memory
+        // Note: This uses individual memory allocations per buffer, which can be inefficient
+        // for many small buffers (as warned by Vulkan validation layers). For production
+        // applications, consider integrating Vulkan Memory Allocator (VMA) for improved
+        // memory management and reduced allocation overhead.
         let alloc_info = vk::MemoryAllocateInfo::builder()
             .allocation_size(mem_requirements.size)
             .memory_type_index(memory_type_index);

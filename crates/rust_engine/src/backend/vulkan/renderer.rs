@@ -268,21 +268,39 @@ unsafe impl bytemuck::Zeroable for PushConstants {}
 /// Comprehensive RAII-based resource lifecycle management across all Vulkan objects
 /// including context, swapchain, render passes, pipelines, buffers, and synchronization.
 pub struct VulkanRenderer {
-    context: VulkanContext,
-    render_pass: RenderPass,
-    pipeline: GraphicsPipeline,
-    command_pool: CommandPool,
-    framebuffers: Vec<Framebuffer>,
-    depth_buffers: Vec<DepthBuffer>,
-    vertex_buffer: VertexBuffer,
-    index_buffer: IndexBuffer,
-    // Per-image synchronization (one per swapchain image)
-    image_sync_objects: Vec<FrameSync>,
-    // Per-frame synchronization (for frames in flight)
-    frame_sync_objects: Vec<FrameSync>,
-    current_frame: usize,
-    max_frames_in_flight: usize,
+    // Resource management note: Fields are dropped in reverse declaration order.
+    // VulkanContext (containing device) must be dropped LAST to ensure all
+    // other Vulkan resources can clean up properly using the device.
+    
+    // Per-frame command buffer tracking (dropped first)
+    pending_command_buffers: Vec<Option<vk::CommandBuffer>>,
+    
+    // Non-Vulkan resource fields (safe to drop anytime)
     push_constants: PushConstants,
+    max_frames_in_flight: usize,
+    current_frame: usize,
+    
+    // Synchronization objects (semaphores, fences - require device)
+    frame_sync_objects: Vec<FrameSync>,
+    image_sync_objects: Vec<FrameSync>,
+    
+    // Buffers (require device for cleanup)
+    index_buffer: IndexBuffer,
+    vertex_buffer: VertexBuffer,
+    
+    // Images and framebuffers (require device for cleanup)
+    depth_buffers: Vec<DepthBuffer>,
+    framebuffers: Vec<Framebuffer>,
+    
+    // Command pool (requires device, handles command buffer cleanup)
+    command_pool: CommandPool,
+    
+    // Pipeline and render pass (require device)
+    pipeline: GraphicsPipeline,
+    render_pass: RenderPass,
+    
+    // VulkanContext LAST - contains device which all above resources need for cleanup
+    context: VulkanContext,
 }
 
 impl VulkanRenderer {
@@ -436,6 +454,7 @@ impl VulkanRenderer {
                 light_direction: [-0.5, -1.0, -0.3, 0.8], // Default directional light (direction + intensity)
                 light_color: [1.0, 0.95, 0.9, 0.2], // Default warm white light + ambient intensity
             },
+            pending_command_buffers: vec![None; max_frames_in_flight],
         })
     }
     
@@ -576,6 +595,9 @@ impl VulkanRenderer {
                 .map_err(VulkanError::Api)?;
         }
         
+        // Free the single-time command buffer
+        self.command_pool.free_command_buffer(command_buffer);
+        
         // Staging buffer is automatically dropped here
         Ok(())
     }
@@ -645,6 +667,9 @@ impl VulkanRenderer {
             self.context.device().device.queue_wait_idle(self.context.graphics_queue())
                 .map_err(VulkanError::Api)?;
         }
+        
+        // Free the single-time command buffer
+        self.command_pool.free_command_buffer(command_buffer);
         
         // Staging buffer is automatically dropped here
         Ok(())
@@ -728,6 +753,11 @@ impl VulkanRenderer {
         // Wait for this frame's previous work to complete
         frame_sync.in_flight.wait(u64::MAX)?;
         frame_sync.in_flight.reset()?;
+        
+        // Free the previous command buffer for this frame (now that fence is signaled)
+        if let Some(prev_command_buffer) = self.pending_command_buffers[self.current_frame].take() {
+            self.command_pool.free_command_buffer(prev_command_buffer);
+        }
         
         // We need to handle the chicken-and-egg problem differently
         // Let's acquire the next image with the current frame's image_available semaphore
@@ -824,6 +854,9 @@ impl VulkanRenderer {
         
         // End and submit
         let command_buffer = recorder.end()?;
+        
+        // Store command buffer for cleanup when fence is signaled
+        self.pending_command_buffers[self.current_frame] = Some(command_buffer);
         
         let wait_semaphores = [acquire_semaphore.handle()];
         let command_buffers = [command_buffer];
@@ -944,16 +977,26 @@ impl Drop for VulkanRenderer {
         // Wait for device to be idle before cleanup
         let _ = self.wait_idle();
         
+        // Free any remaining command buffers
+        for command_buffer in self.pending_command_buffers.iter_mut() {
+            if let Some(cb) = command_buffer.take() {
+                self.command_pool.free_command_buffer(cb);
+            }
+        }
+        
         // Resources will be cleaned up automatically by their Drop implementations
-        // in the correct order due to struct field order:
-        // 1. image_sync_objects and frame_sync_objects (FrameSync objects)
-        // 2. vertex_buffer and index_buffer (VulkanBuffer objects) 
-        // 3. depth_buffers (DepthBuffer objects)
-        // 4. framebuffers (Framebuffer objects)
-        // 5. command_pool (CommandPool - this destroys command buffers automatically)
-        // 6. pipeline (GraphicsPipeline)
-        // 7. render_pass (RenderPass)  
-        // 8. context (VulkanContext - destroys device, then instance)
+        // in the correct order due to struct field order (dropping in reverse):
+        // 1. context (VulkanContext - destroys device last, after all resources)
+        // 2. render_pass (RenderPass)
+        // 3. pipeline (GraphicsPipeline)
+        // 4. command_pool (CommandPool - destroys command buffers automatically)
+        // 5. framebuffers (Framebuffer objects)
+        // 6. depth_buffers (DepthBuffer objects)
+        // 7. vertex_buffer and index_buffer (VulkanBuffer objects)
+        // 8. image_sync_objects and frame_sync_objects (FrameSync objects)
+        // 9. pending_command_buffers (freed above manually)
+        //
+        // This order ensures all Vulkan resources are destroyed before the device.
         
         log::debug!("VulkanRenderer cleanup complete");
     }

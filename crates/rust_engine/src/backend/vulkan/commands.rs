@@ -225,12 +225,16 @@ use crate::backend::vulkan::{VulkanResult, VulkanError};
 pub struct CommandPool {
     device: Device,
     command_pool: vk::CommandPool,
+    allocated_buffers: std::sync::Mutex<Vec<vk::CommandBuffer>>,
 }
 
 impl CommandPool {
     /// Create a new command pool
     pub fn new(device: Device, queue_family_index: u32) -> VulkanResult<Self> {
         let pool_create_info = vk::CommandPoolCreateInfo::builder()
+            // Note: RESET_COMMAND_BUFFER flag allows individual command buffer reset.
+            // Vulkan validation layer suggests resetting the entire pool instead for
+            // better performance, but this flag provides more flexibility for our use case.
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family_index);
         
@@ -242,6 +246,7 @@ impl CommandPool {
         Ok(Self {
             device,
             command_pool,
+            allocated_buffers: std::sync::Mutex::new(Vec::new()),
         })
     }
     
@@ -256,6 +261,11 @@ impl CommandPool {
             self.device.allocate_command_buffers(&alloc_info)
                 .map_err(VulkanError::Api)?
         };
+        
+        // Track allocated buffers for proper cleanup
+        if let Ok(mut allocated) = self.allocated_buffers.lock() {
+            allocated.extend(&command_buffers);
+        }
         
         Ok(command_buffers)
     }
@@ -274,6 +284,19 @@ impl CommandPool {
         recorder.begin()?;
         Ok(recorder)
     }
+    
+    /// Free a single command buffer
+    pub fn free_command_buffer(&self, command_buffer: vk::CommandBuffer) {
+        // Remove from tracking
+        if let Ok(mut allocated) = self.allocated_buffers.lock() {
+            allocated.retain(|&cb| cb != command_buffer);
+        }
+        
+        // Free the command buffer
+        unsafe {
+            self.device.free_command_buffers(self.command_pool, &[command_buffer]);
+        }
+    }
 }
 
 impl Drop for CommandPool {
@@ -282,7 +305,14 @@ impl Drop for CommandPool {
             // Wait for device to be idle to ensure all command buffers are finished
             let _ = self.device.device_wait_idle();
             
-            // Destroy command pool (automatically frees all command buffers)
+            // Free all tracked command buffers before destroying the pool
+            if let Ok(allocated) = self.allocated_buffers.lock() {
+                if !allocated.is_empty() {
+                    self.device.free_command_buffers(self.command_pool, &allocated);
+                }
+            }
+            
+            // Destroy command pool
             self.device.destroy_command_pool(self.command_pool, None);
         }
     }

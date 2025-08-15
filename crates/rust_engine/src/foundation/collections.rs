@@ -1,6 +1,4 @@
 //! Specialized collection types
-//!
-//! Provides high-performance collections optimized for game development.
 
 pub use slotmap::{SlotMap, DefaultKey};
 

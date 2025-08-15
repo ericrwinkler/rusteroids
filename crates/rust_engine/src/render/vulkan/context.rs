@@ -504,13 +504,6 @@ impl VulkanContext {
         // Get the old swapchain handle before replacement
         let old_swapchain = self.swapchain.as_ref().map(|s| s.handle()).unwrap_or(vk::SwapchainKHR::null());
         
-        // Store a copy to manually destroy later if needed
-        let old_swapchain_to_destroy = if old_swapchain != vk::SwapchainKHR::null() {
-            Some((old_swapchain, self.device.swapchain_loader.clone()))
-        } else {
-            None
-        };
-        
         // Create new swapchain using the old one for proper recreation
         let new_swapchain = crate::render::vulkan::Swapchain::recreate(
             &self.instance.instance,
@@ -523,15 +516,9 @@ impl VulkanContext {
         )?;
         
         // Replace the old swapchain with the new one
-        // The old swapchain will be automatically destroyed when dropped
+        // The old swapchain will be automatically destroyed when dropped by RAII
+        // No manual destruction needed - this prevents validation errors
         self.swapchain = Some(new_swapchain);
-        
-        // Manually destroy the old swapchain to avoid ERROR_NATIVE_WINDOW_IN_USE_KHR
-        if let Some((old_swapchain_handle, swapchain_loader)) = old_swapchain_to_destroy {
-            unsafe {
-                swapchain_loader.destroy_swapchain(old_swapchain_handle, None);
-            }
-        }
         
         Ok(())
     }

@@ -1,7 +1,4 @@
 //! Memory management utilities
-//!
-//! Provides custom allocators and memory management tools for high-performance
-//! game development.
 
 use std::alloc::{GlobalAlloc, Layout};
 

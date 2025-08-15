@@ -105,7 +105,6 @@ impl VulkanRenderer {
             &vertex_shader,
             &fragment_shader,
             vertex_input_info,
-            context.swapchain().extent(),
         )?;
         log::debug!("Graphics pipeline created successfully");
         
@@ -391,6 +390,25 @@ impl VulkanRenderer {
             // Bind pipeline and draw
             render_pass.cmd_bind_pipeline(vk::PipelineBindPoint::GRAPHICS, self.pipeline.handle());
             
+            // Set viewport and scissor to match current swapchain extent
+            let extent = self.context.swapchain().extent();
+            let viewport = vk::Viewport::builder()
+                .x(0.0)
+                .y(0.0)
+                .width(extent.width as f32)
+                .height(extent.height as f32)
+                .min_depth(0.0)
+                .max_depth(1.0)
+                .build();
+            
+            let scissor = vk::Rect2D::builder()
+                .offset(vk::Offset2D { x: 0, y: 0 })
+                .extent(extent)
+                .build();
+                
+            render_pass.set_viewport(&viewport);
+            render_pass.set_scissor(&scissor);
+            
             // Push constants to shader (both MVP matrix and material color)
             render_pass.cmd_push_constants(
                 self.pipeline.layout(),
@@ -471,6 +489,12 @@ impl VulkanRenderer {
         
         log::info!("Swapchain recreation complete");
         Ok(())
+    }
+    
+    /// Get the current swapchain extent (useful for aspect ratio calculations)
+    pub fn get_swapchain_extent(&self) -> (u32, u32) {
+        let extent = self.context.swapchain().extent();
+        (extent.width, extent.height)
     }
     
     /// Recreate framebuffers and depth buffers for the current swapchain

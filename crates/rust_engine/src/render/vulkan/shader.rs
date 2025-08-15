@@ -86,7 +86,6 @@ impl GraphicsPipeline {
         vertex_shader: &ShaderModule,
         fragment_shader: &ShaderModule,
         vertex_input_info: vk::PipelineVertexInputStateCreateInfo,
-        extent: vk::Extent2D,
     ) -> VulkanResult<Self> {
         // Shader stages
         let vertex_entry = std::ffi::CStr::from_bytes_with_nul(b"main\0").unwrap();
@@ -102,26 +101,15 @@ impl GraphicsPipeline {
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
             .primitive_restart_enable(false);
             
-        // Viewport and scissor
-        let viewport = vk::Viewport::builder()
-            .x(0.0)
-            .y(0.0)
-            .width(extent.width as f32)
-            .height(extent.height as f32)
-            .min_depth(0.0)
-            .max_depth(1.0)
-            .build();
-            
-        let scissor = vk::Rect2D::builder()
-            .offset(vk::Offset2D { x: 0, y: 0 })
-            .extent(extent)
-            .build();
-            
-        let viewports = [viewport];
-        let scissors = [scissor];
+        // Viewport and scissor (set dynamically)
         let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
-            .viewports(&viewports)
-            .scissors(&scissors);
+            .viewport_count(1) // Set count, but viewport will be set dynamically
+            .scissor_count(1); // Set count, but scissor will be set dynamically
+        
+        // Dynamic state - allow viewport and scissor to be set dynamically
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
+            .dynamic_states(&dynamic_states);
             
         // Rasterization
         let rasterizer = vk::PipelineRasterizationStateCreateInfo::builder()
@@ -182,6 +170,7 @@ impl GraphicsPipeline {
             .multisample_state(&multisampling)
             .depth_stencil_state(&depth_stencil)
             .color_blend_state(&color_blending)
+            .dynamic_state(&dynamic_state)
             .layout(layout)
             .render_pass(render_pass)
             .subpass(0);

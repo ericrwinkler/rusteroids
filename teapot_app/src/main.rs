@@ -171,6 +171,14 @@ impl IntegratedApp {
                 log::info!("Framebuffer resized detected, recreating swapchain...");
                 // Recreate swapchain for the new window size
                 self.renderer.recreate_swapchain(&mut self.window);
+                
+                // After swapchain recreation, ensure the camera aspect ratio matches the new extent
+                let (width, height) = self.renderer.get_swapchain_extent();
+                if width > 0 && height > 0 {
+                    self.camera.set_aspect_ratio(width as f32 / height as f32);
+                    log::info!("Updated camera aspect ratio to {} ({}x{})", width as f32 / height as f32, width, height);
+                }
+                
                 framebuffer_resized = false;
                 
                 // Don't continue - let the app try to render normally

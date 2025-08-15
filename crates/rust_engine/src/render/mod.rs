@@ -209,6 +209,11 @@ impl Renderer {
         }
     }
     
+    /// Get the current swapchain extent (for aspect ratio calculations)
+    pub fn get_swapchain_extent(&self) -> (u32, u32) {
+        self.vulkan_renderer.get_swapchain_extent()
+    }
+    
     /// Render the world (legacy method for engine integration)
     pub fn render(&mut self, _world: &World) -> Result<(), RenderError> {
         // Legacy rendering path - just count frames
@@ -280,7 +285,10 @@ impl Camera {
     
     /// Set aspect ratio
     pub fn set_aspect_ratio(&mut self, aspect: f32) {
-        self.aspect = aspect;
+        if (self.aspect - aspect).abs() > f32::EPSILON {
+            log::info!("Camera aspect ratio changed: {} → {}", self.aspect, aspect);
+            self.aspect = aspect;
+        }
     }
     
     /// Get view matrix

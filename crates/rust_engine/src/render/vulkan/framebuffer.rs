@@ -1,6 +1,24 @@
-//! Framebuffer management
+//! Vulkan framebuffer and depth buffer management
 //! 
-//! Handles Vulkan framebuffer creation and management following RAII principles
+//! This module handles framebuffer creation, depth buffer allocation, and render target
+//! management for the Vulkan rendering system. Provides RAII-based resource management
+//! and coordinates with swapchain images for presentation.
+//! 
+//! # Architecture Assessment: ESSENTIAL RENDER TARGET MANAGEMENT
+//! 
+//! Framebuffers are critical components that define render targets for GPU rendering
+//! operations. This module provides proper resource management and integration with
+//! the broader Vulkan rendering pipeline.
+//! 
+//! ## Key Responsibilities:
+//! - ✅ **Framebuffer Creation**: Proper framebuffer setup for render passes
+//! - ✅ **Depth Buffer Management**: Allocates and manages depth testing resources  
+//! - ✅ **RAII Cleanup**: Automatic resource cleanup prevents GPU memory leaks
+//! - ✅ **Swapchain Integration**: Coordinates with swapchain images for presentation
+//! 
+//! ## Design Quality:
+//! This module follows good Vulkan patterns with proper resource lifecycle management,
+//! appropriate abstraction levels, and clean integration with other rendering components.
 
 use ash::{vk, Device};
 use crate::render::vulkan::{VulkanResult, VulkanError};

@@ -1,4 +1,132 @@
-//! Lighting system
+//! Lighting system for realistic 3D scene illumination
+//! 
+//! This module provides a comprehensive lighting system supporting multiple light types
+//! and complex lighting environments. Designed to work with PBR materials for
+//! physically accurate lighting calculations.
+//! 
+//! # Architecture Assessment: GOOD DESIGN WITH ROOM FOR IMPROVEMENT
+//! 
+//! This module demonstrates solid architectural principles with backend-agnostic design
+//! and a focus on lighting domain expertise. However, there are some areas where the
+//! current implementation could be enhanced.
+//! 
+//! ## Architectural Strengths:
+//! 
+//! ### Backend Independence ✅
+//! The lighting system contains no references to specific rendering backends. Light
+//! definitions are pure mathematical constructs that can be interpreted by any renderer,
+//! whether Vulkan, OpenGL, DirectX, or software rendering.
+//! 
+//! ### Comprehensive Light Types ✅
+//! Supports the three fundamental light types needed for realistic 3D scenes:
+//! - **Directional**: Parallel light rays (sun, distant light sources)
+//! - **Point**: Omnidirectional light from a point (light bulbs, fires)
+//! - **Spot**: Directional cone of light (flashlights, stage lighting)
+//! 
+//! ### Physically Meaningful Parameters ✅
+//! Light properties correspond to real-world lighting concepts:
+//! - Position and direction for spatial light placement
+//! - Color and intensity for light appearance and brightness  
+//! - Range for light attenuation and performance optimization
+//! - Cone angles for spot light beam shaping
+//! 
+//! ### Lighting Environment Abstraction ✅
+//! The `LightingEnvironment` provides a higher-level abstraction for managing
+//! multiple lights and ambient lighting as a cohesive scene lighting setup.
+//! 
+//! ### Preset Lighting Configurations ✅
+//! Includes realistic preset lighting environments (indoor warm, outdoor daylight)
+//! that provide good starting points for different scene types.
+//! 
+//! ## Current Implementation Limitations:
+//! 
+//! ### Limited Shader Integration
+//! **RENDERER COUPLING ISSUE**: The renderer currently only supports directional lights
+//! in the shader push constants, despite this module defining point and spot lights.
+//! This creates a mismatch between the high-level lighting API and actual rendering
+//! capabilities.
+//! 
+//! **FIXME in renderer**: Extend shader system to support all defined light types
+//! or clearly document which light types are supported by each rendering backend.
+//! 
+//! ### No Shadow Support
+//! Current light definitions don't include shadow-related properties:
+//! - Shadow casting enable/disable flags
+//! - Shadow map resolution preferences
+//! - Shadow bias and filtering parameters
+//! 
+//! ### Missing Advanced Lighting Features
+//! - **Area lights**: For realistic soft shadows from extended light sources
+//! - **Image-based lighting**: For realistic environment reflections
+//! - **Light probes**: For baked global illumination
+//! - **Volumetric lighting**: For atmospheric effects (fog, dust, god rays)
+//! 
+//! ## Performance and Optimization Opportunities:
+//! 
+//! ### Light Culling Support
+//! Light definitions could include bounding volume information to support
+//! efficient light culling in renderers:
+//! ```rust
+//! pub struct Light {
+//!     // ... existing fields ...
+//!     pub bounding_sphere: Option<BoundingSphere>, // For culling
+//!     pub priority: u32, // For importance-based light selection
+//! }
+//! ```
+//! 
+//! ### GPU Layout Considerations
+//! For GPU-based lighting calculations, consider memory layout optimization:
+//! - Structure-of-arrays layout for better GPU cache usage
+//! - Explicit padding for GPU alignment requirements
+//! - Separate storage for frequently vs rarely changed light data
+//! 
+//! ### Dynamic Light Management
+//! Large scenes need efficient dynamic light management:
+//! - Spatial data structures for light queries
+//! - Level-of-detail for distant lights
+//! - Temporal stability for animated lights
+//! 
+//! ## Future Enhancement Areas:
+//! 
+//! ### Advanced Light Types
+//! ```rust
+//! pub enum LightType {
+//!     Directional,
+//!     Point,
+//!     Spot,
+//!     Area { width: f32, height: f32 },           // Soft area lighting
+//!     Environment { texture: TextureHandle },      // IBL environment maps
+//!     Probe { position: Vec3, influence: f32 },   // Light probes for GI
+//! }
+//! ```
+//! 
+//! ### Shadow Configuration
+//! ```rust
+//! pub struct ShadowSettings {
+//!     pub cast_shadows: bool,
+//!     pub shadow_resolution: u32,
+//!     pub shadow_bias: f32,
+//!     pub shadow_filter: ShadowFilter,
+//! }
+//! ```
+//! 
+//! ### Light Animation System
+//! Support for animated lights with interpolation:
+//! - Keyframe-based light animation
+//! - Procedural light effects (flickering, pulsing)
+//! - Light scripting for complex behaviors
+//! 
+//! ## Design Goals Assessment:
+//! 
+//! 1. ✅ **Backend Agnostic**: No rendering backend dependencies
+//! 2. ✅ **Physically Accurate**: Real-world lighting parameters
+//! 3. ✅ **Easy to Use**: Builder patterns and preset configurations
+//! 4. ⚠️ **Feature Complete**: Missing some advanced lighting features
+//! 5. ⚠️ **Performance Optimized**: Could benefit from GPU layout consideration
+//! 
+//! Overall, this is a solid foundation for a lighting system that follows good
+//! architectural principles and can be extended to support advanced lighting features
+//! as the rendering system evolves.
 
 use crate::foundation::math::Vec3;
 

@@ -6,16 +6,21 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use thiserror::Error;
 
+/// Errors that can occur during OBJ file loading
 #[derive(Error, Debug)]
 pub enum ObjError {
+    /// I/O error during file operations
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    /// Error parsing OBJ file format
     #[error("Parse error: {0}")]
     ParseError(String),
+    /// Invalid or unsupported OBJ format
     #[error("Invalid format: {0}")]
     InvalidFormat(String),
 }
 
+/// OBJ file loader utility
 pub struct ObjLoader;
 
 impl ObjLoader {

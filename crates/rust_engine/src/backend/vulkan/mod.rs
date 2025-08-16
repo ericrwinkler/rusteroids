@@ -13,6 +13,7 @@ pub mod sync;
 pub mod buffer;
 pub mod shader;
 pub mod renderer;
+/// Uniform buffer management for GPU shader constants
 pub mod uniform_buffer;
 pub mod descriptor_set;
 pub mod vertex_layout;

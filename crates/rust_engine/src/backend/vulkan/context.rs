@@ -12,40 +12,62 @@ use thiserror::Error;
 use crate::backend::vulkan::swapchain::Swapchain;
 
 /// Vulkan context errors
+/// Vulkan-specific error types
 #[derive(Error, Debug)]
 pub enum VulkanError {
+    /// General Vulkan API error with result code
     #[error("Vulkan API error: {0:?}")]
     Api(vk::Result),
     
+    /// Resource with specified ID could not be found
     #[error("Resource not found: {id}")]
-    ResourceNotFound { id: u64 },
+    ResourceNotFound { 
+        /// The unique identifier of the resource
+        id: u64 
+    },
     
+    /// Invalid operation attempted
     #[error("Invalid operation: {reason}")]
-    InvalidOperation { reason: String },
+    InvalidOperation { 
+        /// Description of why the operation is invalid
+        reason: String 
+    },
     
+    /// Memory allocation failed
     #[error("Out of memory: {requested} bytes")]
-    OutOfMemory { requested: usize },
+    OutOfMemory { 
+        /// Number of bytes that were requested
+        requested: usize 
+    },
     
+    /// Vulkan context initialization failed
     #[error("Initialization failed: {0}")]
     InitializationFailed(String),
     
+    /// No suitable memory type found for allocation
     #[error("No suitable memory type found")]
     NoSuitableMemoryType,
 }
 
+/// Result type for Vulkan operations
 pub type VulkanResult<T> = Result<T, VulkanError>;
 
 /// Vulkan instance wrapper with RAII cleanup
 pub struct VulkanInstance {
+    /// Vulkan entry point
     pub entry: Entry,
+    /// Vulkan instance handle
     pub instance: Instance,
+    /// Debug utilities extension (debug builds)
     #[cfg(debug_assertions)]
     pub debug_utils: Option<DebugUtils>,
+    /// Debug messenger handle (debug builds)
     #[cfg(debug_assertions)]
     pub debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
 }
 
 impl VulkanInstance {
+    /// Create a new Vulkan instance with validation layers
     pub fn new(window: &crate::backend::vulkan::Window, app_name: &str, enable_validation: bool) -> VulkanResult<Self> {
         let entry = unsafe { Entry::load() }
             .map_err(|e| VulkanError::InitializationFailed(format!("Failed to load Vulkan: {:?}", e)))?;
@@ -218,15 +240,22 @@ unsafe extern "system" fn debug_callback(
 
 /// Physical device selection and capabilities
 pub struct PhysicalDeviceInfo {
+    /// Vulkan physical device handle
     pub device: vk::PhysicalDevice,
+    /// Device properties and limits
     pub properties: vk::PhysicalDeviceProperties,
+    /// Supported device features
     pub features: vk::PhysicalDeviceFeatures,
+    /// Available queue families
     pub queue_families: Vec<vk::QueueFamilyProperties>,
+    /// Index of the graphics queue family
     pub graphics_family: u32,
+    /// Index of the presentation queue family
     pub present_family: u32,
 }
 
 impl PhysicalDeviceInfo {
+    /// Select a suitable physical device for rendering
     pub fn select_suitable_device(
         instance: &Instance,
         surface: vk::SurfaceKHR,
@@ -331,15 +360,22 @@ impl PhysicalDeviceInfo {
 
 /// Logical device wrapper with RAII cleanup
 pub struct LogicalDevice {
+    /// Vulkan logical device handle
     pub device: Device,
+    /// Graphics operations queue
     pub graphics_queue: vk::Queue,
+    /// Surface presentation queue
     pub present_queue: vk::Queue,
+    /// Index of the graphics queue family
     pub graphics_family: u32,
+    /// Index of the presentation queue family
     pub present_family: u32,
+    /// Swapchain extension loader
     pub swapchain_loader: SwapchainLoader,
 }
 
 impl LogicalDevice {
+    /// Create a new logical device with required queues
     pub fn new(
         instance: &Instance,
         physical_device_info: &PhysicalDeviceInfo,
@@ -410,15 +446,22 @@ impl Drop for LogicalDevice {
 
 /// Main Vulkan context that owns all core Vulkan resources
 pub struct VulkanContext {
+    /// Vulkan surface for rendering
     pub surface: vk::SurfaceKHR,
+    /// Surface extension loader
     pub surface_loader: Surface,
+    /// Selected physical device information
     pub physical_device: PhysicalDeviceInfo,
+    /// Swapchain for presenting frames
     pub swapchain: Option<crate::backend::vulkan::Swapchain>,
+    /// Logical device for operations
     pub device: LogicalDevice,
+    /// Vulkan instance and debug utilities
     pub instance: VulkanInstance,
 }
 
 impl VulkanContext {
+    /// Create a new Vulkan context for the window
     pub fn new(window: &mut crate::backend::vulkan::Window, app_name: &str) -> VulkanResult<Self> {
         // Create Vulkan instance
         let instance = VulkanInstance::new(window, app_name, cfg!(debug_assertions))?;

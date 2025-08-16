@@ -221,6 +221,7 @@ impl WindowHandle {
     /// This replaces the old vulkan_window() accessor methods with a safer,
     /// type-erased approach that doesn't expose backend implementation details
     /// to the public API.
+    #[allow(dead_code)] // Part of window backend API design
     pub(crate) fn backend_for_renderer(&mut self) -> &mut dyn WindowBackend {
         self.backend.as_mut()
     }

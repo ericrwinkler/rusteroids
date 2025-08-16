@@ -20,7 +20,6 @@
 //! - **Extensible**: Easy to add new backends without changing high-level code
 
 use crate::render::{Vertex, RenderError};
-use crate::foundation::math::Mat4;
 
 /// Result type for backend operations
 pub type BackendResult<T> = Result<T, RenderError>;

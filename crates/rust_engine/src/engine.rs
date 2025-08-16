@@ -7,10 +7,8 @@ use crate::{
     assets::AssetManager,
     render::Renderer,
     input::InputManager,
-    config::Config,
 };
 use thiserror::Error;
-use std::time::Instant;
 
 /// Main engine struct
 /// 
@@ -32,6 +30,7 @@ pub struct Engine {
     timer: Timer,
     
     /// Engine configuration
+    #[allow(dead_code)] // Will be used for runtime engine configuration
     config: EngineConfig,
     
     /// Whether the engine should continue running

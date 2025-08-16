@@ -16,6 +16,7 @@ pub type AssetHandle<T> = TypedHandle<T>;
 /// Asset management system
 pub struct AssetManager {
     asset_storages: HashMap<TypeId, Box<dyn Any>>,
+    #[allow(dead_code)] // Will be used for asset loading configuration
     config: AssetConfig,
 }
 
@@ -42,7 +43,7 @@ impl AssetManager {
     
     /// Create a mesh asset from runtime data
     pub fn create_mesh_from_data(&mut self, mesh: crate::render::Mesh) -> Result<AssetHandle<crate::render::Mesh>, AssetError> {
-        use crate::foundation::collections::{HandleMap, DefaultKey};
+        use crate::foundation::collections::HandleMap;
         
         // Get or create storage for Mesh assets
         let type_id = TypeId::of::<crate::render::Mesh>();

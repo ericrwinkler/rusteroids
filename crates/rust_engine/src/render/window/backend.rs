@@ -102,6 +102,7 @@ pub(crate) trait WindowBackend {
     /// This method enables safe downcasting from trait objects to concrete types.
     /// It's used internally by the rendering system to access backend-specific functionality
     /// while maintaining type safety.
+    #[allow(dead_code)] // Part of downcasting API for backend abstraction
     fn as_any(&self) -> &dyn std::any::Any;
     
     /// Get mutable access to the concrete type for downcasting
@@ -123,6 +124,7 @@ pub(crate) trait RenderSurface {
     /// This method allows the renderer to access backend-specific data through
     /// a safe downcasting mechanism. The specific backend type is determined
     /// at runtime based on which backend created the window.
+    #[allow(dead_code)] // Part of downcasting API for backend abstraction
     fn as_any(&self) -> &dyn std::any::Any;
     
     /// Get a type-erased mutable reference to the backend-specific render surface data
@@ -135,6 +137,7 @@ pub(crate) trait RenderSurface {
 /// WindowBackend and can be converted to a RenderSurface. It provides the
 /// bridge between window management and rendering without exposing backend
 /// details to the public API.
+#[allow(dead_code)] // Part of backend trait extension system
 pub(crate) trait WindowBackendExt: WindowBackend {
     /// Get render surface access for the renderer
     /// 

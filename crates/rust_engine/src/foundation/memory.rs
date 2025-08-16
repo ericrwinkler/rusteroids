@@ -1,7 +1,5 @@
 //! Memory management utilities
 
-use std::alloc::{GlobalAlloc, Layout};
-
 /// Memory pool allocator for fixed-size objects
 pub struct PoolAllocator<T> {
     _phantom: std::marker::PhantomData<T>,

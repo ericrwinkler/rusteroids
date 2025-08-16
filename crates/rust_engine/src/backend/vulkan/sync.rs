@@ -535,8 +535,11 @@ impl Drop for Fence {
 
 /// Frame synchronization objects for in-flight frame management
 pub struct FrameSync {
+    /// Semaphore signaled when swapchain image becomes available
     pub image_available: Semaphore,
+    /// Semaphore signaled when frame rendering is complete
     pub render_finished: Semaphore,
+    /// Fence for CPU-GPU synchronization of frame
     pub in_flight: Fence,
 }
 

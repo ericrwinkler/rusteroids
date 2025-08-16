@@ -507,6 +507,12 @@ impl Swapchain {
     pub fn image_count(&self) -> u32 {
         self.image_count
     }
+    
+    /// Get swapchain images
+    /// These images are owned by the swapchain and should not be destroyed manually
+    pub fn images(&self) -> &[vk::Image] {
+        &self.images
+    }
 }
 
 impl Drop for Swapchain {

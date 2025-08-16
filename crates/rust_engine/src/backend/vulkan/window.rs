@@ -28,16 +28,20 @@ use std::any::Any;
 /// Window management errors
 #[derive(Error, Debug)]
 pub enum WindowError {
+    /// GLFW library initialization failed
     #[error("GLFW initialization failed")]
     InitializationFailed,
     
+    /// Window creation failed
     #[error("Window creation failed")]
     CreationFailed,
     
+    /// GLFW library error with message
     #[error("GLFW error: {0}")]
     GlfwError(String),
 }
 
+/// Result type for window operations
 pub type WindowResult<T> = Result<T, WindowError>;
 
 /// GLFW window wrapper with proper resource management
@@ -48,6 +52,7 @@ pub struct Window {
 }
 
 impl Window {
+    /// Create a new window with the specified title and dimensions
     pub fn new(title: &str, width: u32, height: u32) -> WindowResult<Self> {
         let mut glfw = glfw::init(glfw::fail_on_errors)
             .map_err(|_| WindowError::InitializationFailed)?;
@@ -74,28 +79,34 @@ impl Window {
         })
     }
 
+    /// Check if the window should close
     pub fn should_close(&self) -> bool {
         self.window.should_close()
     }
 
+    /// Poll for window events  
     pub fn poll_events(&mut self) {
         self.glfw.poll_events();
     }
 
+    /// Get all pending events
     pub fn flush_events(&self) -> glfw::FlushedMessages<(f64, glfw::WindowEvent)> {
         glfw::flush_messages(&self.events)
     }
 
+    /// Get the window size in screen coordinates
     pub fn get_size(&self) -> (u32, u32) {
         let (width, height) = self.window.get_size();
         (width as u32, height as u32)
     }
 
+    /// Get the framebuffer size in pixels
     pub fn get_framebuffer_size(&self) -> (u32, u32) {
         let (width, height) = self.window.get_framebuffer_size();
         (width as u32, height as u32)
     }
 
+    /// Set whether the window should close
     pub fn set_should_close(&mut self, should_close: bool) {
         self.window.set_should_close(should_close);
     }

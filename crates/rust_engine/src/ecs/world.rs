@@ -1,7 +1,6 @@
 //! ECS World implementation
 
 use super::{Entity, Component};
-use crate::foundation::collections::HandleMap;
 use std::collections::HashMap;
 use std::any::{TypeId, Any};
 
@@ -9,6 +8,7 @@ use std::any::{TypeId, Any};
 pub struct World {
     next_entity_id: u32,
     entities: Vec<Entity>,
+    #[allow(dead_code)] // Will be used for component storage in full ECS implementation
     component_storages: HashMap<TypeId, Box<dyn Any>>,
 }
 

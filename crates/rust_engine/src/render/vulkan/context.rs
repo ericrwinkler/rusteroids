@@ -4,72 +4,49 @@
 //! following the ownership and resource management rules defined in DESIGN.md
 
 use ash::{Device, Entry, Instance};
-#[cfg(debug_assertions)]
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain as SwapchainLoader};
 use ash::vk;
 use std::ffi::{CStr, CString};
 use thiserror::Error;
-use crate::backend::vulkan::swapchain::Swapchain;
+use crate::render::vulkan::swapchain::Swapchain;
 
 /// Vulkan context errors
-/// Vulkan-specific error types
 #[derive(Error, Debug)]
 pub enum VulkanError {
-    /// General Vulkan API error with result code
     #[error("Vulkan API error: {0:?}")]
     Api(vk::Result),
     
-    /// Resource with specified ID could not be found
     #[error("Resource not found: {id}")]
-    ResourceNotFound { 
-        /// The unique identifier of the resource
-        id: u64 
-    },
+    ResourceNotFound { id: u64 },
     
-    /// Invalid operation attempted
     #[error("Invalid operation: {reason}")]
-    InvalidOperation { 
-        /// Description of why the operation is invalid
-        reason: String 
-    },
+    InvalidOperation { reason: String },
     
-    /// Memory allocation failed
     #[error("Out of memory: {requested} bytes")]
-    OutOfMemory { 
-        /// Number of bytes that were requested
-        requested: usize 
-    },
+    OutOfMemory { requested: usize },
     
-    /// Vulkan context initialization failed
     #[error("Initialization failed: {0}")]
     InitializationFailed(String),
     
-    /// No suitable memory type found for allocation
     #[error("No suitable memory type found")]
     NoSuitableMemoryType,
 }
 
-/// Result type for Vulkan operations
 pub type VulkanResult<T> = Result<T, VulkanError>;
 
 /// Vulkan instance wrapper with RAII cleanup
 pub struct VulkanInstance {
-    /// Vulkan entry point
     pub entry: Entry,
-    /// Vulkan instance handle
     pub instance: Instance,
-    /// Debug utilities extension (debug builds)
     #[cfg(debug_assertions)]
     pub debug_utils: Option<DebugUtils>,
-    /// Debug messenger handle (debug builds)
     #[cfg(debug_assertions)]
     pub debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
 }
 
 impl VulkanInstance {
-    /// Create a new Vulkan instance with validation layers
-    pub fn new(window: &crate::backend::vulkan::Window, app_name: &str, enable_validation: bool) -> VulkanResult<Self> {
+    pub fn new(window: &crate::render::vulkan::Window, app_name: &str, enable_validation: bool) -> VulkanResult<Self> {
         let entry = unsafe { Entry::load() }
             .map_err(|e| VulkanError::InitializationFailed(format!("Failed to load Vulkan: {:?}", e)))?;
         
@@ -101,9 +78,6 @@ impl VulkanInstance {
         // Add debug extensions for debug builds
         #[cfg(debug_assertions)]
         if enable_validation {
-            // Note: VK_EXT_debug_utils warning is expected and safe for debug builds.
-            // This extension is intended for development/debugging use and should be
-            // disabled in release builds (which this #[cfg(debug_assertions)] ensures).
             extensions.push(DebugUtils::name().as_ptr());
         }
 
@@ -241,22 +215,15 @@ unsafe extern "system" fn debug_callback(
 
 /// Physical device selection and capabilities
 pub struct PhysicalDeviceInfo {
-    /// Vulkan physical device handle
     pub device: vk::PhysicalDevice,
-    /// Device properties and limits
     pub properties: vk::PhysicalDeviceProperties,
-    /// Supported device features
     pub features: vk::PhysicalDeviceFeatures,
-    /// Available queue families
     pub queue_families: Vec<vk::QueueFamilyProperties>,
-    /// Index of the graphics queue family
     pub graphics_family: u32,
-    /// Index of the presentation queue family
     pub present_family: u32,
 }
 
 impl PhysicalDeviceInfo {
-    /// Select a suitable physical device for rendering
     pub fn select_suitable_device(
         instance: &Instance,
         surface: vk::SurfaceKHR,
@@ -361,22 +328,15 @@ impl PhysicalDeviceInfo {
 
 /// Logical device wrapper with RAII cleanup
 pub struct LogicalDevice {
-    /// Vulkan logical device handle
     pub device: Device,
-    /// Graphics operations queue
     pub graphics_queue: vk::Queue,
-    /// Surface presentation queue
     pub present_queue: vk::Queue,
-    /// Index of the graphics queue family
     pub graphics_family: u32,
-    /// Index of the presentation queue family
     pub present_family: u32,
-    /// Swapchain extension loader
     pub swapchain_loader: SwapchainLoader,
 }
 
 impl LogicalDevice {
-    /// Create a new logical device with required queues
     pub fn new(
         instance: &Instance,
         physical_device_info: &PhysicalDeviceInfo,
@@ -419,10 +379,6 @@ impl LogicalDevice {
         };
 
         let swapchain_loader = SwapchainLoader::new(instance, &device);
-        
-        // Note: You may see validation warnings about vkGetDeviceProcAddr() trying to grab
-        // instance-level functions like vkGetPhysicalDevicePresentRectanglesKHR. This is a
-        // known issue with ash's swapchain loader initialization and can be safely ignored.
 
         Ok(Self {
             device,
@@ -447,23 +403,16 @@ impl Drop for LogicalDevice {
 
 /// Main Vulkan context that owns all core Vulkan resources
 pub struct VulkanContext {
-    /// Vulkan surface for rendering
-    pub surface: vk::SurfaceKHR,
-    /// Surface extension loader
-    pub surface_loader: Surface,
-    /// Selected physical device information
-    pub physical_device: PhysicalDeviceInfo,
-    /// Swapchain for presenting frames
-    pub swapchain: Option<crate::backend::vulkan::Swapchain>,
-    /// Logical device for operations
-    pub device: LogicalDevice,
-    /// Vulkan instance and debug utilities
     pub instance: VulkanInstance,
+    pub surface: vk::SurfaceKHR,
+    pub surface_loader: Surface,
+    pub physical_device: PhysicalDeviceInfo,
+    pub device: LogicalDevice,
+    pub swapchain: Option<crate::render::vulkan::Swapchain>,
 }
 
 impl VulkanContext {
-    /// Create a new Vulkan context for the window
-    pub fn new(window: &mut crate::backend::vulkan::Window, app_name: &str) -> VulkanResult<Self> {
+    pub fn new(window: &mut crate::render::vulkan::Window, app_name: &str) -> VulkanResult<Self> {
         // Create Vulkan instance
         let instance = VulkanInstance::new(window, app_name, cfg!(debug_assertions))?;
 
@@ -487,7 +436,7 @@ impl VulkanContext {
             height: window_size.1,
         };
         
-        let swapchain = crate::backend::vulkan::Swapchain::new(
+        let swapchain = crate::render::vulkan::Swapchain::new(
             &instance.instance,
             device.device.clone(),
             surface,
@@ -572,7 +521,7 @@ impl VulkanContext {
     }
     
     /// Recreate the swapchain (for window resizing)
-    pub fn recreate_swapchain(&mut self, window: &crate::backend::vulkan::Window) -> VulkanResult<()> {
+    pub fn recreate_swapchain(&mut self, window: &crate::render::vulkan::Window) -> VulkanResult<()> {
         // Wait for device to be idle before recreating swapchain
         unsafe {
             self.device.device.device_wait_idle().map_err(VulkanError::Api)?;
@@ -589,7 +538,7 @@ impl VulkanContext {
         let old_swapchain = self.swapchain.as_ref().map(|s| s.handle()).unwrap_or(vk::SwapchainKHR::null());
         
         // Create new swapchain using the old one for proper recreation
-        let new_swapchain = crate::backend::vulkan::Swapchain::recreate(
+        let new_swapchain = crate::render::vulkan::Swapchain::recreate(
             &self.instance.instance,
             self.device.device.clone(),
             self.surface,
@@ -619,13 +568,9 @@ impl Drop for VulkanContext {
                 // Swapchain drop will be called automatically
             }
             
-            // Now destroy the surface before device cleanup
+            // Now destroy the surface
             self.surface_loader.destroy_surface(self.surface, None);
         }
-        // Fields will drop in reverse declaration order:
-        // 1. instance (VulkanInstance - last, contains the instance)
-        // 2. device (LogicalDevice - second-to-last, destroys the device)
-        // 3. swapchain, physical_device, surface_loader, surface (already handled above)
-        // This ensures device is destroyed before instance
+        // Instance cleanup happens in VulkanInstance::Drop
     }
 }

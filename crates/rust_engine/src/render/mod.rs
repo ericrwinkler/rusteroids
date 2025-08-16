@@ -27,16 +27,14 @@ pub mod mesh;
 pub mod material;
 pub mod lighting;
 pub mod coordinates;
-pub mod renderer_config;
-pub mod shader_config;
+pub mod config;
 pub mod window;
 
 pub use mesh::{Mesh, Vertex};
 pub use material::Material;
 pub use lighting::{Light, LightType, LightingEnvironment};
 pub use coordinates::{CoordinateSystem, CoordinateConverter};
-pub use renderer_config::VulkanRendererConfig;
-pub use shader_config::ShaderConfig;
+pub use config::{VulkanRendererConfig, ShaderConfig};
 pub use crate::backend::{RenderBackend, WindowBackendAccess};
 pub use window::WindowHandle;
 

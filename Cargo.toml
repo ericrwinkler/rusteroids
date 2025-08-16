@@ -11,7 +11,6 @@ resolver = "2"
 ash = "0.37"
 ash-window = "0.12"
 glfw = { version = "0.55", features = ["vulkan"] }
-winit = "0.28"
 vk-sys = "0.5"
 raw-window-handle = "0.5"
 bytemuck = "1.14"
@@ -19,43 +18,26 @@ bytemuck = "1.14"
 # Serialization and configuration
 serde = { version = "1.0", features = ["derive"] }
 ron = "0.8"
-toml = "0.8"
+toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
 
 # Error handling
 thiserror = "1.0"
-anyhow = "1.0"
 
 # Logging
 log = "0.4"
-env_logger = "0.10"
+env_logger = "0.9"
 
 # Math
 nalgebra = { version = "0.32", features = ["serde-serialize"] }
+approx = "0.5"
 
-# Utility
+# Core utilities
 bitflags = "2.4"
 slotmap = "1.0"
-approx = "0.5"
 
 # Memory management
 vk-mem = "0.3"
 
-# Asset loading
-image = "0.24"
-tobj = "3.2"
-
-# Audio
-rodio = "0.17"
-
-# Utilities
-rand = "0.8"
-uuid = { version = "1.0", features = ["v4"] }
-crossbeam = "0.8"
-rayon = "1.7"
-
-# Development and testing
-criterion = "0.5"
-proptest = "1.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -40,10 +40,3 @@ slotmap = { workspace = true }
 
 # Memory management
 vk-mem = { workspace = true }
-
-# Asset loading
-image = { workspace = true }
-tobj = { workspace = true, optional = true }
-
-# Audio
-rodio = { workspace = true, optional = true }

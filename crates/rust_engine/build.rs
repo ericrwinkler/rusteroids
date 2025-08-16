@@ -7,7 +7,7 @@ use std::process::Command;
 
 fn main() {
     // Tell cargo to rerun this build script if any shader files change
-    println!("cargo:rerun-if-changed=resources/shaders");
+    println!("cargo:rerun-if-changed=../../resources/shaders");
     
     // Allow skipping shader compilation with an env var or arg
     let skip_shaders =
@@ -41,8 +41,8 @@ fn main() {
         panic!("Shader compiler not found");
     }
 
-    let shader_dir = PathBuf::from("resources/shaders");
-    let target_dir = PathBuf::from("target/shaders");
+    let shader_dir = PathBuf::from("../../resources/shaders");
+    let target_dir = PathBuf::from("../../target/shaders");
     
     // Create target directory
     if let Err(e) = std::fs::create_dir_all(&target_dir) {

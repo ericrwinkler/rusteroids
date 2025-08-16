@@ -111,16 +111,19 @@ impl Transform {
         // Extract position
         let position = Vec3::new(matrix.m14, matrix.m24, matrix.m34);
         
-        // Extract rotation (simplified - assumes no scale for now)
+        // Extract scale from the matrix columns
+        let scale_x = Vec3::new(matrix.m11, matrix.m21, matrix.m31).magnitude();
+        let scale_y = Vec3::new(matrix.m12, matrix.m22, matrix.m32).magnitude();
+        let scale_z = Vec3::new(matrix.m13, matrix.m23, matrix.m33).magnitude();
+        let scale = Vec3::new(scale_x, scale_y, scale_z);
+        
+        // Extract rotation by removing scale from the rotation matrix
         let rotation_matrix = Matrix3::new(
-            matrix.m11, matrix.m12, matrix.m13,
-            matrix.m21, matrix.m22, matrix.m23,
-            matrix.m31, matrix.m32, matrix.m33,
+            matrix.m11 / scale_x, matrix.m12 / scale_y, matrix.m13 / scale_z,
+            matrix.m21 / scale_x, matrix.m22 / scale_y, matrix.m23 / scale_z,
+            matrix.m31 / scale_x, matrix.m32 / scale_y, matrix.m33 / scale_z,
         );
         let rotation = Quat::from_matrix(&rotation_matrix);
-        
-        // Extract scale (simplified - assumes uniform scale)
-        let scale = Vec3::new(1.0, 1.0, 1.0); // TODO: proper scale extraction
         
         Self {
             position,

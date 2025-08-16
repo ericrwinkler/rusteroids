@@ -212,6 +212,27 @@ impl Light {
             outer_cone_angle,
         }
     }
+
+    /// Get direction as array for Vulkan push constants
+    /// 
+    /// Helper method to convert Vec3 direction to array format required by shaders.
+    pub fn direction_array(&self) -> [f32; 3] {
+        [self.direction.x, self.direction.y, self.direction.z]
+    }
+
+    /// Get color as array for Vulkan push constants
+    /// 
+    /// Helper method to convert Vec3 color to array format required by shaders.
+    pub fn color_array(&self) -> [f32; 3] {
+        [self.color.x, self.color.y, self.color.z]
+    }
+
+    /// Get position as array for Vulkan push constants
+    /// 
+    /// Helper method to convert Vec3 position to array format required by shaders.
+    pub fn position_array(&self) -> [f32; 3] {
+        [self.position.x, self.position.y, self.position.z]
+    }
 }
 
 /// Lighting environment containing multiple lights

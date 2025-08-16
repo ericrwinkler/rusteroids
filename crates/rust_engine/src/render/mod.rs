@@ -93,7 +93,7 @@ impl Renderer {
     /// # Design Notes
     /// This method represents good separation of concerns - it only requires
     /// what's necessary (a window and config) and doesn't depend on engine-specific configs.
-    pub fn new_from_window(window_handle: &mut WindowHandle, config: &VulkanRendererConfig) -> Self {
+    pub fn new_from_window(window_handle: &mut WindowHandle, config: &VulkanRendererConfig) -> RenderResult<Self> {
         log::info!("Initializing Vulkan renderer for '{}'", config.application_name);
         
         // Create Vulkan renderer using backend access
@@ -107,14 +107,14 @@ impl Renderer {
             .expect("Expected Vulkan window backend");
         
         let vulkan_renderer = crate::backend::vulkan::VulkanRenderer::new(vulkan_window, config)
-            .expect("Failed to create Vulkan renderer"); // FIXME: Should return Result instead of panicking
+            .map_err(|e| RenderError::InitializationFailed(format!("Failed to create Vulkan renderer: {:?}", e)))?;
         
-        Self {
+        Ok(Self {
             backend: Box::new(vulkan_renderer),
             current_camera: None,
             current_lighting: None,
             frame_count: 0,
-        }
+        })
     }
     
     /// Create a new renderer (legacy method for engine integration)
@@ -137,7 +137,7 @@ impl Renderer {
             &window_config.title,
         );
 
-        Ok(Self::new_from_window(&mut window_handle, &VulkanRendererConfig::default()))
+        Ok(Self::new_from_window(&mut window_handle, &VulkanRendererConfig::default())?)
     }
     
     /// Begin a new frame
@@ -202,13 +202,11 @@ impl Renderer {
         if let Some(first_light) = lighting.lights.first() {
             match first_light.light_type {
                 LightType::Directional => {
-                    // FIXME: Manual array conversion - should have helper methods
-                    let direction = [first_light.direction.x, first_light.direction.y, first_light.direction.z];
-                    let color = [first_light.color.x, first_light.color.y, first_light.color.z];
+                    // Use helper methods for array conversion
                     self.backend.set_directional_light(
-                        direction,
+                        first_light.direction_array(),
                         first_light.intensity,
-                        color,
+                        first_light.color_array(),
                         lighting.ambient_intensity,
                     );
                 },
@@ -346,19 +344,17 @@ impl Renderer {
                         LightType::Directional => {
                             // Keep light direction in world space (don't transform it)
                             // The shader will handle lighting calculations in world space
-                            let direction = [first_light.direction.x, first_light.direction.y, first_light.direction.z];
-                            let color = [first_light.color.x, first_light.color.y, first_light.color.z];
                             
                             // PERFORMANCE ISSUE: This call happens for every mesh, not once per frame
                             // FIXME: Move lighting setup to begin_frame() or a dedicated set_scene_lighting()
                             self.backend.set_directional_light(
-                                direction,
+                                first_light.direction_array(),
                                 first_light.intensity,
-                                color,
+                                first_light.color_array(),
                                 lighting.ambient_intensity,
                             );
                             log::trace!("Set world-space directional light: dir={:?}, intensity={}", 
-                                       direction, first_light.intensity);
+                                       first_light.direction_array(), first_light.intensity);
                         },
                         _ => {
                             // API CONTRACT VIOLATION: We accept all light types but only support one
@@ -834,3 +830,6 @@ pub enum RenderError {
     #[error("Backend error: {0}")]
     BackendError(String),
 }
+
+/// Result type for rendering operations
+pub type RenderResult<T> = Result<T, RenderError>;

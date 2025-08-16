@@ -46,7 +46,8 @@ impl IntegratedApp {
                 ShaderConfig::with_path_resolution("vert.spv", "frag.spv").vertex_shader_path,
                 ShaderConfig::with_path_resolution("vert.spv", "frag.spv").fragment_shader_path
             );
-        let renderer = Renderer::new_from_window(&mut window, &renderer_config);
+        let renderer = Renderer::new_from_window(&mut window, &renderer_config)
+            .expect("Failed to create renderer");
         log::info!("Vulkan renderer created successfully");
         
         // Create camera using Vulkan coordinate system

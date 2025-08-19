@@ -22,7 +22,7 @@
 /// Vulkan programming techniques for efficient GPU resource management.
 
 use ash::{vk, Device};
-use crate::backend::vulkan::{VulkanError, VulkanResult};
+use crate::render::vulkan::{VulkanError, VulkanResult};
 
 /// Descriptor set layout builder for creating reusable layouts
 pub struct DescriptorSetLayoutBuilder {

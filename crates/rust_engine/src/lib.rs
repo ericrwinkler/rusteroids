@@ -48,7 +48,6 @@
 
 // Core engine modules
 pub mod core;
-pub mod backend;
 
 // Legacy module organization (maintained for compatibility)
 pub mod foundation;

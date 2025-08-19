@@ -6,7 +6,7 @@
 use ash::{vk, Device};
 use crate::foundation::math::{Mat3, Mat4, Vec2, Vec4};
 use std::mem;
-use crate::backend::vulkan::{VulkanError, VulkanResult};
+use crate::render::vulkan::{VulkanResult, VulkanError};
 
 /// Camera uniform data - updated once per frame
 #[repr(C, align(16))]

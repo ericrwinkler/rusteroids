@@ -29,13 +29,15 @@ pub mod lighting;
 pub mod coordinates;
 pub mod config;
 pub mod window;
+pub mod vulkan;
+pub mod backend;
 
 pub use mesh::{Mesh, Vertex};
 pub use material::Material;
 pub use lighting::{Light, LightType, LightingEnvironment};
 pub use coordinates::{CoordinateSystem, CoordinateConverter};
 pub use config::{VulkanRendererConfig, ShaderConfig};
-pub use crate::backend::{RenderBackend, WindowBackendAccess};
+pub use backend::{RenderBackend, WindowBackendAccess, BackendResult};
 pub use window::WindowHandle;
 
 use thiserror::Error;
@@ -101,10 +103,10 @@ impl Renderer {
         // Safe downcast to Vulkan window using the RenderSurface trait
         let render_surface = window_handle.render_surface();
         let vulkan_window = render_surface.as_any_mut()
-            .downcast_mut::<crate::backend::vulkan::Window>()
+            .downcast_mut::<crate::render::vulkan::Window>()
             .expect("Expected Vulkan window backend");
         
-        let vulkan_renderer = crate::backend::vulkan::VulkanRenderer::new(vulkan_window, config)
+        let vulkan_renderer = crate::render::vulkan::VulkanRenderer::new(vulkan_window, config)
             .map_err(|e| RenderError::InitializationFailed(format!("Failed to create Vulkan renderer: {:?}", e)))?;
         
         Ok(Self {

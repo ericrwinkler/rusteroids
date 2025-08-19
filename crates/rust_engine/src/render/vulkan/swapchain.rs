@@ -170,7 +170,7 @@
 
 use ash::{vk, Device, Instance};
 use ash::extensions::khr::{Surface, Swapchain as SwapchainLoader};
-use crate::backend::vulkan::{VulkanResult, VulkanError, PhysicalDeviceInfo};
+use crate::render::vulkan::{VulkanResult, VulkanError, PhysicalDeviceInfo};
 
 /// Vulkan swapchain wrapper with automatic resource management and resize handling
 /// 

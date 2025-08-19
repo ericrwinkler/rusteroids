@@ -90,7 +90,7 @@
 //! 4. **Performance**: Efficient event handling and resource management
 //! 5. **Platform Integration**: Native platform features (decorations, DPI, etc.)
 
-use crate::backend::vulkan::Window as VulkanWindow;
+use crate::render::vulkan::Window as VulkanWindow;
 use crate::render::window::backend::{WindowBackend, RenderSurface};
 use glfw::WindowEvent;
 
@@ -243,9 +243,9 @@ impl WindowHandle {
 ///
 /// Provides access to backend-specific window operations needed by the renderer.
 impl crate::render::WindowBackendAccess for WindowHandle {
-    fn get_vulkan_window(&mut self) -> Option<&mut crate::backend::vulkan::Window> {
+    fn get_vulkan_window(&mut self) -> Option<&mut crate::render::vulkan::Window> {
         // Try to downcast to VulkanWindow directly
         let any_backend = self.backend.as_any_mut();
-        any_backend.downcast_mut::<crate::backend::vulkan::Window>()
+        any_backend.downcast_mut::<crate::render::vulkan::Window>()
     }
 }

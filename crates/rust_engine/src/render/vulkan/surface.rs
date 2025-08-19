@@ -4,7 +4,7 @@
 
 use ash::{vk, extensions::khr};
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
-use crate::backend::vulkan::{VulkanContext, VulkanResult, VulkanError};
+use crate::render::vulkan::{VulkanContext, VulkanResult, VulkanError};
 
 /// Vulkan surface wrapper
 pub struct Surface {

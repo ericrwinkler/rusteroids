@@ -127,7 +127,7 @@
 
 use ash::{vk, Device, Instance};
 use std::mem;
-use crate::backend::vulkan::{VulkanResult, VulkanError};
+use crate::render::vulkan::{VulkanResult, VulkanError};
 
 /// GPU buffer wrapper with automatic memory management
 /// 

@@ -22,7 +22,7 @@ use serde::{Serialize, Deserialize};
 use std::path::Path;
 
 // Re-export from the old config module for compatibility
-pub use crate::config::{Config, ConfigError};
+pub use crate::settings::{Config, ConfigError};
 
 /// # Shader Configuration
 ///

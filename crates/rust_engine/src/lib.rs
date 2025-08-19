@@ -57,7 +57,7 @@ pub mod render;
 pub mod input;
 pub mod audio;
 pub mod physics;
-pub mod config;
+pub mod settings;
 
 mod application;
 mod engine;

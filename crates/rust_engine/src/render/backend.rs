@@ -4,6 +4,7 @@
 //! to provide a consistent interface for the high-level renderer.
 
 use crate::render::{Vertex, RenderError};
+use crate::foundation::math::{Mat4, Vec3};
 
 /// Result type for backend operations
 pub type BackendResult<T> = Result<T, RenderError>;
@@ -30,6 +31,9 @@ pub trait RenderBackend {
     
     /// Set directional light parameters
     fn set_directional_light(&mut self, direction: [f32; 3], intensity: f32, color: [f32; 3], ambient_intensity: f32);
+    
+    /// Update camera UBO data (for UBO-based rendering)
+    fn update_camera_ubo(&mut self, view_matrix: Mat4, projection_matrix: Mat4, view_projection_matrix: Mat4, camera_position: Vec3);
     
     /// Draw a frame
     fn draw_frame(&mut self) -> BackendResult<()>;

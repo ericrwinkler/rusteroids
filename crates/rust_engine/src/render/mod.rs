@@ -297,6 +297,7 @@ impl Renderer {
             // MATRIX MATHEMATICS: Following Johannes Unterguggenberger's academic approach
             // This is the one aspect that's architecturally sound and mathematically correct
             
+            // Camera transformation matrices (now handled by UBOs)
             // 1. View matrix: World space → Camera/view space (Y-up, right-handed)
             let view_matrix = camera.get_view_matrix();
             
@@ -306,20 +307,11 @@ impl Renderer {
             // 3. Projection matrix: Camera frustum → normalized device coordinates
             let projection_matrix = camera.get_projection_matrix();
             
-            // 4. Complete transformation chain: P × X × V × M (mathematically correct order)
-            let mvp = projection_matrix * coord_transform * view_matrix * *model_matrix;
+            // 4. Complete view-projection transformation for UBO
+            let view_projection = projection_matrix * coord_transform * view_matrix;
             
-            
-            // ABSTRACTION LEAK: Manual matrix format conversion exposes Vulkan implementation details
-            // A proper renderer abstraction would handle format conversions internally
-            // nalgebra matrices are column-major, we need to transpose for row-major access
-            // FIXME: This conversion logic should be in a matrix utilities module
-            let mvp_array = [
-                [mvp[(0, 0)], mvp[(1, 0)], mvp[(2, 0)], mvp[(3, 0)]],
-                [mvp[(0, 1)], mvp[(1, 1)], mvp[(2, 1)], mvp[(3, 1)]],
-                [mvp[(0, 2)], mvp[(1, 2)], mvp[(2, 2)], mvp[(3, 2)]],
-                [mvp[(0, 3)], mvp[(1, 3)], mvp[(2, 3)], mvp[(3, 3)]],
-            ];
+            // Update camera UBO with current frame data
+            self.backend.update_camera_ubo(view_matrix, projection_matrix, view_projection, camera.position);
             
             // FIXME: Duplicate conversion logic - this pattern is repeated for every matrix
             // Should have a generic to_vulkan_array() extension method for Mat4<f32>
@@ -330,9 +322,7 @@ impl Renderer {
                 [model_matrix[(0, 3)], model_matrix[(1, 3)], model_matrix[(2, 3)], model_matrix[(3, 3)]],
             ];
 
-            // VULKAN COUPLING: These method calls directly expose the backend implementation
-            // A library-agnostic design would use generic "set_transform_matrix" calls
-            self.backend.set_mvp_matrix(mvp_array);
+            // UBO-based rendering: Only set model matrix in push constants
             self.backend.set_model_matrix(model_array);
             
             // ARCHITECTURAL ANTI-PATTERN: Setting lighting data per mesh draw

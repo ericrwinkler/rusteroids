@@ -213,6 +213,8 @@
 use ash::vk;
 use crate::render::vulkan::*;
 use crate::render::mesh::Vertex;
+use crate::foundation::math::{Mat4, Vec3};
+use crate::render::vulkan::uniform_buffer::CameraUniformData;
 
 /// Shader push constants structure with proper GLSL alignment
 /// 
@@ -232,19 +234,32 @@ use crate::render::mesh::Vertex;
 /// Push constants are faster than uniform buffers for small, frequently updated data.
 /// Perfect for per-draw transformation matrices and material properties.
 #[repr(C)]
+// New simplified push constants - only per-draw model data
 #[derive(Debug, Clone, Copy)]
 struct PushConstants {
-    mvp_matrix: [[f32; 4]; 4],      // 64 bytes
+    model_matrix: [[f32; 4]; 4],    // 64 bytes - model transformation
     // GLSL mat3 is stored as 3 vec4s (each column padded to 16 bytes)
-    normal_matrix: [[f32; 4]; 3],   // 48 bytes - padded to match GLSL mat3 alignment
+    normal_matrix: [[f32; 4]; 3],   // 48 bytes - normal transformation
     material_color: [f32; 4],       // 16 bytes - RGBA color
-    light_direction: [f32; 4],      // 16 bytes - XYZ direction + W intensity
-    light_color: [f32; 4],          // 16 bytes - RGB color + A ambient intensity
+    // Total: 128 bytes - exactly at Vulkan's minimum guaranteed limit
+}
+
+// Lighting data structure for UBO
+#[derive(Debug, Clone, Copy)]
+struct SimpleLightingData {
+    ambient_color: [f32; 4],        // 16 bytes - RGBA ambient
+    directional_light_direction: [f32; 4],  // 16 bytes - XYZ direction + W intensity
+    directional_light_color: [f32; 4],      // 16 bytes - RGB color + A unused
+    _padding: [f32; 4],             // 16 bytes - padding for alignment
+    // Total: 64 bytes
 }
 
 // Safe to implement Pod and Zeroable for PushConstants since it only contains f32 arrays
 unsafe impl bytemuck::Pod for PushConstants {}
 unsafe impl bytemuck::Zeroable for PushConstants {}
+
+unsafe impl bytemuck::Pod for SimpleLightingData {}
+unsafe impl bytemuck::Zeroable for SimpleLightingData {}
 
 /// Complete Vulkan rendering system orchestrating all GPU resources
 /// 
@@ -295,6 +310,13 @@ pub struct VulkanRenderer {
     // Command pool (requires device, handles command buffer cleanup)
     command_pool: CommandPool,
     
+    // UBO management (requires device for cleanup)
+    camera_ubo_buffer: Buffer,
+    lighting_ubo_buffer: Buffer,
+    descriptor_pool: DescriptorPool,
+    descriptor_set_layout: DescriptorSetLayout,
+    descriptor_sets: Vec<vk::DescriptorSet>,
+    
     // Pipeline and render pass (require device)
     pipeline: GraphicsPipeline,
     render_pass: RenderPass,
@@ -319,24 +341,24 @@ impl VulkanRenderer {
         )?;
         log::debug!("RenderPass created successfully");
         
-        log::debug!("Loading shaders...");
-        // Load shaders using configuration
+        log::debug!("Loading UBO-based shaders...");
+        // Load UBO-based shaders
         let vertex_shader = ShaderModule::from_file(
             context.raw_device(),
-            &config.shaders.vertex_shader_path
+            "target/shaders/vert_ubo.spv"
         ).map_err(|e| {
-            log::error!("Failed to load vertex shader from '{}': {:?}", config.shaders.vertex_shader_path, e);
+            log::error!("Failed to load UBO vertex shader: {:?}", e);
             e
         })?;
         
         let fragment_shader = ShaderModule::from_file(
             context.raw_device(),
-            &config.shaders.fragment_shader_path
+            "target/shaders/frag_ubo.spv"
         ).map_err(|e| {
-            log::error!("Failed to load fragment shader from '{}': {:?}", config.shaders.fragment_shader_path, e);
+            log::error!("Failed to load UBO fragment shader: {:?}", e);
             e
         })?;
-        log::debug!("Shaders loaded successfully");
+        log::debug!("UBO shaders loaded successfully");
         
         // Get vertex input state from Vulkan backend
         let (binding_desc, attr_desc) = VulkanVertexLayout::get_input_state();
@@ -345,16 +367,32 @@ impl VulkanRenderer {
             .vertex_attribute_descriptions(&attr_desc)
             .build();
         
+        // Create UBO resources first (needed for pipeline layout)
+        log::debug!("Creating UBO resources...");
+        
+        // Create descriptor set layout
+        let descriptor_set_layout = DescriptorSetLayoutBuilder::new()
+            .add_uniform_buffer(0, vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT) // Camera UBO
+            .add_uniform_buffer(1, vk::ShaderStageFlags::FRAGMENT) // Lighting UBO
+            .build(&context.raw_device())?;
+        
         log::debug!("Creating graphics pipeline...");
-        // Create graphics pipeline
-        let pipeline = GraphicsPipeline::new(
+        // Create graphics pipeline with UBO descriptor set layout
+        let pipeline = GraphicsPipeline::new_with_descriptor_layouts(
             context.raw_device(),
             render_pass.handle(),
             &vertex_shader,
             &fragment_shader,
             vertex_input_info,
+            &[descriptor_set_layout.handle()],
         )?;
         log::debug!("Graphics pipeline created successfully");
+        
+        // Get max_frames_in_flight from config
+        let max_frames_in_flight = config.max_frames_in_flight;
+        
+        // Create descriptor pool
+        let descriptor_pool = DescriptorPool::new(context.raw_device().clone(), max_frames_in_flight as u32)?;
         
         // Create command pool
         let command_pool = CommandPool::new(
@@ -424,12 +462,105 @@ impl VulkanRenderer {
         }
         log::debug!("Synchronization objects created successfully");
         
+        // Complete UBO setup
+        // Create UBO buffers and write initial data
+        let camera_ubo_data = CameraUniformData::default();
+        let camera_ubo_size = std::mem::size_of::<CameraUniformData>() as vk::DeviceSize;
+        let camera_ubo_buffer = Buffer::new(
+            context.raw_device().clone(),
+            context.instance().clone(),
+            context.physical_device().device,
+            camera_ubo_size,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        
+        // Write initial camera data to buffer
+        let camera_bytes = unsafe { 
+            std::slice::from_raw_parts(
+                &camera_ubo_data as *const _ as *const u8,
+                std::mem::size_of::<CameraUniformData>()
+            )
+        };
+        camera_ubo_buffer.write_data(camera_bytes)?;
+        
+        let lighting_ubo_data = SimpleLightingData {
+            ambient_color: [0.2, 0.2, 0.2, 1.0],
+            directional_light_direction: [-0.5, -1.0, -0.3, 0.8],
+            directional_light_color: [1.0, 0.95, 0.9, 1.0],
+            _padding: [0.0; 4],
+        };
+        let lighting_ubo_size = std::mem::size_of::<SimpleLightingData>() as vk::DeviceSize;
+        let lighting_ubo_buffer = Buffer::new(
+            context.raw_device().clone(),
+            context.instance().clone(),
+            context.physical_device().device,
+            lighting_ubo_size,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        
+        // Write initial lighting data to buffer
+        let lighting_bytes = unsafe { 
+            std::slice::from_raw_parts(
+                &lighting_ubo_data as *const _ as *const u8,
+                std::mem::size_of::<SimpleLightingData>()
+            )
+        };
+        lighting_ubo_buffer.write_data(lighting_bytes)?;
+        
+        // Create descriptor sets (one per frame in flight)
+        let layouts = vec![descriptor_set_layout.handle(); max_frames_in_flight];
+        let descriptor_sets = descriptor_pool.allocate_descriptor_sets(&layouts)?;
+        
+        // Update descriptor sets with UBO bindings
+        for &descriptor_set in &descriptor_sets {
+            let camera_buffer_info = vk::DescriptorBufferInfo::builder()
+                .buffer(camera_ubo_buffer.handle())
+                .offset(0)
+                .range(camera_ubo_size)
+                .build();
+                
+            let lighting_buffer_info = vk::DescriptorBufferInfo::builder()
+                .buffer(lighting_ubo_buffer.handle())
+                .offset(0)
+                .range(lighting_ubo_size)
+                .build();
+                
+            let descriptor_writes = [
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(descriptor_set)
+                    .dst_binding(0)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(&[camera_buffer_info])
+                    .build(),
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(descriptor_set)
+                    .dst_binding(1)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(&[lighting_buffer_info])
+                    .build(),
+            ];
+            
+            unsafe {
+                context.raw_device().update_descriptor_sets(&descriptor_writes, &[]);
+            }
+        }
+        log::debug!("UBO resources created successfully");
+        
         log::debug!("VulkanRenderer initialization complete");
         Ok(Self {
             context,
             render_pass,
             pipeline,
             command_pool,
+            camera_ubo_buffer,
+            lighting_ubo_buffer,
+            descriptor_pool,
+            descriptor_set_layout,
+            descriptor_sets,
             framebuffers,
             depth_buffers,
             vertex_buffer,
@@ -439,7 +570,7 @@ impl VulkanRenderer {
             current_frame: 0,
             max_frames_in_flight,
             push_constants: PushConstants {
-                mvp_matrix: [
+                model_matrix: [
                     [1.0, 0.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0, 0.0],
                     [0.0, 0.0, 1.0, 0.0],
@@ -451,8 +582,6 @@ impl VulkanRenderer {
                     [0.0, 0.0, 1.0, 0.0], // Column 2: padded to vec4
                 ],
                 material_color: [1.0, 1.0, 1.0, 1.0], // Default white
-                light_direction: [-0.5, -1.0, -0.3, 0.8], // Default directional light (direction + intensity)
-                light_color: [1.0, 0.95, 0.9, 0.2], // Default warm white light + ambient intensity
             },
             pending_command_buffers: vec![None; max_frames_in_flight],
         })
@@ -675,16 +804,12 @@ impl VulkanRenderer {
         Ok(())
     }
     
-    /// Set MVP matrix and model matrix for rendering (needed to calculate normal matrix)
-    pub fn set_mvp_matrix(&mut self, mvp: [[f32; 4]; 4]) {
-        self.push_constants.mvp_matrix = mvp;
-        log::trace!("MVP matrix updated");
-    }
-
+    
     /// Set model matrix and calculate normal matrix for proper lighting
     ///
     /// The normal matrix is used to transform normals from object space to world space.
     /// It must be the inverse-transpose of the model matrix to handle non-uniform scaling correctly.
+    /// Note: MVP matrix is now calculated from camera UBOs, not stored in push constants.
     /// 
     /// # Coordinate Spaces
     /// - Input normals: Object space (from 3D model)
@@ -697,6 +822,9 @@ impl VulkanRenderer {
     pub fn set_model_matrix(&mut self, model: [[f32; 4]; 4]) {
         // Calculate the proper normal matrix as inverse-transpose of the 3x3 model matrix
         // This ensures that normals are correctly transformed from object space to world space
+        
+        // Store the model matrix in push constants
+        self.push_constants.model_matrix = model;
         
         // Extract 3x3 part of model matrix
         use nalgebra::Matrix3;
@@ -737,13 +865,8 @@ impl VulkanRenderer {
         log::trace!("Material color updated to {:?}", color);
     }
     
-    /// Set directional light for rendering
-    pub fn set_directional_light(&mut self, direction: [f32; 3], intensity: f32, color: [f32; 3], ambient_intensity: f32) {
-        self.push_constants.light_direction = [direction[0], direction[1], direction[2], intensity];
-        self.push_constants.light_color = [color[0], color[1], color[2], ambient_intensity];
-        log::trace!("Directional light updated: dir={:?}, intensity={}, color={:?}, ambient={}", 
-                   direction, intensity, color, ambient_intensity);
-    }
+    // TODO: Add UBO management methods for camera and lighting data
+    // Lighting data will now be set via UBOs, not push constants
     
     /// Draw a frame
     pub fn draw_frame(&mut self) -> VulkanResult<()> {
@@ -838,7 +961,16 @@ impl VulkanRenderer {
             render_pass.set_viewport(&viewport);
             render_pass.set_scissor(&scissor);
             
-            // Push constants to shader (both MVP matrix and material color)
+            // Bind descriptor sets for UBO data (camera and lighting)
+            render_pass.cmd_bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline.layout(),
+                0, // First set
+                &self.descriptor_sets[self.current_frame..=self.current_frame],
+                &[],
+            );
+            
+            // Push constants to shader (model matrix and material color only)
             render_pass.cmd_push_constants(
                 self.pipeline.layout(),
                 vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
@@ -961,6 +1093,37 @@ impl VulkanRenderer {
         Ok(())
     }
     
+    /// Update camera UBO with current frame data
+    fn update_camera_ubo_internal(&mut self, view_matrix: Mat4, projection_matrix: Mat4, view_projection_matrix: Mat4, camera_position: Vec3) {
+        use crate::foundation::math::{Vec2, Vec4};
+        
+        // Create camera UBO data with proper types
+        let camera_ubo_data = CameraUniformData {
+            view_matrix,
+            projection_matrix,
+            view_projection_matrix,
+            camera_position: Vec4::new(camera_position.x, camera_position.y, camera_position.z, 1.0),
+            camera_direction: Vec4::new(0.0, 0.0, -1.0, 0.0), // Default forward direction
+            viewport_size: {
+                let extent = self.get_swapchain_extent();
+                Vec2::new(extent.0 as f32, extent.1 as f32)
+            },
+            near_far: Vec2::new(0.1, 100.0), // Default near/far planes
+        };
+        
+        // Write data to UBO buffer
+        let camera_bytes = unsafe { 
+            std::slice::from_raw_parts(
+                &camera_ubo_data as *const _ as *const u8,
+                std::mem::size_of::<CameraUniformData>()
+            )
+        };
+        
+        if let Err(e) = self.camera_ubo_buffer.write_data(camera_bytes) {
+            log::error!("Failed to update camera UBO: {:?}", e);
+        }
+    }
+
     /// Wait for device to be idle
     pub fn wait_idle(&self) -> VulkanResult<()> {
         unsafe {
@@ -1016,20 +1179,26 @@ impl crate::render::RenderBackend for VulkanRenderer {
             .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))
     }
     
-    fn set_mvp_matrix(&mut self, mvp: [[f32; 4]; 4]) {
-        self.set_mvp_matrix(mvp);
+    fn set_mvp_matrix(&mut self, _mvp: [[f32; 4]; 4]) {
+        // MVP matrix is now calculated from camera UBOs - this method is deprecated
+        log::trace!("set_mvp_matrix called but ignored - using UBO-based camera matrices");
     }
     
     fn set_model_matrix(&mut self, model: [[f32; 4]; 4]) {
-        self.set_model_matrix(model);
+        VulkanRenderer::set_model_matrix(self, model);
     }
     
     fn set_material_color(&mut self, color: [f32; 4]) {
-        self.set_material_color(color);
+        VulkanRenderer::set_material_color(self, color);
     }
     
-    fn set_directional_light(&mut self, direction: [f32; 3], intensity: f32, color: [f32; 3], ambient_intensity: f32) {
-        self.set_directional_light(direction, intensity, color, ambient_intensity);
+    fn set_directional_light(&mut self, _direction: [f32; 3], _intensity: f32, _color: [f32; 3], _ambient_intensity: f32) {
+        // Directional light is now set via UBOs - this method is deprecated
+        log::trace!("set_directional_light called but ignored - using UBO-based lighting");
+    }
+    
+    fn update_camera_ubo(&mut self, view_matrix: crate::foundation::math::Mat4, projection_matrix: crate::foundation::math::Mat4, view_projection_matrix: crate::foundation::math::Mat4, camera_position: crate::foundation::math::Vec3) {
+        self.update_camera_ubo_internal(view_matrix, projection_matrix, view_projection_matrix, camera_position);
     }
     
     fn draw_frame(&mut self) -> crate::render::BackendResult<()> {

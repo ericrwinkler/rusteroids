@@ -515,6 +515,27 @@ impl<'a> ActiveRenderPass<'a> {
         }
     }
     
+    /// Bind descriptor sets
+    pub fn cmd_bind_descriptor_sets(
+        &mut self, 
+        pipeline_bind_point: vk::PipelineBindPoint,
+        layout: vk::PipelineLayout,
+        first_set: u32,
+        descriptor_sets: &[vk::DescriptorSet],
+        dynamic_offsets: &[u32],
+    ) {
+        unsafe {
+            self.recorder.device.cmd_bind_descriptor_sets(
+                self.recorder.command_buffer,
+                pipeline_bind_point,
+                layout,
+                first_set,
+                descriptor_sets,
+                dynamic_offsets,
+            );
+        }
+    }
+    
     /// Draw indexed
     pub fn cmd_draw_indexed(&mut self, index_count: u32, instance_count: u32, first_index: u32, vertex_offset: i32, first_instance: u32) {
         unsafe {

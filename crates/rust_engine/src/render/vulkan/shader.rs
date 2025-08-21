@@ -275,6 +275,25 @@ impl GraphicsPipeline {
         fragment_shader: &ShaderModule,
         vertex_input_info: vk::PipelineVertexInputStateCreateInfo,
     ) -> VulkanResult<Self> {
+        Self::new_with_descriptor_layouts(
+            device,
+            render_pass,
+            vertex_shader,
+            fragment_shader,
+            vertex_input_info,
+            &[],
+        )
+    }
+    
+    /// Create graphics pipeline with descriptor set layouts
+    pub fn new_with_descriptor_layouts(
+        device: Device,
+        render_pass: vk::RenderPass,
+        vertex_shader: &ShaderModule,
+        fragment_shader: &ShaderModule,
+        vertex_input_info: vk::PipelineVertexInputStateCreateInfo,
+        descriptor_set_layouts: &[vk::DescriptorSetLayout],
+    ) -> VulkanResult<Self> {
         // Shader stages
         let vertex_entry = std::ffi::CStr::from_bytes_with_nul(b"main\0").unwrap();
         let fragment_entry = std::ffi::CStr::from_bytes_with_nul(b"main\0").unwrap();
@@ -333,15 +352,16 @@ impl GraphicsPipeline {
             .logic_op_enable(false)
             .attachments(&color_blend_attachments);
             
-        // Pipeline layout with push constants for MVP matrix + normal matrix + material color + lighting
+        // Pipeline layout with push constants for model matrix + material color + lighting (UBO-based)
         let push_constant_range = vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
             offset: 0,
-            size: 160, // sizeof(mat4) + sizeof(mat3 with padding) + sizeof(vec4) + sizeof(vec4) + sizeof(vec4) = 64 + 48 + 16 + 16 + 16 = 160 bytes
+            size: 128, // sizeof(mat4) + sizeof(vec4) + sizeof(vec4) + sizeof(vec4) = 64 + 16 + 16 + 32 = 128 bytes (camera data moved to UBO)
         };
         
         let push_constant_ranges = [push_constant_range];
         let layout_info = vk::PipelineLayoutCreateInfo::builder()
+            .set_layouts(descriptor_set_layouts)
             .push_constant_ranges(&push_constant_ranges);
         let layout = unsafe {
             device.create_pipeline_layout(&layout_info, None)

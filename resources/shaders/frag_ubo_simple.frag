@@ -11,13 +11,12 @@ layout(set = 0, binding = 0) uniform CameraUBO {
     vec2 near_far;
 } camera;
 
-// Lighting UBO - Set 0, Binding 1 (simplified for now)
+// Simple Lighting UBO - Set 0, Binding 1 (per-frame updated)
 layout(set = 0, binding = 1) uniform LightingUBO {
-    vec4 ambient_color;                     // 16 bytes
-    vec4 directional_light_direction_0;     // 16 bytes - xyz = direction, w = unused  
-    vec4 directional_light_color_0;         // 16 bytes - rgb = color, a = intensity
-    // Rest of the structure padded to match Rust struct size
-    vec4 _unused[64];  // Padding to match the larger LightingUniformData structure
+    vec4 ambient_color;
+    vec4 directional_light_direction;
+    vec4 directional_light_color;
+    vec4 _padding;
 } lighting;
 
 // Push constants - only model matrix and material data
@@ -33,21 +32,19 @@ layout(location = 1) in vec2 fragTexCoord;
 layout(location = 0) out vec4 fragColor;
 
 void main() {
-    // Start with ambient lighting
-    vec3 ambient = lighting.ambient_color.rgb * lighting.ambient_color.a;
+    // Extract lighting parameters from per-frame UBO
+    vec3 lightDir = normalize(lighting.directional_light_direction.xyz);
+    float lightIntensity = lighting.directional_light_direction.w;
+    vec3 lightColor = lighting.directional_light_color.rgb;
     
-    // Normal calculation
+    // Calculate diffuse lighting
     vec3 normal = normalize(fragNormal);
-    
-    // Process first directional light (simplified for now)
-    vec3 lightDir = normalize(lighting.directional_light_direction_0.xyz);
-    vec3 lightColor = lighting.directional_light_color_0.rgb;
-    float lightIntensity = lighting.directional_light_color_0.a;
-    
-    // Calculate diffuse lighting (light direction should point FROM the light TO the surface)
+    // Light direction should point FROM the light TO the surface
     float diff = max(dot(normal, -lightDir), 0.0);
-    vec3 diffuse = diff * lightIntensity * lightColor;
     
+    // Use ambient from UBO
+    vec3 ambient = lighting.ambient_color.rgb * lighting.ambient_color.a;
+    vec3 diffuse = diff * lightIntensity * lightColor;
     vec3 lighting_result = ambient + diffuse;
     
     // Clamp lighting to reasonable range

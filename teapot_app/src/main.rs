@@ -43,8 +43,8 @@ impl IntegratedApp {
         let renderer_config = VulkanRendererConfig::new("Rusteroids - Teapot Demo")
             .with_version(1, 0, 0)
             .with_shader_paths(
-                ShaderConfig::with_path_resolution("vert_ubo.spv", "frag_ubo.spv").vertex_shader_path,
-                ShaderConfig::with_path_resolution("vert_ubo.spv", "frag_ubo.spv").fragment_shader_path
+                "target/shaders/vert_ubo.spv".to_string(),
+                "target/shaders/frag_ubo_simple.spv".to_string()
             );
         let renderer = Renderer::new_from_window(&mut window, &renderer_config)
             .expect("Failed to create renderer");

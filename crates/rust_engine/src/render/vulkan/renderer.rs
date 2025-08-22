@@ -234,14 +234,13 @@ use crate::render::vulkan::uniform_buffer::CameraUniformData;
 /// Push constants are faster than uniform buffers for small, frequently updated data.
 /// Perfect for per-draw transformation matrices and material properties.
 #[repr(C)]
-// New simplified push constants - only per-draw model data
+// New simplified push constants - only per-draw model data (no material color)
 #[derive(Debug, Clone, Copy)]
 struct PushConstants {
     model_matrix: [[f32; 4]; 4],    // 64 bytes - model transformation
     // GLSL mat3 is stored as 3 vec4s (each column padded to 16 bytes)
     normal_matrix: [[f32; 4]; 3],   // 48 bytes - normal transformation
-    material_color: [f32; 4],       // 16 bytes - RGBA color
-    // Total: 128 bytes - exactly at Vulkan's minimum guaranteed limit
+    // Total: 112 bytes - reduced from 128 bytes by removing material color
 }
 
 // Simple lighting data structure for per-frame UBO updates
@@ -315,11 +314,16 @@ pub struct VulkanRenderer {
     // UBO management (requires device for cleanup)
     camera_ubo_buffer: Buffer,
     lighting_ubo_buffers: Vec<Buffer>, // Per-frame lighting buffers
-    #[allow(dead_code)] // Used by future pipeline system for material UBOs
+    material_ubo_buffer: Buffer, // Material properties buffer
+    
+    // Descriptor layouts
+    frame_descriptor_set_layout: DescriptorSetLayout,  // Set 0: Camera + Lighting
+    material_descriptor_set_layout: DescriptorSetLayout, // Set 1: Material + Textures
+    
+    // Descriptor pools and sets
     descriptor_pool: DescriptorPool,
-    #[allow(dead_code)] // Used by future pipeline system for material UBOs
-    descriptor_set_layout: DescriptorSetLayout,
-    descriptor_sets: Vec<vk::DescriptorSet>,
+    frame_descriptor_sets: Vec<vk::DescriptorSet>, // Set 0 descriptors (per frame)
+    material_descriptor_sets: Vec<vk::DescriptorSet>, // Set 1 descriptors (per material)
     
     // Pipeline management (require device)
     pipeline_manager: crate::render::PipelineManager,
@@ -348,10 +352,18 @@ impl VulkanRenderer {
         
         log::debug!("Creating UBO resources...");
         
-        // Create descriptor set layout
-        let descriptor_set_layout = DescriptorSetLayoutBuilder::new()
+        // Create Set 0 descriptor set layout (per-frame data: camera + lighting)
+        let frame_descriptor_set_layout = DescriptorSetLayoutBuilder::new()
             .add_uniform_buffer(0, vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT) // Camera UBO
             .add_uniform_buffer(1, vk::ShaderStageFlags::FRAGMENT) // Lighting UBO
+            .build(&context.raw_device())?;
+            
+        // Create Set 1 descriptor set layout (per-material data: material UBO + textures)
+        let material_descriptor_set_layout = DescriptorSetLayoutBuilder::new()
+            .add_uniform_buffer(0, vk::ShaderStageFlags::FRAGMENT) // Material UBO
+            .add_combined_image_sampler(1, vk::ShaderStageFlags::FRAGMENT) // Base color texture
+            .add_combined_image_sampler(2, vk::ShaderStageFlags::FRAGMENT) // Normal texture  
+            .add_combined_image_sampler(3, vk::ShaderStageFlags::FRAGMENT) // Metallic-roughness texture
             .build(&context.raw_device())?;
         
         log::debug!("Creating pipeline manager...");
@@ -360,7 +372,7 @@ impl VulkanRenderer {
         pipeline_manager.initialize_standard_pipelines(
             &context,
             render_pass.handle(),
-            &[descriptor_set_layout.handle()],
+            &[frame_descriptor_set_layout.handle(), material_descriptor_set_layout.handle()],
         )?;
         log::debug!("Pipeline manager created successfully");
         
@@ -368,7 +380,11 @@ impl VulkanRenderer {
         let max_frames_in_flight = config.max_frames_in_flight;
         
         // Create descriptor pool
-        let descriptor_pool = DescriptorPool::new(context.raw_device().clone(), max_frames_in_flight as u32)?;
+        // We need descriptor sets for:
+        // - Set 0 (frame descriptors): max_frames_in_flight sets
+        // - Set 1 (material descriptors): additional sets for materials
+        let max_descriptor_sets = (max_frames_in_flight + 10) as u32; // +10 for material descriptor sets
+        let descriptor_pool = DescriptorPool::new(context.raw_device().clone(), max_descriptor_sets)?;
         
         // Create command pool
         let command_pool = CommandPool::new(
@@ -491,12 +507,16 @@ impl VulkanRenderer {
             lighting_ubo_buffers.push(lighting_buffer);
         }
         
-        // Create descriptor sets (one per frame in flight)
-        let layouts = vec![descriptor_set_layout.handle(); max_frames_in_flight];
-        let descriptor_sets = descriptor_pool.allocate_descriptor_sets(&layouts)?;
+        // Create descriptor sets for Set 0 (per-frame data: one per frame in flight)
+        let frame_layouts = vec![frame_descriptor_set_layout.handle(); max_frames_in_flight];
+        let frame_descriptor_sets = descriptor_pool.allocate_descriptor_sets(&frame_layouts)?;
         
-        // Update descriptor sets with UBO bindings
-        for (frame_index, &descriptor_set) in descriptor_sets.iter().enumerate() {
+        // Create descriptor sets for Set 1 (material data: for now just create one default)
+        let material_layouts = vec![material_descriptor_set_layout.handle(); 1];
+        let material_descriptor_sets = descriptor_pool.allocate_descriptor_sets(&material_layouts)?;
+        
+        // Update Set 0 descriptor sets with UBO bindings
+        for (frame_index, &descriptor_set) in frame_descriptor_sets.iter().enumerate() {
             let camera_buffer_info = vk::DescriptorBufferInfo::builder()
                 .buffer(camera_ubo_buffer.handle())
                 .offset(0)
@@ -530,6 +550,67 @@ impl VulkanRenderer {
                 context.raw_device().update_descriptor_sets(&descriptor_writes, &[]);
             }
         }
+        
+        // Create and update Set 1 (material) descriptor sets
+        // For now, create a default material UBO
+        use crate::render::material::{StandardMaterialUBO, StandardMaterialParams};
+        use crate::foundation::math::Vec3;
+        
+        let default_material_params = StandardMaterialParams {
+            base_color: Vec3::new(0.8, 0.6, 0.4), // Warm brown color like teapot
+            alpha: 1.0,
+            metallic: 0.1,
+            roughness: 0.8,
+            ambient_occlusion: 1.0,
+            normal_scale: 1.0,
+            emission: Vec3::new(0.0, 0.0, 0.0),
+            emission_strength: 0.0,
+        };
+        
+        let default_material_ubo = StandardMaterialUBO::from_params(&default_material_params);
+        let material_ubo_size = std::mem::size_of::<StandardMaterialUBO>() as vk::DeviceSize;
+        
+        let material_ubo_buffer = Buffer::new(
+            context.raw_device().clone(),
+            context.instance().clone(),
+            context.physical_device().device,
+            material_ubo_size,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        
+        let material_bytes = unsafe { 
+            std::slice::from_raw_parts(
+                &default_material_ubo as *const _ as *const u8,
+                std::mem::size_of::<StandardMaterialUBO>()
+            )
+        };
+        material_ubo_buffer.write_data(material_bytes)?;
+        
+        // Update Set 1 descriptor set with material UBO
+        for &descriptor_set in material_descriptor_sets.iter() {
+            let material_buffer_info = vk::DescriptorBufferInfo::builder()
+                .buffer(material_ubo_buffer.handle())
+                .offset(0)
+                .range(material_ubo_size)
+                .build();
+            
+            let descriptor_writes = vec![
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(descriptor_set)
+                    .dst_binding(0) // Material UBO
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(&[material_buffer_info])
+                    .build(),
+                // Note: Texture bindings (1, 2, 3) will be added when texture system is implemented
+            ];
+            
+            unsafe {
+                context.raw_device().update_descriptor_sets(&descriptor_writes, &[]);
+            }
+        }
+        
         log::debug!("UBO resources created successfully");
         
         log::debug!("VulkanRenderer initialization complete");
@@ -540,9 +621,12 @@ impl VulkanRenderer {
             command_pool,
             camera_ubo_buffer,
             lighting_ubo_buffers,
+            material_ubo_buffer,
             descriptor_pool,
-            descriptor_set_layout,
-            descriptor_sets,
+            frame_descriptor_set_layout,
+            material_descriptor_set_layout,
+            frame_descriptor_sets,
+            material_descriptor_sets,
             framebuffers,
             depth_buffers,
             vertex_buffer,
@@ -563,7 +647,6 @@ impl VulkanRenderer {
                     [0.0, 1.0, 0.0, 0.0], // Column 1: padded to vec4
                     [0.0, 0.0, 1.0, 0.0], // Column 2: padded to vec4
                 ],
-                material_color: [1.0, 1.0, 1.0, 1.0], // Default white
             },
             pending_command_buffers: vec![None; max_frames_in_flight],
         })
@@ -842,9 +925,12 @@ impl VulkanRenderer {
     }
     
     /// Set material color for rendering
+    /// Note: Material colors are now handled via Material UBO system.
+    /// This method is deprecated and will be removed once material system is complete.
     pub fn set_material_color(&mut self, color: [f32; 4]) {
-        self.push_constants.material_color = color;
-        log::trace!("Material color updated to {:?}", color);
+        // TODO: Update the material UBO instead of push constants
+        // For now, this is a no-op since material color is in UBO
+        log::trace!("Material color update requested: {:?} (handled via Material UBO)", color);
     }
     
     // TODO: Add UBO management methods for camera and lighting data
@@ -949,11 +1035,21 @@ impl VulkanRenderer {
             
             // Bind descriptor sets for UBO data (camera and lighting)
             if let Some(active_pipeline) = self.pipeline_manager.get_active_pipeline() {
+                // Bind Set 0 (per-frame data: camera + lighting)
                 render_pass.cmd_bind_descriptor_sets(
                     vk::PipelineBindPoint::GRAPHICS,
                     active_pipeline.layout(),
-                    0, // First set
-                    &self.descriptor_sets[self.current_frame..=self.current_frame],
+                    0, // Set 0
+                    &self.frame_descriptor_sets[self.current_frame..=self.current_frame],
+                    &[],
+                );
+                
+                // Bind Set 1 (per-material data: for now use default material)
+                render_pass.cmd_bind_descriptor_sets(
+                    vk::PipelineBindPoint::GRAPHICS,
+                    active_pipeline.layout(),
+                    1, // Set 1
+                    &self.material_descriptor_sets[0..=0], // Use first material for now
                     &[],
                 );
                 

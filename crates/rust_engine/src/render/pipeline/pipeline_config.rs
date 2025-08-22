@@ -39,8 +39,8 @@ impl PipelineConfig {
     pub fn standard_pbr() -> Self {
         Self {
             pipeline_type: PipelineType::StandardPBR,
-            vertex_shader_path: "target/shaders/standard_pbr_vert.spv".to_string(),
-            fragment_shader_path: "target/shaders/standard_pbr_frag.spv".to_string(),
+            vertex_shader_path: "target/shaders/vert_material_ubo.spv".to_string(),
+            fragment_shader_path: "target/shaders/frag_material_ubo.spv".to_string(),
             depth_test: true,
             depth_write: true,
             alpha_blending: false,
@@ -52,8 +52,8 @@ impl PipelineConfig {
     pub fn unlit() -> Self {
         Self {
             pipeline_type: PipelineType::Unlit,
-            vertex_shader_path: "target/shaders/vert_ubo.spv".to_string(),
-            fragment_shader_path: "target/shaders/frag_ubo_simple.spv".to_string(),
+            vertex_shader_path: "target/shaders/vert_material_ubo.spv".to_string(),
+            fragment_shader_path: "target/shaders/frag_material_ubo.spv".to_string(),
             depth_test: true,
             depth_write: true,
             alpha_blending: false,

@@ -400,6 +400,15 @@ impl GraphicsPipeline {
         })
     }
     
+    /// Create GraphicsPipeline from raw Vulkan handles
+    pub fn from_raw(device: Device, pipeline: vk::Pipeline, layout: vk::PipelineLayout) -> Self {
+        Self {
+            device,
+            pipeline,
+            layout,
+        }
+    }
+    
     /// Get pipeline handle
     pub fn handle(&self) -> vk::Pipeline {
         self.pipeline

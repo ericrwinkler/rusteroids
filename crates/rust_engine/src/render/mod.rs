@@ -25,6 +25,7 @@
 
 pub mod mesh;
 pub mod material;
+pub mod pipeline;
 pub mod lighting;
 pub mod coordinates;
 pub mod config;
@@ -38,6 +39,7 @@ pub use material::{
     StandardMaterialParams, UnlitMaterialParams,
     MaterialManager, TextureManager, MaterialTextures, TextureHandle, TextureType
 };
+pub use pipeline::{PipelineManager, PipelineConfig, CullMode};
 pub use lighting::{Light, LightType, LightingEnvironment};
 pub use coordinates::{CoordinateSystem, CoordinateConverter};
 pub use config::{VulkanRendererConfig, ShaderConfig};

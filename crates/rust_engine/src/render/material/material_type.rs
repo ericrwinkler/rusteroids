@@ -14,7 +14,9 @@ pub enum MaterialType {
     Unlit(UnlitMaterialParams),
     /// Transparent material with alpha blending
     Transparent {
+        /// Base material to make transparent
         base_material: Box<MaterialType>,
+        /// Alpha blending mode to use
         alpha_mode: AlphaMode,
     },
 }
@@ -129,39 +131,32 @@ impl PipelineType {
     }
 }
 
+// Temporary compatibility methods for the old Material API
+// TODO: Remove these when the renderer is updated to use the new material system
 impl Material {
-    /// Get base color for backward compatibility (TEMPORARY)
-    /// TODO: Remove this when the old API is fully replaced
+    /// Get base color as an array for compatibility with old renderer
+    /// This is a temporary method during the transition to the new material system
     pub fn get_base_color_array(&self) -> [f32; 4] {
         match &self.material_type {
-            MaterialType::StandardPBR(params) => [
-                params.base_color.x,
-                params.base_color.y,
-                params.base_color.z,
-                params.alpha,
-            ],
-            MaterialType::Unlit(params) => [
-                params.color.x,
-                params.color.y,
-                params.color.z,
-                params.alpha,
-            ],
+            MaterialType::StandardPBR(params) => {
+                [params.base_color.x, params.base_color.y, params.base_color.z, params.alpha]
+            }
+            MaterialType::Unlit(params) => {
+                [params.color.x, params.color.y, params.color.z, params.alpha]
+            }
             MaterialType::Transparent { base_material, .. } => {
-                // Get color from base material
+                // For transparent materials, get the base color from the underlying material
                 match &**base_material {
-                    MaterialType::StandardPBR(params) => [
-                        params.base_color.x,
-                        params.base_color.y,
-                        params.base_color.z,
-                        params.alpha,
-                    ],
-                    MaterialType::Unlit(params) => [
-                        params.color.x,
-                        params.color.y,
-                        params.color.z,
-                        params.alpha,
-                    ],
-                    MaterialType::Transparent { .. } => [1.0, 1.0, 1.0, 1.0], // Default
+                    MaterialType::StandardPBR(params) => {
+                        [params.base_color.x, params.base_color.y, params.base_color.z, params.alpha]
+                    }
+                    MaterialType::Unlit(params) => {
+                        [params.color.x, params.color.y, params.color.z, params.alpha]
+                    }
+                    MaterialType::Transparent { .. } => {
+                        // Nested transparency not supported, return white
+                        [1.0, 1.0, 1.0, 1.0]
+                    }
                 }
             }
         }

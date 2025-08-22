@@ -315,12 +315,14 @@ pub struct VulkanRenderer {
     // UBO management (requires device for cleanup)
     camera_ubo_buffer: Buffer,
     lighting_ubo_buffers: Vec<Buffer>, // Per-frame lighting buffers
+    #[allow(dead_code)] // Used by future pipeline system for material UBOs
     descriptor_pool: DescriptorPool,
+    #[allow(dead_code)] // Used by future pipeline system for material UBOs
     descriptor_set_layout: DescriptorSetLayout,
     descriptor_sets: Vec<vk::DescriptorSet>,
     
-    // Pipeline and render pass (require device)
-    pipeline: GraphicsPipeline,
+    // Pipeline management (require device)
+    pipeline_manager: crate::render::PipelineManager,
     render_pass: RenderPass,
     
     // VulkanContext LAST - contains device which all above resources need for cleanup
@@ -343,33 +345,7 @@ impl VulkanRenderer {
         )?;
         log::debug!("RenderPass created successfully");
         
-        log::debug!("Loading UBO-based shaders...");
-        // Load UBO-based shaders
-        let vertex_shader = ShaderModule::from_file(
-            context.raw_device(),
-            &config.shaders.vertex_shader_path
-        ).map_err(|e| {
-            log::error!("Failed to load UBO vertex shader: {:?}", e);
-            e
-        })?;
         
-        let fragment_shader = ShaderModule::from_file(
-            context.raw_device(),
-            &config.shaders.fragment_shader_path
-        ).map_err(|e| {
-            log::error!("Failed to load UBO fragment shader: {:?}", e);
-            e
-        })?;
-        log::debug!("UBO shaders loaded successfully");
-        
-        // Get vertex input state from Vulkan backend
-        let (binding_desc, attr_desc) = VulkanVertexLayout::get_input_state();
-        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder()
-            .vertex_binding_descriptions(&[binding_desc])
-            .vertex_attribute_descriptions(&attr_desc)
-            .build();
-        
-        // Create UBO resources first (needed for pipeline layout)
         log::debug!("Creating UBO resources...");
         
         // Create descriptor set layout
@@ -378,17 +354,15 @@ impl VulkanRenderer {
             .add_uniform_buffer(1, vk::ShaderStageFlags::FRAGMENT) // Lighting UBO
             .build(&context.raw_device())?;
         
-        log::debug!("Creating graphics pipeline...");
-        // Create graphics pipeline with UBO descriptor set layout
-        let pipeline = GraphicsPipeline::new_with_descriptor_layouts(
-            context.raw_device(),
+        log::debug!("Creating pipeline manager...");
+        // Create pipeline manager and initialize all standard pipelines
+        let mut pipeline_manager = crate::render::PipelineManager::new();
+        pipeline_manager.initialize_standard_pipelines(
+            &context,
             render_pass.handle(),
-            &vertex_shader,
-            &fragment_shader,
-            vertex_input_info,
             &[descriptor_set_layout.handle()],
         )?;
-        log::debug!("Graphics pipeline created successfully");
+        log::debug!("Pipeline manager created successfully");
         
         // Get max_frames_in_flight from config
         let max_frames_in_flight = config.max_frames_in_flight;
@@ -562,7 +536,7 @@ impl VulkanRenderer {
         Ok(Self {
             context,
             render_pass,
-            pipeline,
+            pipeline_manager,
             command_pool,
             camera_ubo_buffer,
             lighting_ubo_buffers,
@@ -948,7 +922,11 @@ impl VulkanRenderer {
             )?;
             
             // Bind pipeline and draw
-            render_pass.cmd_bind_pipeline(vk::PipelineBindPoint::GRAPHICS, self.pipeline.handle());
+            if let Some(active_pipeline) = self.pipeline_manager.get_active_pipeline() {
+                render_pass.cmd_bind_pipeline(vk::PipelineBindPoint::GRAPHICS, active_pipeline.handle());
+            } else {
+                return Err(VulkanError::InitializationFailed("No active pipeline".to_string()));
+            }
             
             // Set viewport and scissor to match current swapchain extent
             let extent = self.context.swapchain().extent();
@@ -970,21 +948,23 @@ impl VulkanRenderer {
             render_pass.set_scissor(&scissor);
             
             // Bind descriptor sets for UBO data (camera and lighting)
-            render_pass.cmd_bind_descriptor_sets(
-                vk::PipelineBindPoint::GRAPHICS,
-                self.pipeline.layout(),
-                0, // First set
-                &self.descriptor_sets[self.current_frame..=self.current_frame],
-                &[],
-            );
-            
-            // Push constants to shader (model matrix and material color only)
-            render_pass.cmd_push_constants(
-                self.pipeline.layout(),
-                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                0,
-                bytemuck::cast_slice(&[self.push_constants]),
-            );
+            if let Some(active_pipeline) = self.pipeline_manager.get_active_pipeline() {
+                render_pass.cmd_bind_descriptor_sets(
+                    vk::PipelineBindPoint::GRAPHICS,
+                    active_pipeline.layout(),
+                    0, // First set
+                    &self.descriptor_sets[self.current_frame..=self.current_frame],
+                    &[],
+                );
+                
+                // Push constants to shader (model matrix and material color only)
+                render_pass.cmd_push_constants(
+                    active_pipeline.layout(),
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    0,
+                    bytemuck::cast_slice(&[self.push_constants]),
+                );
+            }
             
             render_pass.cmd_bind_vertex_buffers(0, &[self.vertex_buffer.handle()], &[0]);
             render_pass.cmd_bind_index_buffer(self.index_buffer.handle(), 0, vk::IndexType::UINT32);

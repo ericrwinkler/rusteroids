@@ -97,7 +97,9 @@ impl UnlitMaterialUBO {
 /// a unified interface for GPU uploads.
 #[derive(Debug, Clone, Copy)]
 pub enum MaterialUBO {
+    /// Standard PBR material uniform data
     StandardPBR(StandardMaterialUBO),
+    /// Unlit material uniform data
     Unlit(UnlitMaterialUBO),
 }
 

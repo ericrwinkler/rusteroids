@@ -79,7 +79,7 @@ pub struct TextureManager {
 
 /// Information about a loaded texture
 #[derive(Debug, Clone)]
-struct TextureInfo {
+pub struct TextureInfo {
     /// Texture handle
     pub handle: TextureHandle,
     /// Texture type/usage

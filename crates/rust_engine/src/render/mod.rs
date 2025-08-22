@@ -33,7 +33,11 @@ pub mod vulkan;
 pub mod backend;
 
 pub use mesh::{Mesh, Vertex};
-pub use material::Material;
+pub use material::{
+    Material, MaterialType, MaterialId, PipelineType, AlphaMode,
+    StandardMaterialParams, UnlitMaterialParams,
+    MaterialManager, TextureManager, MaterialTextures, TextureHandle, TextureType
+};
 pub use lighting::{Light, LightType, LightingEnvironment};
 pub use coordinates::{CoordinateSystem, CoordinateConverter};
 pub use config::{VulkanRendererConfig, ShaderConfig};
@@ -287,7 +291,7 @@ impl Renderer {
         // Set material properties
         // FIXME: Material should be an object that can be applied as a unit,
         // not individual property calls that can get out of sync
-        let material_color = [material.base_color[0], material.base_color[1], material.base_color[2], material.alpha];
+        let material_color = material.get_base_color_array();
         self.backend.set_material_color(material_color);
         
         // ARCHITECTURAL DEPENDENCY: Requires camera to be set beforehand

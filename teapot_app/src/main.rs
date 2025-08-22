@@ -8,10 +8,10 @@ use rust_engine::render::{
     Camera,
     Mesh,
     Material,
+    StandardMaterialParams,
     lighting::{LightingEnvironment, Light},
     Renderer,
     VulkanRendererConfig,
-    ShaderConfig,
     CoordinateConverter,
     WindowHandle,
 };
@@ -65,10 +65,13 @@ impl IntegratedApp {
         camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0)); // Vulkan Y-down up vector
         
         // Create material for teapot
-        let teapot_material = Material::new()
-            .with_color(0.8, 0.7, 0.5) // Warm tan color instead of extreme magenta
-            .with_metallic(0.1)  // Metallic
-            .with_roughness(0.3); // Roughness
+        let teapot_material = Material::standard_pbr(StandardMaterialParams {
+            base_color: Vec3::new(0.8, 0.7, 0.5), // Warm tan color
+            alpha: 1.0,
+            metallic: 0.1,  // Slightly metallic
+            roughness: 0.3, // Medium roughness
+            ..Default::default()
+        }).with_name("Teapot Material");
         
         // Create custom lighting environment with single strong directional light
         // NOTE: Current renderer only supports ONE light (uses first directional light only)

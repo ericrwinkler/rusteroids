@@ -1272,6 +1272,59 @@ impl Drop for VulkanRenderer {
     }
 }
 
+/// Material management implementation for VulkanRenderer
+impl VulkanRenderer {
+    /// Update the material UBO with new material data
+    pub fn set_material(&mut self, material: &crate::render::Material) -> VulkanResult<()> {
+        use crate::render::material::{MaterialType, StandardMaterialUBO, UnlitMaterialUBO};
+        
+        // Convert Material to appropriate UBO based on material type
+        let (material_ubo_data, material_type) = match &material.material_type {
+            MaterialType::StandardPBR(params) => {
+                let ubo = StandardMaterialUBO::from_params(params);
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(
+                        &ubo as *const _ as *const u8,
+                        std::mem::size_of::<StandardMaterialUBO>()
+                    )
+                };
+                (bytes.to_vec(), MaterialType::StandardPBR(params.clone()))
+            },
+            MaterialType::Unlit(params) => {
+                let ubo = UnlitMaterialUBO::from_params(params);
+                // Pad UnlitMaterialUBO to StandardMaterialUBO size for compatibility
+                let mut padded = vec![0u8; std::mem::size_of::<StandardMaterialUBO>()];
+                let unlit_bytes = unsafe {
+                    std::slice::from_raw_parts(
+                        &ubo as *const _ as *const u8,
+                        std::mem::size_of::<UnlitMaterialUBO>()
+                    )
+                };
+                padded[..unlit_bytes.len()].copy_from_slice(unlit_bytes);
+                (padded, MaterialType::Unlit(params.clone()))
+            },
+            _ => {
+                return Err(VulkanError::InvalidOperation { 
+                    reason: "Material type not yet supported".to_string() 
+                });
+            }
+        };
+        
+        // Update material UBO buffer data
+        self.material_ubo_buffer.write_data(&material_ubo_data)?;
+        
+        // Set the appropriate pipeline based on material type
+        self.pipeline_manager.set_active_pipeline(&material_type);
+        
+        Ok(())
+    }
+
+    /// Get the current active material type (for debugging/info)
+    pub fn get_active_material_type(&self) -> Option<crate::render::material::PipelineType> {
+        self.pipeline_manager.get_active_pipeline_type()
+    }
+}
+
 /// Implementation of RenderBackend trait for VulkanRenderer
 ///
 /// This implementation provides the backend abstraction layer that allows

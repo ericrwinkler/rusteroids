@@ -37,7 +37,16 @@ impl PipelineManager {
         render_pass: vk::RenderPass,
         descriptor_set_layouts: &[vk::DescriptorSetLayout],
     ) -> VulkanResult<()> {
-        // Initialize Unlit pipeline first (simpler, should work with current setup)
+        // Initialize StandardPBR pipeline first (uses material UBO system)
+        self.create_pipeline(
+            context,
+            render_pass,
+            PipelineConfig::standard_pbr(),
+            Self::create_vertex_input_info(),
+            descriptor_set_layouts,
+        )?;
+
+        // Initialize Unlit pipeline as backup
         self.create_pipeline(
             context,
             render_pass,
@@ -46,11 +55,10 @@ impl PipelineManager {
             descriptor_set_layouts,
         )?;
 
-        // Set Unlit as default active pipeline for now
-        self.active_pipeline = Some(PipelineType::Unlit);
+        // Set StandardPBR as default active pipeline to use material UBO system
+        self.active_pipeline = Some(PipelineType::StandardPBR);
 
-        // TODO: Initialize other pipelines once material UBO descriptor set is properly configured
-        // - StandardPBR pipeline
+        // TODO: Initialize other pipelines once fully tested
         // - TransparentPBR pipeline  
         // - TransparentUnlit pipeline
 

@@ -45,9 +45,17 @@ The project is structured as a multi-crate workspace with clear separation of co
 - [**Vulkan Design**](docs/VULKAN_DESIGN.md) - Core architecture and resource management patterns
 - [**Vulkan Synchronization**](docs/VULKAN_SYNCHRONIZATION_ANALYSIS.md) - Best practices and validation integration
 
-### Implementation Guides
-- [**Material System**](crates/rust_engine/src/render/material/) - Complete material architecture documentation
-- [**Pipeline Management**](crates/rust_engine/src/render/pipeline/) - Multi-pipeline system implementation
+### Development Tools
+- [**Screenshot Validation Tool**](tools/screenshot_tool/) - Automated rendering validation and regression testing
+- [**OBJ Normalizer**](tools/obj_normalizer/) - Mesh processing utility for generating vertex normals
+- [**Shader Compiler**](tools/shader_compiler/) - GLSL to SPIR-V compilation utilities
+- [**Asset Processor**](tools/asset_processor/) - General asset pipeline processing
+- [**Model Converter**](tools/model_converter/) - 3D model format conversion utilities
+
+### Quality Assurance
+- [**Screenshot Validation Workflow**](docs/SCREENSHOT_VALIDATION_WORKFLOW.md) - Mandatory validation for all rendering changes
+- [**Vulkan Validation Integration**](docs/VULKAN_SYNCHRONIZATION_ANALYSIS.md) - Comprehensive validation layer setup
+- [**Testing Strategy**](docs/PROJECT_STATUS.md) - Current testing approach and validation metrics
 - [**Lighting System Updates**](docs/lighting-system-updates.md) - World-space lighting implementation
 - [**Recent Updates Summary**](docs/RECENT_UPDATES_SUMMARY.md) - Comprehensive change log
 

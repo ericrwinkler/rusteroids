@@ -56,7 +56,10 @@ Located in: `crates/rust_engine/src/render/`
 
 ## 🛠️ Development Resources
 
+### Development Resources
+
 ### Setup and Building
+- **[Screenshot Validation Workflow](SCREENSHOT_VALIDATION_WORKFLOW.md)** - Mandatory validation for all rendering changes
 - **[Development Setup](DEVELOPMENT_SETUP.md)** - Environment configuration and tools *(planned)*
 - **[Build Guide](BUILD_GUIDE.md)** - Compilation and dependency management *(planned)*
 - **[Testing Guide](TESTING_GUIDE.md)** - Testing strategy and validation *(planned)*

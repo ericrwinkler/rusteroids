@@ -43,7 +43,28 @@ The Rusteroids project has successfully completed its foundational infrastructur
 
 **Impact**: Scalable pipeline system supporting diverse rendering needs
 
-### ✅ Phase 4: UBO Integration (August 2025)
+## Development Quality Assurance
+
+### Automated Screenshot Validation
+All rendering changes must be validated using the automated screenshot tool:
+
+**📋 Required Workflow**: See [Screenshot Validation Workflow](SCREENSHOT_VALIDATION_WORKFLOW.md)
+- ✅ Pre-commit screenshot validation for all rendering changes
+- ✅ Baseline vs validation screenshot comparison
+- ✅ Automated content analysis (RenderedScene detection)
+- ✅ Regression prevention through visual testing
+
+**Tool Location**: `tools/screenshot_tool/`
+**Usage**: `./tools/screenshot_tool/target/debug/screenshot_tool.exe [options]`
+
+### Validation Requirements
+- **Before Commit**: Capture baseline + validation screenshots
+- **Material Changes**: Test different material type rendering
+- **Pipeline Changes**: Verify pipeline switching functionality
+- **UBO/Shader Changes**: Extended validation with longer wait times
+- **Critical Features**: Full regression testing with archived comparisons
+
+## Phase 4: Advanced Feature Implementation (CURRENT)
 **Status**: COMPLETED
 **Timeline**: August 22, 2025
 

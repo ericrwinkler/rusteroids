@@ -1,0 +1,38 @@
+[package]
+name = "screenshot_tool"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+# Empty workspace to prevent inheriting from parent
+
+[[bin]]
+name = "screenshot_tool"
+path = "src/main.rs"
+
+[dependencies]
+# Screenshot functionality
+screenshots = "0.7"
+image = "0.25"
+
+# Process management
+sysinfo = "0.30"
+
+# CLI argument parsing
+clap = { version = "4.0", features = ["derive"] }
+
+# Error handling
+anyhow = "1.0"
+
+# Date/time for timestamps
+chrono = { version = "0.4", features = ["serde"] }
+
+# Windows-specific APIs for window handling
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = [
+    "winuser",
+    "wingdi", 
+    "errhandlingapi",
+    "processthreadsapi",
+    "handleapi"
+] }

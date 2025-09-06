@@ -2,108 +2,98 @@
 
 ## 📖 Quick Navigation
 
-This index provides easy access to all project documentation, organized by purpose and audience.
+This documentation provides comprehensive coverage of the Rusteroids Vulkan rendering engine architecture, development status, and implementation guides.
 
-## 🎯 Project Overview
+## 🎯 Essential Reading
 
-### Essential Reading
+### Primary Documentation
 - **[README.md](../README.md)** - Project overview, current status, and getting started
-- **[Project Status](PROJECT_STATUS.md)** - Comprehensive current achievements and development readiness
-- **[Development Roadmap](DEVELOPMENT_ROADMAP.md)** - Next phases, timelines, and priorities
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Complete technical architecture and implementation details
+- **[DEVELOPMENT.md](DEVELOPMENT.md)** - Development status, roadmap, and contribution guidelines
 
-### Recent Changes
-- **[Recent Updates Summary](RECENT_UPDATES_SUMMARY.md)** - Latest achievements and infrastructure transformation
-- **[Graphics Pipeline Redesign](GRAPHICS_PIPELINE_REDESIGN.md)** - UBO implementation and material system
+### Specialized Documentation
+- **[LIGHTING_AND_SHADER_REFACTOR_PLAN.md](LIGHTING_AND_SHADER_REFACTOR_PLAN.md)** - Comprehensive lighting system refactor plan
+- **[VULKAN_SYNCHRONIZATION_ANALYSIS.md](VULKAN_SYNCHRONIZATION_ANALYSIS.md)** - Vulkan synchronization patterns and best practices
+- **[SCREENSHOT_VALIDATION_WORKFLOW.md](SCREENSHOT_VALIDATION_WORKFLOW.md)** - Development workflow and quality assurance
 
 ## 🏗️ Architecture Documentation
 
-### Core Systems
-- **[Vulkan Design](VULKAN_DESIGN.md)** - Core architecture patterns and resource management
-- **[Vulkan Synchronization Analysis](VULKAN_SYNCHRONIZATION_ANALYSIS.md)** - Best practices and validation integration
+### Core Systems (See ARCHITECTURE.md)
+- **Material System**: Complete modular architecture with MaterialType enum, UBO structures, resource management
+- **Pipeline Management**: Multi-pipeline system supporting StandardPBR, Unlit, TransparentPBR, TransparentUnlit
+- **UBO Architecture**: Set 0 (camera/lighting) and Set 1 (materials) descriptor layouts
+- **Resource Management**: RAII patterns with proper Drop implementations
 
-### Rendering Systems
-- **[Lighting System Updates](lighting-system-updates.md)** - World-space lighting implementation and future work
-- **[Lighting Coordinate Space Fix](lighting-coordinate-space-fix.md)** - Normal matrix calculation and GLSL compatibility
+### Rendering Pipeline (See ARCHITECTURE.md)
+- **Coordinate Systems**: Academic-standard projection matrices with Vulkan compatibility
+- **Lighting System**: World-space lighting with proper normal matrix transformations
+- **Aspect Ratio Handling**: Dynamic viewport system for perfect window resizing
 
-## 🔧 Implementation Guides
+## � Development Status & Roadmap (See DEVELOPMENT.md)
 
-### Material System
-Located in: `crates/rust_engine/src/render/material/`
-- **[material_type.rs](../crates/rust_engine/src/render/material/material_type.rs)** - MaterialType enum and conversions
-- **[material_ubo.rs](../crates/rust_engine/src/render/material/material_ubo.rs)** - GPU uniform buffer structures  
-- **[material_manager.rs](../crates/rust_engine/src/render/material/material_manager.rs)** - Resource management system
-- **[texture_manager.rs](../crates/rust_engine/src/render/material/texture_manager.rs)** - Texture system placeholder
+### Current Status: Infrastructure Complete ✅
+- **Phase 5**: Material UBO system with multiple materials demo
+- **Performance**: 60+ FPS with clean Vulkan validation
+- **Quality**: Academic-standard projection matrices and world-space lighting
 
-### Pipeline Management
-Located in: `crates/rust_engine/src/render/pipeline/`
-- **[pipeline_manager.rs](../crates/rust_engine/src/render/pipeline/pipeline_manager.rs)** - Multi-pipeline management
-- **[pipeline_config.rs](../crates/rust_engine/src/render/pipeline/pipeline_config.rs)** - Configuration and shader paths
-
-### Core Rendering
-Located in: `crates/rust_engine/src/render/`
-- **[mod.rs](../crates/rust_engine/src/render/mod.rs)** - High-level rendering interface
-- **[vulkan/renderer.rs](../crates/rust_engine/src/render/vulkan/renderer.rs)** - VulkanRenderer implementation
+### Next Priority: Lighting System Refactor
+- **Timeline**: 6 weeks comprehensive overhaul
+- **Goals**: Multi-light support, shadow mapping, shader organization
+- **Success Criteria**: 4-8 lights, teapot self-shadowing, 60+ FPS
 
 ## 🎮 Applications
 
 ### Demo Applications
-- **[Teapot Demo](../teapot_app/src/main.rs)** - Working rendering demonstration with 3D mesh and lighting
-- **[Teapot Application Guide](APPLICATION_GUIDE.md)** - How to run and understand the demo *(planned)*
+- **[Teapot Demo](../teapot_app/src/main.rs)** - Working multi-material rendering demonstration
+- Current: 5 materials with automatic switching, PBR shading, clean validation
 
-### Game Implementation
-- **[Asteroids Game](../crates/asteroids/)** - Game-specific implementation *(future)*
-- **[ECS Architecture](ECS_DESIGN.md)** - Entity-Component-System design *(planned)*
+### Game Implementation (Future)
+- **Asteroids Game**: Classic gameplay with advanced rendering
+- **ECS Foundation**: Parallel development with rendering system
 
-## 🛠️ Development Resources
+## 🛠️ Development Workflow
 
-### Development Resources
-
-### Setup and Building
+### Quality Assurance
 - **[Screenshot Validation Workflow](SCREENSHOT_VALIDATION_WORKFLOW.md)** - Mandatory validation for all rendering changes
-- **[Development Setup](DEVELOPMENT_SETUP.md)** - Environment configuration and tools *(planned)*
-- **[Build Guide](BUILD_GUIDE.md)** - Compilation and dependency management *(planned)*
-- **[Testing Guide](TESTING_GUIDE.md)** - Testing strategy and validation *(planned)*
+- **Pre-commit validation**: Capture baseline and validation screenshots
+- **Automated analysis**: RenderedScene detection with quality metrics
 
-### Performance and Optimization
-- **[Performance Guide](PERFORMANCE_GUIDE.md)** - Optimization strategies and benchmarks *(planned)*
-- **[Memory Management](MEMORY_MANAGEMENT.md)** - Resource allocation and cleanup patterns *(planned)*
+### Development Environment
+- **Build System**: Cargo with multi-crate workspace
+- **Testing**: Teapot demo for rendering validation
+- **Tools**: Screenshot validation, shader compilation, asset processing
 
-## 📚 Technical References
+## 📚 Technical References & Historical Notes
 
-### Vulkan and Graphics
-- **[Shader System](SHADER_SYSTEM.md)** - GLSL compilation and management *(planned)*
-- **[Coordinate Systems](COORDINATE_SYSTEMS.md)** - Academic standards and transformations *(documented in pipeline redesign)*
-- **[UBO Architecture](UBO_ARCHITECTURE.md)** - Uniform buffer design patterns *(documented in pipeline redesign)*
+### Specialized Analysis
+- **[Vulkan Synchronization Analysis](VULKAN_SYNCHRONIZATION_ANALYSIS.md)** - Pipeline barriers and memory coherency
+- **[Lighting Refactor Plan](LIGHTING_AND_SHADER_REFACTOR_PLAN.md)** - Comprehensive multi-light system design
 
-### Academic References
-- **[Johannes Unterguggenberger's Projection Matrix Guide](https://johannesugb.github.io/gpu-programming/setting-up-a-proper-vulkan-projection-matrix/)** - Referenced standard for projection matrices
-- **[Vulkan Synchronization Validation](https://johannesugb.github.io)** - Synchronization best practices reference
+### Historical Technical Notes
+Located in: `technical-notes/`
+- **[lighting-coordinate-space-fix.md](technical-notes/lighting-coordinate-space-fix.md)** - Normal matrix debugging record
+- **[lighting-system-updates.md](technical-notes/lighting-system-updates.md)** - Historical lighting planning
 
-## 🗂️ Documentation Status
-
-### ✅ Complete and Current
-- Project overview and status documentation
-- Core architecture design documents
-- Material system and pipeline management guides
-- Recent updates and change summaries
-- Development roadmap with clear phases
-
-### 🔄 In Progress
-- Performance optimization guides
-- Advanced feature documentation updates
-- Tutorial and getting started content
-
-### 📋 Planned
-- Complete developer onboarding guides
-- Performance benchmarking documentation
-- Advanced rendering technique guides
-- Game implementation architecture
+### External References
+- **[Johannes Unterguggenberger's Projection Matrix Guide](https://johannesugb.github.io/gpu-programming/setting-up-a-proper-vulkan-projection-matrix/)** - Academic standard for projection matrices
+- **[Hans-Kristian Arntzen's Vulkan Synchronization](https://themaister.net/blog/)** - Synchronization best practices
 
 ## 🎯 Documentation by Audience
 
 ### For New Developers
 1. **[README.md](../README.md)** - Start here for project overview
-2. **[Project Status](PROJECT_STATUS.md)** - Understand current capabilities
+2. **[ARCHITECTURE.md](ARCHITECTURE.md)** - Understand the technical foundation
+3. **[DEVELOPMENT.md](DEVELOPMENT.md)** - See current status and next steps
+
+### For Contributors
+1. **[DEVELOPMENT.md](DEVELOPMENT.md)** - Development status and workflow
+2. **[Screenshot Validation](SCREENSHOT_VALIDATION_WORKFLOW.md)** - Required validation process
+3. **[Lighting Refactor Plan](LIGHTING_AND_SHADER_REFACTOR_PLAN.md)** - Next major development phase
+
+### For Technical Review
+1. **[ARCHITECTURE.md](ARCHITECTURE.md)** - Complete system design and implementation
+2. **[Vulkan Synchronization Analysis](VULKAN_SYNCHRONIZATION_ANALYSIS.md)** - Low-level Vulkan patterns
+3. **Technical Notes**: Historical debugging and implementation records
 3. **[Development Roadmap](DEVELOPMENT_ROADMAP.md)** - See where the project is heading
 4. **[Vulkan Design](VULKAN_DESIGN.md)** - Core architecture patterns
 

@@ -17,6 +17,7 @@ pub mod renderer;
 pub mod uniform_buffer;
 pub mod descriptor_set;
 pub mod vertex_layout;
+pub mod texture;
 
 pub use context::{VulkanContext, VulkanResult, VulkanError, PhysicalDeviceInfo, LogicalDevice, VulkanInstance};
 pub use window::{Window, WindowError};
@@ -31,3 +32,4 @@ pub use renderer::VulkanRenderer;
 pub use uniform_buffer::*;
 pub use descriptor_set::*;
 pub use vertex_layout::VulkanVertexLayout;
+pub use texture::Texture;

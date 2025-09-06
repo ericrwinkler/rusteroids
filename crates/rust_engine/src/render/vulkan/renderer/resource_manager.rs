@@ -1,12 +1,12 @@
 //! Resource management for Vulkan renderer
 //! 
-//! Handles vertex buffers, index buffers, and descriptor resources.
+//! Handles vertex buffers, index buffers, descriptor resources, and default textures.
 
 use ash::vk;
 use crate::render::vulkan::*;
 use crate::render::mesh::Vertex;
 
-/// Manages GPU resources like buffers and descriptor sets
+/// Manages GPU resources like buffers, descriptor sets, and default textures
 pub struct ResourceManager {
     // Buffer resources
     vertex_buffer: VertexBuffer,
@@ -16,6 +16,11 @@ pub struct ResourceManager {
     descriptor_pool: DescriptorPool,
     frame_descriptor_sets: Vec<vk::DescriptorSet>,
     material_descriptor_sets: Vec<vk::DescriptorSet>,
+    
+    // Default textures for material placeholders
+    default_white_texture: Texture,
+    default_normal_texture: Texture,
+    default_metallic_roughness_texture: Texture,
     
     // Command pool for transfers
     command_pool: CommandPool,
@@ -58,12 +63,40 @@ impl ResourceManager {
             context.graphics_queue_family(),
         )?;
         
+        // Create default textures for material placeholders
+        let default_white_texture = Texture::create_default_white(
+            std::sync::Arc::new(context.raw_device()),
+            std::sync::Arc::new(context.instance().clone()),
+            context.physical_device().device,
+            command_pool.handle(),
+            context.graphics_queue(),
+        )?;
+        
+        let default_normal_texture = Texture::create_default_normal(
+            std::sync::Arc::new(context.raw_device()),
+            std::sync::Arc::new(context.instance().clone()),
+            context.physical_device().device,
+            command_pool.handle(),
+            context.graphics_queue(),
+        )?;
+        
+        let default_metallic_roughness_texture = Texture::create_default_metallic_roughness(
+            std::sync::Arc::new(context.raw_device()),
+            std::sync::Arc::new(context.instance().clone()),
+            context.physical_device().device,
+            command_pool.handle(),
+            context.graphics_queue(),
+        )?;
+        
         Ok(Self {
             vertex_buffer,
             index_buffer,
             descriptor_pool,
             frame_descriptor_sets: Vec::new(),
             material_descriptor_sets: Vec::new(),
+            default_white_texture,
+            default_normal_texture,
+            default_metallic_roughness_texture,
             command_pool,
         })
     }
@@ -266,4 +299,19 @@ impl ResourceManager {
     
     /// Get a reference to the material descriptor sets
     pub fn material_descriptor_sets(&self) -> &[vk::DescriptorSet] { &self.material_descriptor_sets }
+    
+    /// Get the default white texture (base color placeholder)
+    pub fn default_white_texture(&self) -> &Texture {
+        &self.default_white_texture
+    }
+    
+    /// Get the default normal texture (normal map placeholder)
+    pub fn default_normal_texture(&self) -> &Texture {
+        &self.default_normal_texture
+    }
+    
+    /// Get the default metallic-roughness texture (material properties placeholder)
+    pub fn default_metallic_roughness_texture(&self) -> &Texture {
+        &self.default_metallic_roughness_texture
+    }
 }

@@ -57,6 +57,7 @@ impl UboManager {
             .add_combined_image_sampler(1, vk::ShaderStageFlags::FRAGMENT) // Base color texture
             .add_combined_image_sampler(2, vk::ShaderStageFlags::FRAGMENT) // Normal texture  
             .add_combined_image_sampler(3, vk::ShaderStageFlags::FRAGMENT) // Metallic-roughness texture
+            .add_combined_image_sampler(4, vk::ShaderStageFlags::FRAGMENT) // AO texture
             .build(&context.raw_device())?;
         
         // Create camera UBO buffer
@@ -216,6 +217,32 @@ impl UboManager {
                 .range(material_ubo_size)
                 .build();
             
+            // Create image info for default textures
+            let base_color_image_info = vk::DescriptorImageInfo::builder()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(resource_manager.default_white_texture().image_view())
+                .sampler(resource_manager.default_white_texture().sampler())
+                .build();
+                
+            let normal_image_info = vk::DescriptorImageInfo::builder()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(resource_manager.default_normal_texture().image_view())
+                .sampler(resource_manager.default_normal_texture().sampler())
+                .build();
+                
+            let metallic_roughness_image_info = vk::DescriptorImageInfo::builder()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(resource_manager.default_metallic_roughness_texture().image_view())
+                .sampler(resource_manager.default_metallic_roughness_texture().sampler())
+                .build();
+                
+            // AO texture uses the same as metallic-roughness for now
+            let ao_image_info = vk::DescriptorImageInfo::builder()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(resource_manager.default_white_texture().image_view())
+                .sampler(resource_manager.default_white_texture().sampler())
+                .build();
+            
             let descriptor_writes = vec![
                 vk::WriteDescriptorSet::builder()
                     .dst_set(descriptor_set)
@@ -224,7 +251,34 @@ impl UboManager {
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                     .buffer_info(&[material_buffer_info])
                     .build(),
-                // Texture bindings will be added when texture system is implemented
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(descriptor_set)
+                    .dst_binding(1)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&[base_color_image_info])
+                    .build(),
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(descriptor_set)
+                    .dst_binding(2)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&[normal_image_info])
+                    .build(),
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(descriptor_set)
+                    .dst_binding(3)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&[metallic_roughness_image_info])
+                    .build(),
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(descriptor_set)
+                    .dst_binding(4)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&[ao_image_info])
+                    .build(),
             ];
             
             unsafe {

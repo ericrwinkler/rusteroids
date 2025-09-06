@@ -60,7 +60,7 @@ impl VulkanRenderer {
         // Create specialized managers
         let mut resource_manager = ResourceManager::new(&context, config.max_frames_in_flight)?;
         let ubo_manager = UboManager::new(&context, &resource_manager, config.max_frames_in_flight)?;
-        let mut command_recorder = CommandRecorder::new(&context)?;
+        let mut command_recorder = CommandRecorder::new(&context, &context.swapchain(), config.max_frames_in_flight)?;
         let sync_manager = SyncManager::new(&context, &context.swapchain(), config.max_frames_in_flight)?;
         let swapchain_manager = SwapchainManager::new(&context, &render_pass)?;
         

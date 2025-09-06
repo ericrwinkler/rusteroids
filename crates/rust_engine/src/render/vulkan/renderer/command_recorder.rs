@@ -24,7 +24,12 @@ pub struct CommandRecorder {
 }
 
 impl CommandRecorder {
-    pub fn new(context: &VulkanContext) -> VulkanResult<Self> {
+    /// Create a new command recorder for handling command buffer operations
+    pub fn new(
+        context: &VulkanContext,
+        _swapchain: &Swapchain,
+        _max_frames_in_flight: usize
+    ) -> VulkanResult<Self> {
         log::debug!("Creating CommandRecorder...");
         
         let command_pool = CommandPool::new(

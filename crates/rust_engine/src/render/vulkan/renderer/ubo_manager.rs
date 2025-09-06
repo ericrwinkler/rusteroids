@@ -3,9 +3,9 @@
 //! Handles camera, lighting, and material uniform buffer objects.
 
 use ash::vk;
-use crate::render::vulkan::*;
+use crate::render::vulkan::{VulkanContext, VulkanResult, VulkanError, Buffer, DescriptorSetLayoutBuilder, DescriptorSetLayout};
 use crate::render::vulkan::uniform_buffer::CameraUniformData;
-use crate::render::material::{StandardMaterialUBO, UnlitMaterialUBO};
+use crate::render::material::StandardMaterialUBO;
 use crate::foundation::math::{Mat4, Vec3, Vec2, Vec4};
 
 /// Simple lighting data structure for per-frame UBO updates
@@ -38,6 +38,7 @@ pub struct UboManager {
 }
 
 impl UboManager {
+    /// Create a new UBO manager with camera, lighting, and material buffers
     pub fn new(
         context: &VulkanContext, 
         _resource_manager: &super::ResourceManager,
@@ -348,10 +349,12 @@ impl UboManager {
     }
     
     // Getters
+    /// Get the frame descriptor set layout for camera and lighting UBOs
     pub fn frame_descriptor_set_layout(&self) -> vk::DescriptorSetLayout {
         self.frame_descriptor_set_layout.handle()
     }
-    
+
+    /// Get the material descriptor set layout for material UBO and textures  
     pub fn material_descriptor_set_layout(&self) -> vk::DescriptorSetLayout {
         self.material_descriptor_set_layout.handle()
     }

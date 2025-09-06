@@ -22,6 +22,7 @@ pub struct ResourceManager {
 }
 
 impl ResourceManager {
+    /// Create a new resource manager for handling vertex/index buffers and models
     pub fn new(context: &VulkanContext, max_frames_in_flight: usize) -> VulkanResult<Self> {
         log::debug!("Creating ResourceManager...");
         
@@ -254,8 +255,15 @@ impl ResourceManager {
     }
     
     // Getters for other managers
+    /// Get a reference to the vertex buffer
     pub fn vertex_buffer(&self) -> &VertexBuffer { &self.vertex_buffer }
+    
+    /// Get a reference to the index buffer
     pub fn index_buffer(&self) -> &IndexBuffer { &self.index_buffer }
+    
+    /// Get a reference to the frame descriptor sets
     pub fn frame_descriptor_sets(&self) -> &[vk::DescriptorSet] { &self.frame_descriptor_sets }
+    
+    /// Get a reference to the material descriptor sets
     pub fn material_descriptor_sets(&self) -> &[vk::DescriptorSet] { &self.material_descriptor_sets }
 }

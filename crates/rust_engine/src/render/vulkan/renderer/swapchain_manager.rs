@@ -12,6 +12,7 @@ pub struct SwapchainManager {
 }
 
 impl SwapchainManager {
+    /// Create a new swapchain manager for handling framebuffers and depth buffers
     pub fn new(context: &VulkanContext, render_pass: &RenderPass) -> VulkanResult<Self> {
         log::debug!("Creating SwapchainManager...");
         

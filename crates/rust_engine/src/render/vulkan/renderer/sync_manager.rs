@@ -9,11 +9,11 @@ use crate::render::vulkan::*;
 pub struct SyncManager {
     frame_sync_objects: Vec<FrameSync>,
     image_sync_objects: Vec<FrameSync>,
-    max_frames_in_flight: usize,
     frames_submitted: usize,
 }
 
 impl SyncManager {
+    /// Create a new synchronization manager with per-frame and per-image sync objects
     pub fn new(
         context: &VulkanContext,
         swapchain: &Swapchain,
@@ -37,7 +37,6 @@ impl SyncManager {
         Ok(Self {
             frame_sync_objects,
             image_sync_objects,
-            max_frames_in_flight,
             frames_submitted: 0,
         })
     }

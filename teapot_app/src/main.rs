@@ -24,10 +24,12 @@ pub struct IntegratedApp {
     renderer: Renderer,
     camera: Camera,
     teapot_mesh: Option<Mesh>,
-    teapot_material: Material,
+    teapot_materials: Vec<Material>, // Multiple materials for demonstration
+    current_material_index: usize,   // Which material to cycle through
     lighting_env: LightingEnvironment,
     start_time: Instant,
     total_rotation: f32, // Total rotation in radians
+    last_material_switch: Instant, // For automatic material switching
 }
 
 impl IntegratedApp {
@@ -64,14 +66,55 @@ impl IntegratedApp {
         camera.set_position(Vec3::new(4.0, -6.0, 8.0)); // Vulkan: -Y = above, +Z = away from origin
         camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0)); // Vulkan Y-down up vector
         
-        // Create material for teapot
-        let teapot_material = Material::standard_pbr(StandardMaterialParams {
-            base_color: Vec3::new(0.8, 0.7, 0.5), // Warm tan color
-            alpha: 1.0,
-            metallic: 0.1,  // Slightly metallic
-            roughness: 0.3, // Medium roughness
-            ..Default::default()
-        }).with_name("Teapot Material");
+        // Create multiple materials for demonstration
+        let teapot_materials = vec![
+            // Material 1: Classic ceramic (warm tan, medium roughness)
+            Material::standard_pbr(StandardMaterialParams {
+                base_color: Vec3::new(0.8, 0.7, 0.5), // Warm tan
+                alpha: 1.0,
+                metallic: 0.1,
+                roughness: 0.3,
+                ..Default::default()
+            }).with_name("Ceramic Teapot"),
+            
+            // Material 2: Metallic (silver-like, low roughness)
+            Material::standard_pbr(StandardMaterialParams {
+                base_color: Vec3::new(0.9, 0.9, 0.9), // Light gray
+                alpha: 1.0,
+                metallic: 0.9, // Very metallic
+                roughness: 0.1, // Very smooth
+                ..Default::default()
+            }).with_name("Metallic Silver"),
+            
+            // Material 3: Rough plastic (bright color, high roughness)
+            Material::standard_pbr(StandardMaterialParams {
+                base_color: Vec3::new(0.2, 0.6, 0.9), // Bright blue
+                alpha: 1.0,
+                metallic: 0.0, // Non-metallic
+                roughness: 0.8, // Very rough
+                ..Default::default()
+            }).with_name("Rough Plastic"),
+            
+            // Material 4: Gold (yellow metallic, medium roughness)
+            Material::standard_pbr(StandardMaterialParams {
+                base_color: Vec3::new(1.0, 0.8, 0.2), // Golden yellow
+                alpha: 1.0,
+                metallic: 0.9,
+                roughness: 0.2,
+                ..Default::default()
+            }).with_name("Gold"),
+            
+            // Material 5: Jade (green, slightly metallic)
+            Material::standard_pbr(StandardMaterialParams {
+                base_color: Vec3::new(0.2, 0.7, 0.3), // Deep green
+                alpha: 1.0,
+                metallic: 0.3,
+                roughness: 0.4,
+                ..Default::default()
+            }).with_name("Jade"),
+        ];
+        
+        let current_material_index = 0;
         
         // Create custom lighting environment with single strong directional light
         // NOTE: Current renderer only supports ONE light (uses first directional light only)
@@ -81,9 +124,9 @@ impl IntegratedApp {
             .with_ambient(Vec3::new(0.15, 0.12, 0.18), 0.1) // Slightly blue ambient
             // Main directional light from upper-left-front using Vulkan coordinates
             .add_light(Light::directional(
-                Vec3::new(-0.5, -1.0, 0.3),  // Vulkan: -Y = from above, +Z = toward viewer
+                Vec3::new(-0.5, 1.0, 0.3),  // Vulkan: -Y = from above, +Z = toward viewer
                 Vec3::new(1.0, 0.95, 0.9),   // Warm white color
-                2.0,                         // Strong intensity for clear lighting
+                1.5,                         // Strong intensity for clear lighting
             ));
         
         Self {
@@ -91,7 +134,9 @@ impl IntegratedApp {
             renderer,
             camera,
             teapot_mesh: None,
-            teapot_material,
+            teapot_materials,
+            current_material_index,
+            last_material_switch: Instant::now(),
             lighting_env,
             start_time: Instant::now(),
             total_rotation: 0.0,
@@ -244,6 +289,17 @@ impl IntegratedApp {
         self.camera.set_position(Vec3::new(camera_x, camera_y, camera_z));
         // Always look at the teapot at origin - use Vulkan Y-down up vector
         self.camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
+        
+        // Material switching: automatically cycle through materials every 3 seconds
+        let material_switch_interval = 3.0; // seconds
+        if self.last_material_switch.elapsed().as_secs_f32() >= material_switch_interval {
+            self.current_material_index = (self.current_material_index + 1) % self.teapot_materials.len();
+            self.last_material_switch = Instant::now();
+            
+            let current_material = &self.teapot_materials[self.current_material_index];
+            let material_name = current_material.name.as_deref().unwrap_or("Unnamed Material");
+            log::info!("Switched to material: {}", material_name);
+        }
     }    fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Begin frame
         self.renderer.begin_frame();
@@ -259,11 +315,14 @@ impl IntegratedApp {
             let rotation_y = self.total_rotation;
             let model_matrix = Mat4::rotation_y(rotation_y);
             
-            // Submit teapot for rendering
+            // Get current material
+            let current_material = &self.teapot_materials[self.current_material_index];
+            
+            // Submit teapot for rendering with current material
             self.renderer.draw_mesh_3d(
                 teapot_mesh,
                 &model_matrix,
-                &self.teapot_material
+                current_material
             )?;
         } else {
             log::warn!("No teapot mesh to render!");

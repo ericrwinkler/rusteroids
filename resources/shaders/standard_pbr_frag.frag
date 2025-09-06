@@ -35,19 +35,45 @@ layout(location = 0) out vec4 fragColor;
 
 // Simple PBR lighting calculation
 vec3 calculatePBR(vec3 albedo, float metallic, float roughness, vec3 normal, vec3 lightDir, vec3 viewDir, vec3 lightColor) {
-    // Simplified PBR - we'll improve this later
+    // Improved PBR with more pronounced material differences
     float NdotL = max(dot(normal, lightDir), 0.0);
-    
-    // Simple diffuse
-    vec3 diffuse = albedo * NdotL;
-    
-    // Simple specular approximation
+    float NdotV = max(dot(normal, viewDir), 0.0);
     vec3 halfDir = normalize(lightDir + viewDir);
     float NdotH = max(dot(normal, halfDir), 0.0);
-    float spec = pow(NdotH, 64.0 * (1.0 - roughness));
-    vec3 specular = mix(vec3(0.04), albedo, metallic) * spec;
+    float VdotH = max(dot(viewDir, halfDir), 0.0);
     
-    return (diffuse + specular) * lightColor;
+    // Fresnel reflectance at normal incidence (for dielectrics use 0.04, for metals use albedo)
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+    
+    // Fresnel term (Schlick approximation)
+    vec3 F = F0 + (1.0 - F0) * pow(clamp(1.0 - VdotH, 0.0, 1.0), 5.0);
+    
+    // Distribution term (GGX/Trowbridge-Reitz)
+    float alpha = roughness * roughness;
+    float alpha2 = alpha * alpha;
+    float denom = NdotH * NdotH * (alpha2 - 1.0) + 1.0;
+    float D = alpha2 / (3.14159265 * denom * denom);
+    
+    // Geometry term (Smith model)
+    float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    float G1L = NdotL / (NdotL * (1.0 - k) + k);
+    float G1V = NdotV / (NdotV * (1.0 - k) + k);
+    float G = G1L * G1V;
+    
+    // Cook-Torrance BRDF
+    vec3 numerator = D * G * F;
+    float denominator = 4.0 * NdotV * NdotL + 0.0001; // Add small value to prevent divide by zero
+    vec3 specular = numerator / denominator;
+    
+    // Diffuse term (Lambertian)
+    // For energy conservation, diffuse should be reduced by the specular contribution
+    vec3 kS = F; // Specular reflection coefficient
+    vec3 kD = vec3(1.0) - kS; // Diffuse reflection coefficient
+    kD *= 1.0 - metallic; // Metallic surfaces have no diffuse lighting
+    
+    vec3 diffuse = kD * albedo / 3.14159265;
+    
+    return (diffuse + specular) * lightColor * NdotL;
 }
 
 void main() {

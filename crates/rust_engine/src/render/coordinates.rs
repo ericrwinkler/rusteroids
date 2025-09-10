@@ -1,8 +1,17 @@
 //! Coordinate system conversion utilities
 //!
 //! This module provides utilities for converting between different coordinate systems
-//! commonly used in 3D graphics, allowing applications to handle coordinate conversions
-//! explicitly rather than having them hardcoded in asset loading.
+//! when needed for specific asset formats or interoperability requirements.
+//!
+//! # Johannes Unterguggenberger Guide Compliance
+//! 
+//! For proper Vulkan rendering following academic standards, the recommended approach is:
+//! 1. Keep assets in their native Y-up right-handed format during loading
+//! 2. Use the X matrix (vulkan_coordinate_transform) during rendering for conversion
+//! 3. Follow the complete chain: C = P × X × V
+//!
+//! This coordinate converter should only be used for special cases where manual
+//! conversion is explicitly required, not as part of the standard rendering pipeline.
 
 use crate::render::mesh::Vertex;
 
@@ -10,8 +19,10 @@ use crate::render::mesh::Vertex;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoordinateSystem {
     /// Standard Y-up, right-handed coordinate system (common in modeling tools, OBJ files)
+    /// This is the recommended format for assets in the Johannes Unterguggenberger guide approach
     YUpRightHanded,
-    /// Y-down, left-handed coordinate system (Vulkan, DirectX)
+    /// Y-down coordinate system (used by some legacy conversion workflows)
+    /// NOTE: Modern Vulkan rendering should use Y-up assets + X matrix conversion instead
     YDownLeftHanded,
     /// Z-up, right-handed coordinate system (some CAD tools)
     ZUpRightHanded,
@@ -45,7 +56,9 @@ impl CoordinateConverter {
         }
     }
     
-    /// Convert from Y-up right-handed (OBJ) to Y-down left-handed (Vulkan)
+    /// Convert from Y-up right-handed (OBJ) to Y-down coordinates (legacy conversion)
+    /// NOTE: This should NOT be used in the standard rendering pipeline when following
+    /// Johannes Unterguggenberger's guide. Use X matrix conversion during rendering instead.
     fn convert_y_up_to_vulkan(&self, vertices: &mut [Vertex]) {
         for vertex in vertices {
             // Convert position: flip Y coordinate
@@ -67,7 +80,9 @@ impl CoordinateConverter {
 }
 
 impl Default for CoordinateConverter {
-    /// Default converter: Y-up right-handed to Y-down left-handed (OBJ to Vulkan)
+    /// Default converter: Y-up right-handed to Y-down (legacy conversion)
+    /// NOTE: For Johannes Unterguggenberger guide compliance, avoid using this during
+    /// standard asset loading. Keep assets in Y-up format and use X matrix in rendering.
     fn default() -> Self {
         Self::new(CoordinateSystem::YUpRightHanded, CoordinateSystem::YDownLeftHanded)
     }

@@ -222,8 +222,8 @@ impl ObjLoader {
                 normal[1] /= length;
                 normal[2] /= length;
             } else {
-                // Fallback for degenerate normals (Vulkan Y-down convention)
-                *normal = [0.0, -1.0, 0.0];
+                // Fallback for degenerate normals (standard Y-up convention)
+                *normal = [0.0, 1.0, 0.0];
             }
         }
     }

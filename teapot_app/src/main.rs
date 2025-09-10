@@ -12,7 +12,6 @@ use rust_engine::render::{
     lighting::{LightingEnvironment, Light},
     Renderer,
     VulkanRendererConfig,
-    CoordinateConverter,
     WindowHandle,
 };
 use rust_engine::foundation::math::{Vec3, Mat4, Mat4Ext};
@@ -52,19 +51,19 @@ impl IntegratedApp {
             .expect("Failed to create renderer");
         log::info!("Vulkan renderer created successfully");
         
-        // Create camera using Vulkan coordinate system
+        // Create camera using standard Y-up view space (guide-compliant)
         log::info!("Creating camera...");
         let mut camera = Camera::perspective(
-            Vec3::new(4.0, -6.0, 8.0), // Vulkan: -Y = above origin, +Z = away from origin
-            45.0, // FOV in degrees - will be converted to radians in update_projection_matrix
+            Vec3::new(4.0, 4.0, 8.0), // Y-up view space: camera above teapot, looking down
+            45.0, // FOV in degrees - will be converted to radians internally
             800.0 / 600.0,
             0.1,
             100.0
         );
         
-        // Position camera to look at teapot using Vulkan coordinate conventions
-        camera.set_position(Vec3::new(4.0, -6.0, 8.0)); // Vulkan: -Y = above, +Z = away from origin
-        camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0)); // Vulkan Y-down up vector
+        // Position camera above teapot, looking down at it (teapot will be slightly below camera)
+        camera.set_position(Vec3::new(4.0, 4.0, 8.0)); // Y-up: +Y = above, +Z = away from origin
+        camera.look_at(Vec3::new(0.0, -1.0, 0.0), Vec3::new(0.0, 1.0, 0.0)); // Look down at teapot, Y-up vector
         
         // Create multiple materials for demonstration
         let teapot_materials = vec![
@@ -122,11 +121,12 @@ impl IntegratedApp {
         let lighting_env = LightingEnvironment::new()
             // Low ambient for dramatic contrast
             .with_ambient(Vec3::new(0.15, 0.12, 0.18), 0.1) // Slightly blue ambient
-            // Main directional light from upper-left-front using Vulkan coordinates
+            // Main directional light from above and to the right using Y-up coordinates
+            // Light direction points in direction light travels (toward surface)
             .add_light(Light::directional(
-                Vec3::new(-0.5, 1.0, 0.3),  // Vulkan: -Y = from above, +Z = toward viewer
-                Vec3::new(1.0, 0.95, 0.9),   // Warm white color
-                1.5,                         // Strong intensity for clear lighting
+                Vec3::new(-0.7, -1.0, 0.3), // Light travels: left→right, above→below, back→forward
+                Vec3::new(1.0, 0.95, 0.9),  // Warm white color
+                1.5,                        // Strong intensity for clear lighting
             ));
         
         Self {
@@ -178,9 +178,9 @@ impl IntegratedApp {
                     }
                 }
                 
-                // Convert from OBJ coordinates (Y-up) to Vulkan coordinates (Y-down)
-                let converter = CoordinateConverter::default();
-                converter.convert_mesh(&mut mesh.vertices);
+                // Keep assets in native Y-up format - coordinate conversion handled by X matrix during rendering
+                // This follows Johannes Unterguggenberger's guide: C = P × X × V
+                // where X matrix handles conversion from Y-up view space to Vulkan conventions
                 
                 log::info!("Loaded teapot mesh successfully with {} vertices and {} indices", 
                           mesh.vertices.len(), mesh.indices.len());
@@ -275,20 +275,20 @@ impl IntegratedApp {
         
         // Camera oscillation: move up and down slowly (period of 6 seconds)
         let oscillation_period = 6.0; // seconds for full up-down-up cycle
-        let oscillation_amplitude = 3.0; // how far up/down to move
-        let base_height = -4.0; // Vulkan: negative Y = above teapot
+        let oscillation_amplitude = 2.0; // how far up/down to move
+        let base_height = 4.0; // Y-up: positive Y = above teapot (camera looking down)
 
         let y_offset = (elapsed_seconds * 2.0 * std::f32::consts::PI / oscillation_period).sin() * oscillation_amplitude;
         let camera_y = base_height + y_offset;
         
         // Keep camera at fixed X and Z distance, but vary height
         let camera_x = 4.0;   // To the right for perspective  
-        let camera_z = 8.0;   // Away from object (Vulkan: +Z = away from origin)
+        let camera_z = 8.0;   // Away from object (+Z = away from origin)
         
-        // Update camera position to oscillate up and down using Vulkan coordinates
+        // Update camera position to oscillate up and down using Y-up coordinates
         self.camera.set_position(Vec3::new(camera_x, camera_y, camera_z));
-        // Always look at the teapot at origin - use Vulkan Y-down up vector
-        self.camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
+        // Look down at teapot (now positioned at y=-2) - camera above at y=4+
+        self.camera.look_at(Vec3::new(0.0, -2.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
         
         // Material switching: automatically cycle through materials every 3 seconds
         let material_switch_interval = 3.0; // seconds
@@ -310,10 +310,12 @@ impl IntegratedApp {
         
         // Render teapot if loaded
         if let Some(ref teapot_mesh) = self.teapot_mesh {
-            // Rotate around Y axis for spinning - no additional transforms needed 
-            // since assets are now loaded in correct Vulkan coordinate system
+            // Create model transformation: position lower + flip upright + spinning animation
             let rotation_y = self.total_rotation;
-            let model_matrix = Mat4::rotation_y(rotation_y);
+            let flip_transform = Mat4::rotation_y(std::f32::consts::PI);     // 180° flip around Y-axis (turn around)
+            let spin_transform = Mat4::rotation_y(rotation_y);               // Y-axis spinning
+            let translation = Mat4::new_translation(&Vec3::new(0.0, -2.0, 0.0)); // Move teapot lower by 2 units
+            let model_matrix = translation * spin_transform * flip_transform; // Apply flip, then spin, then translate
             
             // Get current material
             let current_material = &self.teapot_materials[self.current_material_index];

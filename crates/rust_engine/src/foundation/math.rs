@@ -260,8 +260,8 @@ impl Mat4Ext for Mat4 {
     }
     
     fn look_at(eye: Vec3, target: Vec3, up: Vec3) -> Mat4 {
-        // Right-handed look-at matrix for Vulkan coordinate system
-        // Vulkan uses Y-down, Z-into-screen convention
+        // Standard right-handed look-at matrix for Y-up view space
+        // Vulkan coordinate conversion handled by separate X matrix during rendering
         let forward = (target - eye).normalize();
         let right = forward.cross(&up).normalize();
         let camera_up = right.cross(&forward);
@@ -291,10 +291,10 @@ impl Mat4Ext for Mat4 {
         //     [0   0  -1  0] 
         //     [0   0   0  1]
         // 
-        // The inverse flips Y and Z axes to align with Vulkan's expectations:
+        // The inverse flips Y and Z axes to align with Vulkan's clip space conventions:
         // - X axis remains unchanged (right is right)  
-        // - Y axis flipped (up becomes down for Vulkan Y-down)
-        // - Z axis flipped (forward becomes into screen for Vulkan Z-forward)
+        // - Y axis flipped (converts Y-up view space to Vulkan's Y-down clip space)
+        // - Z axis flipped (converts Z-backward view space to Vulkan's Z-forward clip space)
         Mat4::new(
             1.0,  0.0,  0.0, 0.0,
             0.0, -1.0,  0.0, 0.0,

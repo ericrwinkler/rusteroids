@@ -109,8 +109,8 @@ void main() {
         // For now, just use the vertex normal
     }
     
-    // Lighting calculations
-    vec3 lightDir = normalize(-lighting.directional_light_direction.xyz);
+    // Lighting calculations - standard world space lighting
+    vec3 lightDir = normalize(lighting.directional_light_direction.xyz); // Direction light travels (no negation)
     vec3 viewDir = normalize(fragCameraPosition - fragPosition);
     vec3 lightColor = lighting.directional_light_color.rgb * lighting.directional_light_direction.w;
     

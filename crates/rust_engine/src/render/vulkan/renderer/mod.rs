@@ -196,7 +196,9 @@ impl crate::render::RenderBackend for VulkanRenderer {
     }
     
     fn set_material_color(&mut self, color: [f32; 4]) {
-        // Delegate to UBO manager for material color updates
+        // Update push constants for multi-light shaders
+        self.command_recorder.set_material_color(color);
+        // Also delegate to UBO manager for material UBO-based shaders  
         if let Err(e) = self.ubo_manager.update_material_color(color) {
             log::error!("Failed to update material color: {:?}", e);
         }

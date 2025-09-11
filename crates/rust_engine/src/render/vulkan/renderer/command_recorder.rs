@@ -11,6 +11,7 @@ use crate::render::vulkan::*;
 struct PushConstants {
     model_matrix: [[f32; 4]; 4],    // 64 bytes - model transformation
     normal_matrix: [[f32; 4]; 3],   // 48 bytes - normal transformation (3×4 padded)
+    material_color: [f32; 4],       // 16 bytes - material base color
 }
 
 unsafe impl bytemuck::Pod for PushConstants {}
@@ -51,6 +52,7 @@ impl CommandRecorder {
                     [0.0, 1.0, 0.0, 0.0],
                     [0.0, 0.0, 1.0, 0.0],
                 ],
+                material_color: [1.0, 1.0, 1.0, 1.0], // Default white material
             },
             pending_command_buffers: Vec::new(),
         })
@@ -87,6 +89,12 @@ impl CommandRecorder {
             [transposed[(0, 1)], transposed[(1, 1)], transposed[(2, 1)], 0.0],
             [transposed[(0, 2)], transposed[(1, 2)], transposed[(2, 2)], 0.0],
         ];
+    }
+    
+    /// Set material color for push constants
+    pub fn set_material_color(&mut self, color: [f32; 4]) {
+        self.push_constants.material_color = color;
+        log::trace!("CommandRecorder: Set material color in push constants to: {:?}", color);
     }
     
     /// Record a complete frame

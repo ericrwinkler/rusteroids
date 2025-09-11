@@ -10,18 +10,55 @@ use crate::foundation::math::{Mat4, Vec3, Vec2, Vec4};
 use crate::render::lighting::MultiLightEnvironment;
 
 /// Multi-light UBO structure that matches shader expectations
-/// This matches the TEMPORARY SimpleLightingUBO used in Step 1.2 shaders
+/// This matches the MultiLightUBO in the multi_light_frag.frag shader
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy)]
 struct MultiLightingUBO {
     ambient_color: [f32; 4],                // 16 bytes - RGBA ambient
-    directional_light_direction: [f32; 4],  // 16 bytes - XYZ direction + W intensity  
-    directional_light_color: [f32; 4],      // 16 bytes - RGB color + A unused
-    _padding: [f32; 4],                     // 16 bytes - padding for alignment
+    directional_light_count: u32,           // 4 bytes
+    point_light_count: u32,                 // 4 bytes  
+    spot_light_count: u32,                  // 4 bytes
+    _padding: u32,                          // 4 bytes - total 16 bytes
+    directional_lights: [DirectionalLightData; 4], // 4 * 32 = 128 bytes
+    point_lights: [PointLightData; 8],              // 8 * 48 = 384 bytes
+    spot_lights: [SpotLightData; 4],                // 4 * 64 = 256 bytes
+}
+
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy)]
+struct DirectionalLightData {
+    direction: [f32; 4],    // 16 bytes - xyz + intensity
+    color: [f32; 4],        // 16 bytes - rgb + padding
+}
+
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy)]
+struct PointLightData {
+    position: [f32; 4],     // 16 bytes - xyz + range
+    color: [f32; 4],        // 16 bytes - rgb + intensity
+    attenuation: [f32; 4],  // 16 bytes - constant, linear, quadratic, padding
+}
+
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy)]
+struct SpotLightData {
+    position: [f32; 4],     // 16 bytes - xyz + range
+    direction: [f32; 4],    // 16 bytes - xyz + intensity
+    color: [f32; 4],        // 16 bytes - rgb + padding
+    cone_angles: [f32; 4],  // 16 bytes - inner, outer, unused, unused
 }
 
 unsafe impl bytemuck::Pod for MultiLightingUBO {}
 unsafe impl bytemuck::Zeroable for MultiLightingUBO {}
+
+unsafe impl bytemuck::Pod for DirectionalLightData {}
+unsafe impl bytemuck::Zeroable for DirectionalLightData {}
+
+unsafe impl bytemuck::Pod for PointLightData {}
+unsafe impl bytemuck::Zeroable for PointLightData {}
+
+unsafe impl bytemuck::Pod for SpotLightData {}
+unsafe impl bytemuck::Zeroable for SpotLightData {}
 
 /// Manages all UBO resources and updates
 pub struct UboManager {
@@ -86,9 +123,39 @@ impl UboManager {
         // Create per-frame lighting UBO buffers
         let lighting_ubo_data = MultiLightingUBO {
             ambient_color: [0.2, 0.2, 0.2, 1.0],
-            directional_light_direction: [-0.5, -1.0, -0.3, 0.8],
-            directional_light_color: [1.0, 0.95, 0.9, 1.0],
-            _padding: [0.0; 4],
+            directional_light_count: 1,
+            point_light_count: 0,
+            spot_light_count: 0,
+            _padding: 0,
+            directional_lights: [
+                DirectionalLightData {
+                    direction: [-0.5, -1.0, -0.3, 0.8],
+                    color: [1.0, 0.95, 0.9, 1.0],
+                },
+                DirectionalLightData {
+                    direction: [0.0; 4],
+                    color: [0.0; 4],
+                },
+                DirectionalLightData {
+                    direction: [0.0; 4],
+                    color: [0.0; 4],
+                },
+                DirectionalLightData {
+                    direction: [0.0; 4],
+                    color: [0.0; 4],
+                },
+            ],
+            point_lights: [PointLightData {
+                position: [0.0; 4],
+                color: [0.0; 4],
+                attenuation: [1.0, 0.0, 0.0, 0.0],
+            }; 8],
+            spot_lights: [SpotLightData {
+                position: [0.0; 4],
+                direction: [0.0; 4],
+                color: [0.0; 4],
+                cone_angles: [0.0; 4],
+            }; 4],
         };
         let lighting_ubo_size = std::mem::size_of::<MultiLightingUBO>() as vk::DeviceSize;
         
@@ -317,25 +384,62 @@ impl UboManager {
     
     /// Update lighting UBO data from MultiLightEnvironment
     pub fn update_multi_light_environment(&mut self, multi_light_env: &MultiLightEnvironment) {
-        // Convert MultiLightEnvironment to current shader-compatible format
-        // This maintains Step 1.2 shader compatibility while using new data structures
-        let lighting_ubo_data = if multi_light_env.header.directional_light_count > 0 {
-            // Use first directional light
-            let first_light = &multi_light_env.directional_lights[0];
-            MultiLightingUBO {
-                ambient_color: multi_light_env.header.ambient_color,
-                directional_light_direction: first_light.direction,
-                directional_light_color: first_light.color,
-                _padding: [0.0; 4],
-            }
-        } else {
-            // No directional lights, use default
-            MultiLightingUBO {
-                ambient_color: multi_light_env.header.ambient_color,
-                directional_light_direction: [0.0, -1.0, 0.0, 0.5],
-                directional_light_color: [1.0, 1.0, 1.0, 1.0],
-                _padding: [0.0; 4],
-            }
+        // Convert MultiLightEnvironment to shader-compatible UBO format
+        
+        // Convert directional lights
+        let mut directional_lights = [DirectionalLightData {
+            direction: [0.0; 4],
+            color: [0.0; 4],
+        }; 4];
+        for i in 0..multi_light_env.header.directional_light_count.min(4) as usize {
+            let src = &multi_light_env.directional_lights[i];
+            directional_lights[i] = DirectionalLightData {
+                direction: src.direction,
+                color: src.color,
+            };
+        }
+        
+        // Convert point lights
+        let mut point_lights = [PointLightData {
+            position: [0.0; 4],
+            color: [0.0; 4],
+            attenuation: [1.0, 0.0, 0.0, 0.0],
+        }; 8];
+        for i in 0..multi_light_env.header.point_light_count.min(8) as usize {
+            let src = &multi_light_env.point_lights[i];
+            point_lights[i] = PointLightData {
+                position: src.position,
+                color: src.color,
+                attenuation: src.attenuation,
+            };
+        }
+        
+        // Convert spot lights
+        let mut spot_lights = [SpotLightData {
+            position: [0.0; 4],
+            direction: [0.0; 4],
+            color: [0.0; 4],
+            cone_angles: [0.0; 4],
+        }; 4];
+        for i in 0..multi_light_env.header.spot_light_count.min(4) as usize {
+            let src = &multi_light_env.spot_lights[i];
+            spot_lights[i] = SpotLightData {
+                position: src.position,
+                direction: src.direction,
+                color: src.color,
+                cone_angles: src.cone_angles,
+            };
+        }
+        
+        let lighting_ubo_data = MultiLightingUBO {
+            ambient_color: multi_light_env.header.ambient_color,
+            directional_light_count: multi_light_env.header.directional_light_count,
+            point_light_count: multi_light_env.header.point_light_count,
+            spot_light_count: multi_light_env.header.spot_light_count,
+            _padding: 0,
+            directional_lights,
+            point_lights,
+            spot_lights,
         };
         
         let lighting_bytes = unsafe { 
@@ -348,6 +452,9 @@ impl UboManager {
         if let Err(e) = self.lighting_ubo_buffers[self.current_frame].write_data(lighting_bytes) {
             log::error!("Failed to update lighting UBO: {:?}", e);
         }
+        
+        // Update frame counter for next update
+        self.current_frame = (self.current_frame + 1) % self.max_frames_in_flight;
     }
     
     /// Legacy update lighting method for backwards compatibility
@@ -355,9 +462,39 @@ impl UboManager {
     pub fn update_lighting(&mut self, direction: [f32; 3], intensity: f32, color: [f32; 3], ambient_intensity: f32) {
         let lighting_ubo_data = MultiLightingUBO {
             ambient_color: [ambient_intensity * 0.2, ambient_intensity * 0.2, ambient_intensity * 0.2, 1.0],
-            directional_light_direction: [direction[0], direction[1], direction[2], intensity],
-            directional_light_color: [color[0], color[1], color[2], 1.0],
-            _padding: [0.0; 4],
+            directional_light_count: 1,
+            point_light_count: 0,
+            spot_light_count: 0,
+            _padding: 0,
+            directional_lights: [
+                DirectionalLightData {
+                    direction: [direction[0], direction[1], direction[2], intensity],
+                    color: [color[0], color[1], color[2], 1.0],
+                },
+                DirectionalLightData {
+                    direction: [0.0; 4],
+                    color: [0.0; 4],
+                },
+                DirectionalLightData {
+                    direction: [0.0; 4],
+                    color: [0.0; 4],
+                },
+                DirectionalLightData {
+                    direction: [0.0; 4],
+                    color: [0.0; 4],
+                },
+            ],
+            point_lights: [PointLightData {
+                position: [0.0; 4],
+                color: [0.0; 4],
+                attenuation: [1.0, 0.0, 0.0, 0.0],
+            }; 8],
+            spot_lights: [SpotLightData {
+                position: [0.0; 4],
+                direction: [0.0; 4],
+                color: [0.0; 4],
+                cone_angles: [0.0; 4],
+            }; 4],
         };
         
         let lighting_bytes = unsafe { 

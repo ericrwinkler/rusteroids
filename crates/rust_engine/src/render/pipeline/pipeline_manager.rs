@@ -199,7 +199,7 @@ impl PipelineManager {
         let push_constant_range = vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
             offset: 0,
-            size: 112, // Model matrix + normal matrix (simplified, no material color)
+            size: 128, // Model matrix (64) + normal matrix (48) + material color (16) = 128 bytes
         };
         
         let push_constant_ranges = [push_constant_range];

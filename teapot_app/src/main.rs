@@ -1,9 +1,10 @@
-//! Teapot demo application
+//! Teapot demo application with Engine ECS (Phase 2)
 //! 
 //! This demonstrates the engine's rendering capabilities by displaying
-//! a rotating teapot model.
+//! a rotating teapot model using the proper engine ECS system instead of hardcoded values.
 
 use rust_engine::assets::obj_loader::ObjLoader;
+use rust_engine::ecs::{World, Entity, LightFactory, LightingSystem as EcsLightingSystem, TransformComponent, LightComponent};
 use rust_engine::render::{
     Camera,
     Mesh,
@@ -22,10 +23,19 @@ pub struct IntegratedApp {
     window: WindowHandle,
     renderer: Renderer,
     camera: Camera,
+    
+    // Engine ECS (Phase 2 - Proper Architecture)
+    world: World,
+    lighting_system: EcsLightingSystem,
+    #[allow(dead_code)]
+    sun_light_entity: Entity,        // Main directional light entity
+    point_light_entity: Entity,      // Point light entity (Phase 3 Step 3.1)
+    
+    // Legacy rendering data (kept for compatibility during transition)
     teapot_mesh: Option<Mesh>,
     teapot_materials: Vec<Material>, // Multiple materials for demonstration
     current_material_index: usize,   // Which material to cycle through
-    lighting_env: MultiLightEnvironment,
+    
     start_time: Instant,
     total_rotation: f32, // Total rotation in radians
     last_material_switch: Instant, // For automatic material switching
@@ -130,17 +140,48 @@ impl IntegratedApp {
             ));
         
         // Convert to multi-light environment for UBO-based lighting
-        let multi_light_env = MultiLightEnvironment::from_legacy_lighting_environment(&legacy_lighting_env);
+        let _multi_light_env = MultiLightEnvironment::from_legacy_lighting_environment(&legacy_lighting_env);
+        
+        // Initialize Engine ECS (Phase 2 - Proper Architecture)
+        let mut world = World::new();
+        let lighting_system = EcsLightingSystem::new();
+        
+        // Create light entity with reduced intensity for better multi-light visibility
+        let sun_light_entity = world.create_entity();
+        world.add_component(sun_light_entity, TransformComponent::identity()); // Directional lights don't need transform position
+        world.add_component(sun_light_entity, LightFactory::directional(
+            Vec3::new(-0.7, -1.0, 0.3),     // Direction from above-right
+            Vec3::new(1.0, 0.95, 0.9),      // Warm white color  
+            0.2                              // Further reduced intensity for better visibility
+        ));
+        
+        // Phase 3 Step 3.1: Add second light entity (point light)
+        // Position strategically for visible lighting difference on teapot (left side, contrasting directional from right)
+        let point_light_entity = world.create_entity();
+        world.add_component(point_light_entity, TransformComponent::from_position(Vec3::new(-3.0, 2.0, 2.0)));
+        world.add_component(point_light_entity, LightFactory::point(
+            Vec3::new(-3.0, 2.0, 2.0),      // Position (to the left and above, further away)
+            Vec3::new(0.0, 0.5, 0.0),       // Red color (contrasts with warm white directional)
+            0.8,                             // Slightly higher intensity since it's further away
+            0.5                              // Smaller range for more localized effect
+        ));
         
         Self {
             window,
             renderer,
             camera,
+            
+            // Engine ECS
+            world,
+            lighting_system,
+            sun_light_entity,
+            point_light_entity,
+            
+            // Legacy rendering data
             teapot_mesh: None,
             teapot_materials,
             current_material_index,
             last_material_switch: Instant::now(),
-            lighting_env: multi_light_env,
             start_time: Instant::now(),
             total_rotation: 0.0,
         }
@@ -278,6 +319,19 @@ impl IntegratedApp {
         // Calculate elapsed time for smooth animations
         let elapsed_seconds = self.start_time.elapsed().as_secs_f32();
         
+        // Animate the red point light with a sin wave (different period for distinction)
+        let light_flash_period = 8.0; // seconds for full bright-dim-bright cycle  
+        let base_intensity = 0.2; // Base intensity (dimmed)
+        let flash_amplitude = 0.2; // How much brighter it gets (total range: 0.0 to 0.8)
+        
+        let intensity_multiplier = (elapsed_seconds * 2.0 * std::f32::consts::PI / light_flash_period).sin();
+        let current_light_intensity = base_intensity + (intensity_multiplier * flash_amplitude);
+        
+        // Update the point light's intensity
+        if let Some(light_component) = self.world.get_component_mut::<LightComponent>(self.point_light_entity) {
+            light_component.intensity = current_light_intensity;
+        }
+        
         // Camera oscillation: move up and down slowly (period of 6 seconds)
         let oscillation_period = 6.0; // seconds for full up-down-up cycle
         let oscillation_amplitude = 2.0; // how far up/down to move
@@ -307,15 +361,36 @@ impl IntegratedApp {
         }
     }
 
-    // Validation function removed - Step 1.1 completed successfully ✅
+    /// Convert Engine ECS entities to MultiLightEnvironment for rendering
+    /// CRITICAL: Must produce identical lighting to hardcoded system for validation
+    fn build_multi_light_environment_from_entities(&mut self) -> &MultiLightEnvironment {
+        // Use the engine's lighting system to convert ECS entities to render data
+        let multi_light_env = self.lighting_system.build_multi_light_environment(
+            &self.world,
+            Vec3::new(0.1, 0.08, 0.12),  // Reduced ambient for better light distinction
+            0.05                          // Lower ambient intensity
+        );
+        
+        // Debug: Log light counts to see if both lights are found  
+        log::trace!("MultiLight Environment - Directional: {}, Point: {}, Spot: {}", 
+            multi_light_env.header.directional_light_count,
+            multi_light_env.header.point_light_count,
+            multi_light_env.header.spot_light_count);
+        
+        multi_light_env
+    }
     
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Begin frame
         self.renderer.begin_frame();
         
-        // Set camera and lighting for the frame
+        // Set camera for the frame
         self.renderer.set_camera(&self.camera);
-        self.renderer.set_multi_light_environment(&self.lighting_env);
+        
+        // Build multi-light environment from entity system (Phase 2)
+        // Clone the environment to avoid borrow checker issues
+        let multi_light_env = self.build_multi_light_environment_from_entities().clone();
+        self.renderer.set_multi_light_environment(&multi_light_env);
         
         // Render teapot if loaded
         if let Some(ref teapot_mesh) = self.teapot_mesh {

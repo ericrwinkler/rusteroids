@@ -225,7 +225,7 @@ impl Renderer {
         } else {
             // FIXME: Hardcoded default lighting - should be configurable
             self.backend.set_directional_light(
-                [0.0, 1.0, 0.0],  // Default light pointing downward (+Y in right-handed system)
+                [0.0, 1.0, 0.0],  // Default light coming from below (positive Y direction in Y-up world space)
                 0.3,              // Mild default intensity
                 [1.0, 1.0, 1.0],  // White light
                 lighting.ambient_intensity,

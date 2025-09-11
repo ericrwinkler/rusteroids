@@ -132,9 +132,9 @@ impl IntegratedApp {
             // Low ambient for dramatic contrast
             .with_ambient(Vec3::new(0.15, 0.12, 0.18), 0.1) // Slightly blue ambient
             // Main directional light from above and to the right using Y-up coordinates
-            // Light direction points in direction light travels (toward surface)
+            // Direction vector represents the direction light is coming FROM (standard graphics convention)
             .add_light(Light::directional(
-                Vec3::new(-0.7, -1.0, 0.3), // Directional light coming from above and right relative to camera
+                Vec3::new(-0.7, -1.0, 0.3), // Light coming from upper-right-front: negative Y = from above, negative X = from right
                 Vec3::new(1.0, 0.95, 0.9),  // Warm white color
                 1.5,                        // Strong intensity for clear lighting
             ));
@@ -146,24 +146,24 @@ impl IntegratedApp {
         let mut world = World::new();
         let lighting_system = EcsLightingSystem::new();
         
-        // Create light entity with reduced intensity for better multi-light visibility
+        // Create directional light entity (main illumination)
         let sun_light_entity = world.create_entity();
         world.add_component(sun_light_entity, TransformComponent::identity()); // Directional lights don't need transform position
         world.add_component(sun_light_entity, LightFactory::directional(
-            Vec3::new(-0.7, -1.0, 0.3),     // Direction from above-right
+            Vec3::new(-0.7, -1.0, 0.3),     // Y-up coordinates: light coming from upper-right-front direction
             Vec3::new(1.0, 0.95, 0.9),      // Warm white color  
             0.1                             // Further reduced intensity for better visibility
         ));
         
         // Phase 3 Step 3.1: Add second light entity (point light)
-        // Position strategically for visible lighting difference on teapot (left side, contrasting directional from right)
+        // Teapot at (0, -2, 0), Camera at (4, 4, 8) - Y-up world coordinates
         let point_light_entity = world.create_entity();
         world.add_component(point_light_entity, TransformComponent::from_position(Vec3::new(-3.0, 2.0, 2.0)));
         world.add_component(point_light_entity, LightFactory::point(
-            Vec3::new(-3.0, 2.0, 2.0),      // Position (to the left and above, further away)
+            Vec3::new(-3.0, 2.0, 2.0),      // Y-up coordinates: left (-X), above teapot (+Y), forward (+Z)
             Vec3::new(0.0, 1.0, 0.0),       // Green color (contrasts with warm white directional)
             0.8,                             // Slightly higher intensity since it's further away
-            4.0                              // Smaller range for more localized effect
+            8.0                              // Range: distance to teapot ≈ 5.4 units, so 8.0 provides good coverage
         ));
         
         Self {
@@ -267,9 +267,9 @@ impl IntegratedApp {
                         }
                     }
                     WindowEvent::Key(Key::Space, _, Action::Press, _) => {
-                        // Reset camera position using Vulkan coordinates
-                        self.camera.set_position(Vec3::new(0.0, -2.0, 8.0));  // Vulkan: -Y = above
-                        self.camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
+                        // Reset camera to default position using Y-up world coordinates
+                        self.camera.set_position(Vec3::new(4.0, 4.0, 8.0));   // Y-up: +Y = above, +Z = away from origin
+                        self.camera.look_at(Vec3::new(0.0, -1.0, 0.0), Vec3::new(0.0, 1.0, 0.0)); // Look down at teapot, Y-up vector
                     }
                     _ => {}
                 }

@@ -57,6 +57,7 @@ layout(push_constant) uniform PushConstants {
 
 layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec2 fragTexCoord;
+layout(location = 2) in vec3 fragWorldPos;
 
 layout(location = 0) out vec4 fragColor;
 
@@ -82,14 +83,34 @@ void main() {
         color += diffuse;
     }
     
-    // Process all point lights
+    // Process all point lights with proper distance attenuation
     for (uint i = 0u; i < lighting.point_light_count && i < MAX_POINT_LIGHTS; ++i) {
         PointLightData light = lighting.point_lights[i];
-        // For point lights we need fragment position (currently not available)
-        // For now, apply basic point light without distance attenuation
-        // TODO: Add fragment world position for proper point light calculations
-        vec3 lightContrib = light.color.rgb * light.color.w; // color.w = intensity
-        color += lightContrib * 2.0; // Increased contribution for visibility
+        
+        // Calculate distance from fragment to light
+        vec3 lightPos = light.position.xyz;
+        vec3 lightDir = lightPos - fragWorldPos;
+        float distance = length(lightDir);
+        float range = light.position.w; // position.w contains range
+        
+        // Apply range cutoff - no contribution beyond range
+        if (distance > range) {
+            continue;
+        }
+        
+        // Normalize light direction
+        lightDir = normalize(lightDir);
+        
+        // Calculate attenuation based on distance and range
+        // Using smooth falloff: intensity * (1 - (distance/range)^2)^2
+        float attenuation = 1.0 - (distance / range);
+        attenuation = attenuation * attenuation; // Smooth quadratic falloff
+        
+        // Calculate basic lambertian lighting
+        float ndotl = max(dot(normal, lightDir), 0.0);
+        
+        vec3 lightContrib = light.color.rgb * light.color.w * attenuation * ndotl;
+        color += lightContrib;
     }
     
     // Process all spot lights

@@ -152,7 +152,7 @@ impl IntegratedApp {
         world.add_component(sun_light_entity, LightFactory::directional(
             Vec3::new(-0.7, -1.0, 0.3),     // Direction from above-right
             Vec3::new(1.0, 0.95, 0.9),      // Warm white color  
-            0.2                              // Further reduced intensity for better visibility
+            0.1                             // Further reduced intensity for better visibility
         ));
         
         // Phase 3 Step 3.1: Add second light entity (point light)
@@ -161,9 +161,9 @@ impl IntegratedApp {
         world.add_component(point_light_entity, TransformComponent::from_position(Vec3::new(-3.0, 2.0, 2.0)));
         world.add_component(point_light_entity, LightFactory::point(
             Vec3::new(-3.0, 2.0, 2.0),      // Position (to the left and above, further away)
-            Vec3::new(0.0, 0.5, 0.0),       // Red color (contrasts with warm white directional)
+            Vec3::new(0.0, 1.0, 0.0),       // Green color (contrasts with warm white directional)
             0.8,                             // Slightly higher intensity since it's further away
-            0.5                              // Smaller range for more localized effect
+            4.0                              // Smaller range for more localized effect
         ));
         
         Self {
@@ -320,9 +320,9 @@ impl IntegratedApp {
         let elapsed_seconds = self.start_time.elapsed().as_secs_f32();
         
         // Animate the red point light with a sin wave (different period for distinction)
-        let light_flash_period = 8.0; // seconds for full bright-dim-bright cycle  
-        let base_intensity = 0.2; // Base intensity (dimmed)
-        let flash_amplitude = 0.2; // How much brighter it gets (total range: 0.0 to 0.8)
+        let light_flash_period = 2.0; // seconds for full bright-dim-bright cycle  
+        let base_intensity = 1.0; // Base intensity (dimmed)
+        let flash_amplitude = 1.0; // How much brighter it gets (total range: 0.0 to 2.0)
         
         let intensity_multiplier = (elapsed_seconds * 2.0 * std::f32::consts::PI / light_flash_period).sin();
         let current_light_intensity = base_intensity + (intensity_multiplier * flash_amplitude);

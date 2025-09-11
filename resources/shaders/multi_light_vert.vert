@@ -33,6 +33,7 @@ layout(location = 2) in vec2 inTexCoord;
 
 layout(location = 0) out vec3 fragNormal;
 layout(location = 1) out vec2 fragTexCoord;
+layout(location = 2) out vec3 fragWorldPos;
 
 void main() {
     // IDENTICAL vertex processing from current vert_ubo.vert
@@ -46,4 +47,7 @@ void main() {
     
     // Pass through texture coordinates
     fragTexCoord = inTexCoord;
+    
+    // Pass world position to fragment shader for point light distance calculations
+    fragWorldPos = worldPos.xyz;
 }

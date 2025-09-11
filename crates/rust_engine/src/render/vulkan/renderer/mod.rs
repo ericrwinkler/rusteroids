@@ -206,6 +206,10 @@ impl crate::render::RenderBackend for VulkanRenderer {
         self.ubo_manager.update_lighting(direction, intensity, color, ambient_intensity);
     }
     
+    fn set_multi_light_environment(&mut self, multi_light_env: &crate::render::lighting::MultiLightEnvironment) {
+        self.ubo_manager.update_multi_light_environment(multi_light_env);
+    }
+    
     fn update_camera_ubo(&mut self, view_matrix: Mat4, projection_matrix: Mat4, view_projection_matrix: Mat4, camera_position: Vec3) {
         self.ubo_manager.update_camera(view_matrix, projection_matrix, view_projection_matrix, camera_position);
     }

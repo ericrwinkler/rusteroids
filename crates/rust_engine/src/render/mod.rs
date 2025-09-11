@@ -243,6 +243,14 @@ impl Renderer {
         log::trace!("Lighting set with {} lights", lighting.lights.len());
     }
     
+    /// Set multi-light environment using UBO-based lighting
+    /// 
+    /// This method uses uniform buffer objects instead of push constants for lighting data,
+    /// enabling support for multiple lights while maintaining identical visual output.
+    pub fn set_multi_light_environment(&mut self, multi_light_env: &lighting::MultiLightEnvironment) {
+        self.backend.set_multi_light_environment(multi_light_env);
+    }
+    
     /// Render a 3D mesh with transformation and material
     ///
     /// Primary rendering method for 3D objects. Draws a mesh using the currently

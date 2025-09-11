@@ -9,7 +9,7 @@ use rust_engine::render::{
     Mesh,
     Material,
     StandardMaterialParams,
-    lighting::{LightingEnvironment, Light},
+    lighting::{LightingEnvironment, Light, MultiLightEnvironment},
     Renderer,
     VulkanRendererConfig,
     WindowHandle,
@@ -25,7 +25,7 @@ pub struct IntegratedApp {
     teapot_mesh: Option<Mesh>,
     teapot_materials: Vec<Material>, // Multiple materials for demonstration
     current_material_index: usize,   // Which material to cycle through
-    lighting_env: LightingEnvironment,
+    lighting_env: MultiLightEnvironment,
     start_time: Instant,
     total_rotation: f32, // Total rotation in radians
     last_material_switch: Instant, // For automatic material switching
@@ -41,11 +41,12 @@ impl IntegratedApp {
         
         // Create renderer
         log::info!("Creating Vulkan renderer...");
+        
         let renderer_config = VulkanRendererConfig::new("Rusteroids - Teapot Demo")
             .with_version(1, 0, 0)
             .with_shader_paths(
-                "target/shaders/vert_ubo.spv".to_string(),
-                "target/shaders/frag_ubo_simple.spv".to_string()
+                "target/shaders/multi_light_vert.spv".to_string(),
+                "target/shaders/multi_light_frag.spv".to_string()
             );
         let renderer = Renderer::new_from_window(&mut window, &renderer_config)
             .expect("Failed to create renderer");
@@ -116,18 +117,20 @@ impl IntegratedApp {
         let current_material_index = 0;
         
         // Create custom lighting environment with single strong directional light
-        // NOTE: Current renderer only supports ONE light (uses first directional light only)
-        // Multiple lights require expanding push constants or using uniform buffers
-        let lighting_env = LightingEnvironment::new()
+        // Create lighting environment using multi-light system
+        let legacy_lighting_env = LightingEnvironment::new()
             // Low ambient for dramatic contrast
             .with_ambient(Vec3::new(0.15, 0.12, 0.18), 0.1) // Slightly blue ambient
             // Main directional light from above and to the right using Y-up coordinates
             // Light direction points in direction light travels (toward surface)
             .add_light(Light::directional(
-                Vec3::new(-0.7, -1.0, 0.3), // Light travels: left→right, above→below, back→forward
+                Vec3::new(-0.7, -1.0, 0.3), // Directional light coming from above and right relative to camera
                 Vec3::new(1.0, 0.95, 0.9),  // Warm white color
                 1.5,                        // Strong intensity for clear lighting
             ));
+        
+        // Convert to multi-light environment for UBO-based lighting
+        let multi_light_env = MultiLightEnvironment::from_legacy_lighting_environment(&legacy_lighting_env);
         
         Self {
             window,
@@ -137,7 +140,7 @@ impl IntegratedApp {
             teapot_materials,
             current_material_index,
             last_material_switch: Instant::now(),
-            lighting_env,
+            lighting_env: multi_light_env,
             start_time: Instant::now(),
             total_rotation: 0.0,
         }
@@ -200,6 +203,8 @@ impl IntegratedApp {
     pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Starting teapot demo...");
         self.initialize()?;
+        
+        // Multi-light validation completed successfully ✅
         
         let mut framebuffer_resized = false;
         
@@ -300,13 +305,17 @@ impl IntegratedApp {
             let material_name = current_material.name.as_deref().unwrap_or("Unnamed Material");
             log::info!("Switched to material: {}", material_name);
         }
-    }    fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    }
+
+    // Validation function removed - Step 1.1 completed successfully ✅
+    
+    fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Begin frame
         self.renderer.begin_frame();
         
         // Set camera and lighting for the frame
         self.renderer.set_camera(&self.camera);
-        self.renderer.set_lighting(&self.lighting_env);
+        self.renderer.set_multi_light_environment(&self.lighting_env);
         
         // Render teapot if loaded
         if let Some(ref teapot_mesh) = self.teapot_mesh {

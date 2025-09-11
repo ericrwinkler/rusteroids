@@ -303,3 +303,211 @@ impl Default for LightingEnvironment {
         Self::new()
     }
 }
+
+// ================================================================================================
+// MULTI-LIGHT UBO SYSTEM (Phase 1 - Step 1.1)
+// ================================================================================================
+
+/// Multi-light UBO header structure following Vulkano tutorial and std140 alignment
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct MultiLightUBO {
+    /// Ambient light color and intensity [R, G, B, intensity]
+    pub ambient_color: [f32; 4],
+    /// Number of active directional lights
+    pub directional_light_count: u32,
+    /// Number of active point lights
+    pub point_light_count: u32,
+    /// Number of active spot lights
+    pub spot_light_count: u32,
+    /// Padding for std140 alignment
+    pub _padding: u32,
+}
+
+/// Directional light data for GPU uniform buffer
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]  
+pub struct DirectionalLightData {
+    /// Light direction and intensity [x, y, z, intensity]
+    pub direction: [f32; 4],
+    /// Light color [r, g, b, padding]
+    pub color: [f32; 4],
+}
+
+/// Point light data for GPU uniform buffer
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct PointLightData {
+    /// Light position and range [x, y, z, range]
+    pub position: [f32; 4],
+    /// Light color and intensity [r, g, b, intensity]
+    pub color: [f32; 4],
+    /// Attenuation factors [constant, linear, quadratic, padding]
+    pub attenuation: [f32; 4],
+}
+
+/// Spot light data for GPU uniform buffer
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SpotLightData {
+    /// Light position and range [x, y, z, range]
+    pub position: [f32; 4],
+    /// Light direction and intensity [x, y, z, intensity]
+    pub direction: [f32; 4],
+    /// Light color [r, g, b, padding]
+    pub color: [f32; 4],
+    /// Cone angles [inner_angle, outer_angle, unused, unused]
+    pub cone_angles: [f32; 4],
+}
+
+/// Maximum number of directional lights supported
+pub const MAX_DIRECTIONAL_LIGHTS: usize = 4;
+/// Maximum number of point lights supported
+pub const MAX_POINT_LIGHTS: usize = 8;
+/// Maximum number of spot lights supported
+pub const MAX_SPOT_LIGHTS: usize = 4;
+
+/// Multi-light environment structure containing all light types
+#[derive(Debug, Clone)]
+pub struct MultiLightEnvironment {
+    /// UBO header with ambient lighting and light counts
+    pub header: MultiLightUBO,
+    /// Array of directional light data
+    pub directional_lights: [DirectionalLightData; MAX_DIRECTIONAL_LIGHTS],
+    /// Array of point light data
+    pub point_lights: [PointLightData; MAX_POINT_LIGHTS], 
+    /// Array of spot light data
+    pub spot_lights: [SpotLightData; MAX_SPOT_LIGHTS],
+}
+
+impl MultiLightEnvironment {
+    /// Create new empty multi-light environment
+    pub fn new() -> Self {
+        Self {
+            header: MultiLightUBO {
+                ambient_color: [0.1, 0.1, 0.1, 0.1], // Default low ambient
+                directional_light_count: 0,
+                point_light_count: 0,
+                spot_light_count: 0,
+                _padding: 0,
+            },
+            directional_lights: [DirectionalLightData { 
+                direction: [0.0, 0.0, 0.0, 0.0], 
+                color: [0.0, 0.0, 0.0, 0.0] 
+            }; MAX_DIRECTIONAL_LIGHTS],
+            point_lights: [PointLightData { 
+                position: [0.0, 0.0, 0.0, 0.0], 
+                color: [0.0, 0.0, 0.0, 0.0], 
+                attenuation: [1.0, 0.0, 0.0, 0.0] 
+            }; MAX_POINT_LIGHTS],
+            spot_lights: [SpotLightData { 
+                position: [0.0, 0.0, 0.0, 0.0], 
+                direction: [0.0, 0.0, 0.0, 0.0], 
+                color: [0.0, 0.0, 0.0, 0.0], 
+                cone_angles: [0.0, 0.0, 0.0, 0.0] 
+            }; MAX_SPOT_LIGHTS],
+        }
+    }
+
+    /// Convert from legacy LightingEnvironment to MultiLightEnvironment
+    /// This function preserves exact lighting behavior for visual validation
+    pub fn from_legacy_lighting_environment(legacy_env: &LightingEnvironment) -> Self {
+        let mut multi_env = Self::new();
+        
+        // Set ambient lighting
+        multi_env.header.ambient_color = [
+            legacy_env.ambient_color.x,
+            legacy_env.ambient_color.y, 
+            legacy_env.ambient_color.z,
+            legacy_env.ambient_intensity,
+        ];
+        
+        // Convert lights (preserving exact coordinate values)
+        let mut dir_count = 0;
+        let mut point_count = 0;
+        let mut spot_count = 0;
+        
+        for light in &legacy_env.lights {
+            match light.light_type {
+                LightType::Directional => {
+                    if dir_count < MAX_DIRECTIONAL_LIGHTS {
+                        multi_env.directional_lights[dir_count] = DirectionalLightData {
+                            // CRITICAL: Preserve exact direction values for visual validation
+                            direction: [
+                                light.direction.x,
+                                light.direction.y,
+                                light.direction.z,
+                                light.intensity,  // Store intensity in W component
+                            ],
+                            color: [
+                                light.color.x,
+                                light.color.y,
+                                light.color.z,
+                                0.0,  // Padding
+                            ],
+                        };
+                        dir_count += 1;
+                    }
+                }
+                LightType::Point => {
+                    if point_count < MAX_POINT_LIGHTS {
+                        multi_env.point_lights[point_count] = PointLightData {
+                            position: [
+                                light.position.x,
+                                light.position.y,
+                                light.position.z,
+                                light.range,
+                            ],
+                            color: [
+                                light.color.x,
+                                light.color.y,
+                                light.color.z,
+                                light.intensity,
+                            ],
+                            attenuation: [1.0, 0.09, 0.032, 0.0], // Standard attenuation values
+                        };
+                        point_count += 1;
+                    }
+                }
+                LightType::Spot => {
+                    if spot_count < MAX_SPOT_LIGHTS {
+                        multi_env.spot_lights[spot_count] = SpotLightData {
+                            position: [
+                                light.position.x,
+                                light.position.y,
+                                light.position.z,
+                                light.range,
+                            ],
+                            direction: [
+                                light.direction.x,
+                                light.direction.y,
+                                light.direction.z,
+                                light.intensity,
+                            ],
+                            color: [
+                                light.color.x,
+                                light.color.y,
+                                light.color.z,
+                                0.0,
+                            ],
+                            cone_angles: [
+                                light.inner_cone_angle,
+                                light.outer_cone_angle,
+                                0.0,
+                                0.0,
+                            ],
+                        };
+                        spot_count += 1;
+                    }
+                }
+            }
+        }
+        
+        // Set light counts
+        multi_env.header.directional_light_count = dir_count as u32;
+        multi_env.header.point_light_count = point_count as u32;
+        multi_env.header.spot_light_count = spot_count as u32;
+        
+        multi_env
+    }
+}

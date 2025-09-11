@@ -7,19 +7,21 @@ use crate::render::vulkan::{VulkanContext, VulkanResult, VulkanError, Buffer, De
 use crate::render::vulkan::uniform_buffer::CameraUniformData;
 use crate::render::material::StandardMaterialUBO;
 use crate::foundation::math::{Mat4, Vec3, Vec2, Vec4};
+use crate::render::lighting::MultiLightEnvironment;
 
-/// Simple lighting data structure for per-frame UBO updates
+/// Multi-light UBO structure that matches shader expectations
+/// This matches the TEMPORARY SimpleLightingUBO used in Step 1.2 shaders
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy)]
-struct SimpleLightingUBO {
+struct MultiLightingUBO {
     ambient_color: [f32; 4],                // 16 bytes - RGBA ambient
-    directional_light_direction: [f32; 4],  // 16 bytes - XYZ direction + W intensity
+    directional_light_direction: [f32; 4],  // 16 bytes - XYZ direction + W intensity  
     directional_light_color: [f32; 4],      // 16 bytes - RGB color + A unused
     _padding: [f32; 4],                     // 16 bytes - padding for alignment
 }
 
-unsafe impl bytemuck::Pod for SimpleLightingUBO {}
-unsafe impl bytemuck::Zeroable for SimpleLightingUBO {}
+unsafe impl bytemuck::Pod for MultiLightingUBO {}
+unsafe impl bytemuck::Zeroable for MultiLightingUBO {}
 
 /// Manages all UBO resources and updates
 pub struct UboManager {
@@ -82,13 +84,13 @@ impl UboManager {
         camera_ubo_buffer.write_data(camera_bytes)?;
         
         // Create per-frame lighting UBO buffers
-        let lighting_ubo_data = SimpleLightingUBO {
+        let lighting_ubo_data = MultiLightingUBO {
             ambient_color: [0.2, 0.2, 0.2, 1.0],
             directional_light_direction: [-0.5, -1.0, -0.3, 0.8],
             directional_light_color: [1.0, 0.95, 0.9, 1.0],
             _padding: [0.0; 4],
         };
-        let lighting_ubo_size = std::mem::size_of::<SimpleLightingUBO>() as vk::DeviceSize;
+        let lighting_ubo_size = std::mem::size_of::<MultiLightingUBO>() as vk::DeviceSize;
         
         let mut lighting_ubo_buffers = Vec::with_capacity(max_frames_in_flight);
         for _ in 0..max_frames_in_flight {
@@ -104,7 +106,7 @@ impl UboManager {
             let lighting_bytes = unsafe { 
                 std::slice::from_raw_parts(
                     &lighting_ubo_data as *const _ as *const u8,
-                    std::mem::size_of::<SimpleLightingUBO>()
+                    std::mem::size_of::<MultiLightingUBO>()
                 )
             };
             lighting_buffer.write_data(lighting_bytes)?;
@@ -170,7 +172,7 @@ impl UboManager {
         
         // Update frame descriptor sets
         let camera_ubo_size = std::mem::size_of::<CameraUniformData>() as vk::DeviceSize;
-        let lighting_ubo_size = std::mem::size_of::<SimpleLightingUBO>() as vk::DeviceSize;
+        let lighting_ubo_size = std::mem::size_of::<MultiLightingUBO>() as vk::DeviceSize;
         
         for (frame_index, &descriptor_set) in resource_manager.frame_descriptor_sets().iter().enumerate() {
             let camera_buffer_info = vk::DescriptorBufferInfo::builder()
@@ -313,9 +315,45 @@ impl UboManager {
         }
     }
     
-    /// Update lighting UBO data
+    /// Update lighting UBO data from MultiLightEnvironment
+    pub fn update_multi_light_environment(&mut self, multi_light_env: &MultiLightEnvironment) {
+        // Convert MultiLightEnvironment to current shader-compatible format
+        // This maintains Step 1.2 shader compatibility while using new data structures
+        let lighting_ubo_data = if multi_light_env.header.directional_light_count > 0 {
+            // Use first directional light
+            let first_light = &multi_light_env.directional_lights[0];
+            MultiLightingUBO {
+                ambient_color: multi_light_env.header.ambient_color,
+                directional_light_direction: first_light.direction,
+                directional_light_color: first_light.color,
+                _padding: [0.0; 4],
+            }
+        } else {
+            // No directional lights, use default
+            MultiLightingUBO {
+                ambient_color: multi_light_env.header.ambient_color,
+                directional_light_direction: [0.0, -1.0, 0.0, 0.5],
+                directional_light_color: [1.0, 1.0, 1.0, 1.0],
+                _padding: [0.0; 4],
+            }
+        };
+        
+        let lighting_bytes = unsafe { 
+            std::slice::from_raw_parts(
+                &lighting_ubo_data as *const _ as *const u8,
+                std::mem::size_of::<MultiLightingUBO>()
+            )
+        };
+        
+        if let Err(e) = self.lighting_ubo_buffers[self.current_frame].write_data(lighting_bytes) {
+            log::error!("Failed to update lighting UBO: {:?}", e);
+        }
+    }
+    
+    /// Legacy update lighting method for backwards compatibility
+    /// This will be deprecated once all callers use update_multi_light_environment
     pub fn update_lighting(&mut self, direction: [f32; 3], intensity: f32, color: [f32; 3], ambient_intensity: f32) {
-        let lighting_ubo_data = SimpleLightingUBO {
+        let lighting_ubo_data = MultiLightingUBO {
             ambient_color: [ambient_intensity * 0.2, ambient_intensity * 0.2, ambient_intensity * 0.2, 1.0],
             directional_light_direction: [direction[0], direction[1], direction[2], intensity],
             directional_light_color: [color[0], color[1], color[2], 1.0],
@@ -325,7 +363,7 @@ impl UboManager {
         let lighting_bytes = unsafe { 
             std::slice::from_raw_parts(
                 &lighting_ubo_data as *const _ as *const u8,
-                std::mem::size_of::<SimpleLightingUBO>()
+                std::mem::size_of::<MultiLightingUBO>()
             )
         };
         

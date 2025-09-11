@@ -32,6 +32,9 @@ pub trait RenderBackend {
     /// Set directional light parameters
     fn set_directional_light(&mut self, direction: [f32; 3], intensity: f32, color: [f32; 3], ambient_intensity: f32);
     
+    /// Set multi-light environment using UBO-based lighting
+    fn set_multi_light_environment(&mut self, multi_light_env: &crate::render::lighting::MultiLightEnvironment);
+    
     /// Update camera UBO data (for UBO-based rendering)
     fn update_camera_ubo(&mut self, view_matrix: Mat4, projection_matrix: Mat4, view_projection_matrix: Mat4, camera_position: Vec3);
     

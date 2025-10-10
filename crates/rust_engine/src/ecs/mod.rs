@@ -11,6 +11,7 @@ pub mod system;
 pub mod query;
 pub mod components;
 pub mod systems;
+pub mod scene_manager;
 
 #[cfg(test)]
 pub mod tests;
@@ -22,5 +23,12 @@ pub use system::System;
 pub use query::Query;
 
 // Re-export common components and systems
-pub use components::{LightComponent, LightType, LightFactory, TransformComponent, TransformFactory};
-pub use systems::{LightingSystem, CoordinateSystemValidator};
+pub use components::{
+    LightComponent, LightType, LightFactory, 
+    TransformComponent, TransformFactory,
+    RenderableComponent, RenderableFactory,
+    MovementComponent, MovementFactory,
+    LifecycleComponent, LifecycleFactory, EntityState
+};
+pub use systems::{LightingSystem, CoordinateSystemValidator, RenderingSystem};
+pub use scene_manager::{SceneManager, SceneConfig, SceneStats};

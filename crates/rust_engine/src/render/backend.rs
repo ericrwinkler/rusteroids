@@ -38,6 +38,12 @@ pub trait RenderBackend {
     /// Update camera UBO data (for UBO-based rendering)
     fn update_camera_ubo(&mut self, view_matrix: Mat4, projection_matrix: Mat4, view_projection_matrix: Mat4, camera_position: Vec3);
     
+    /// Bind shared rendering resources for multiple object rendering
+    fn bind_shared_resources(&mut self, shared: &crate::render::SharedRenderingResources) -> BackendResult<()>;
+    
+    /// Record draw call for an object using shared resources (new multiple object pattern)
+    fn record_shared_object_draw(&mut self, shared: &crate::render::SharedRenderingResources, object_descriptor_sets: &[ash::vk::DescriptorSet]) -> BackendResult<()>;
+    
     /// Draw a frame
     fn draw_frame(&mut self) -> BackendResult<()>;
     
@@ -46,6 +52,19 @@ pub trait RenderBackend {
     
     /// Recreate the swapchain (for window resizing)
     fn recreate_swapchain(&mut self, window_handle: &mut dyn WindowBackendAccess) -> BackendResult<()>;
+    
+    /// Downcast to concrete backend type for advanced operations
+    /// This breaks abstraction but is needed for complex resource management
+    fn as_any(&self) -> &dyn std::any::Any;
+    
+    /// Begin recording draw commands for multiple objects (proper Vulkan pattern)
+    fn begin_render_pass(&mut self) -> BackendResult<()>;
+    
+    /// Record a draw command for a single object with its own uniform buffer
+    fn draw_indexed(&mut self, index_count: u32, instance_count: u32, first_index: u32, vertex_offset: i32, first_instance: u32) -> BackendResult<()>;
+    
+    /// End recording and submit all commands
+    fn end_render_pass_and_submit(&mut self) -> BackendResult<()>;
 }
 
 /// Window backend access trait

@@ -32,6 +32,10 @@ pub mod config;
 pub mod window;
 pub mod vulkan;
 pub mod backend;
+pub mod render_queue;
+pub mod batch_renderer;
+pub mod game_object;
+pub mod shared_resources;
 
 pub use mesh::{Mesh, Vertex};
 pub use material::{
@@ -45,6 +49,10 @@ pub use coordinates::{CoordinateSystem, CoordinateConverter};
 pub use config::{VulkanRendererConfig, ShaderConfig};
 pub use backend::{RenderBackend, WindowBackendAccess, BackendResult};
 pub use window::WindowHandle;
+pub use render_queue::{RenderQueue, RenderCommand, CommandType, RenderCommandId};
+pub use game_object::{GameObject, ObjectUBO, cleanup_game_object};
+pub use shared_resources::{SharedRenderingResources, SharedRenderingResourcesBuilder};
+pub use batch_renderer::{BatchRenderer, RenderBatch, BatchError, BatchStats, BatchResult};
 
 use thiserror::Error;
 use crate::engine::{RendererConfig, WindowConfig}; // FIXME: Engine coupling - should be library-agnostic
@@ -285,6 +293,202 @@ impl Renderer {
     /// FIXME: This method does too much and should be decomposed into:
     /// - update_mesh_data() - GPU resource management
     /// - set_transform_matrices() - Matrix calculations
+
+    // ================================
+    // NEW COMMAND RECORDING API (PROTOTYPE)
+    // ================================
+    
+    /// Begin command recording for multiple objects (NEW API)
+    /// This replaces the immediate-mode pattern with proper command recording
+    pub fn begin_command_recording(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Begin proper render pass for multiple objects
+        self.backend.begin_render_pass()
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        
+        // Set up per-frame uniforms (camera, lighting) once
+        self.setup_frame_uniforms()?;
+        
+        Ok(())
+    }
+    
+    /// Set up per-frame uniforms (camera, lighting) - called once per frame
+    fn setup_frame_uniforms(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Set per-frame uniforms first
+        if let Some(ref camera) = self.current_camera {
+            let view_matrix = camera.get_view_matrix();
+            let coord_transform = Mat4::vulkan_coordinate_transform();
+            let projection_matrix = camera.get_projection_matrix();
+
+            // Update camera UBO using existing backend method
+            let view_projection = projection_matrix * coord_transform * view_matrix;
+            self.backend.update_camera_ubo(view_matrix, projection_matrix, view_projection, camera.position);
+        }
+
+        // Set lighting environment using existing method
+        if let Some(ref lighting) = self.current_lighting {
+            let multi_light_env = self.convert_lighting_to_multi_light_environment(lighting);
+            self.backend.set_multi_light_environment(&multi_light_env);
+        }
+        
+        Ok(())
+    }
+    
+    /// Bind shared resources for multiple objects (NEW API)
+    /// This eliminates the need to bind these resources for each object
+    pub fn bind_shared_geometry(&mut self, shared: &SharedRenderingResources) -> Result<(), Box<dyn std::error::Error>> {
+        // Bind the shared vertex and index buffers
+        // Set the shared mesh data once for all objects
+        log::trace!("Binding shared geometry with {} vertices and {} indices", 
+                   shared.vertex_count, shared.index_count);
+        
+        // Call the backend to bind shared resources
+        self.backend.bind_shared_resources(shared)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        
+        Ok(())
+    }
+    
+    /// Draw a single object using command recording (NEW API)
+    /// Records draw command without immediate submission
+    pub fn record_object_draw(&mut self, object: &GameObject, shared_resources: &SharedRenderingResources) -> Result<(), Box<dyn std::error::Error>> {
+        // Update per-object uniform data  
+        let model_matrix = object.get_model_matrix();
+        
+        // Set per-object uniforms (model matrix, material)
+        let model_array: [[f32; 4]; 4] = model_matrix.into();
+        self.backend.set_model_matrix(model_array);
+        
+        let material_color = object.material.get_base_color_array();
+        self.backend.set_material_color(material_color);
+        
+        // Get object's descriptor sets (these contain per-object uniform buffers)
+        let object_descriptor_sets = &object.descriptor_sets;
+        
+        // Record draw using shared resources and object-specific descriptor sets
+        self.backend.record_shared_object_draw(shared_resources, object_descriptor_sets)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        
+        Ok(())
+    }
+    
+    /// Submit all recorded commands and present (NEW API)
+    /// This replaces individual draw_frame() calls with batched submission
+    pub fn submit_commands_and_present(&mut self, _window: &mut WindowHandle) -> Result<(), Box<dyn std::error::Error>> {
+        // End render pass and submit all recorded draw commands
+        self.backend.end_render_pass_and_submit()
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+            
+        // Update frame counter
+        self.frame_count += 1;
+        
+        Ok(())
+    }
+    
+    /// Create a GameObject with proper GPU resource initialization
+    /// This handles the complex VulkanContext access and resource creation
+    pub fn create_game_object(&self, position: Vec3, rotation: Vec3, scale: Vec3, material: Material) -> Result<GameObject, Box<dyn std::error::Error>> {
+        let mut game_object = GameObject::new(position, rotation, scale, material);
+        
+        // Access VulkanContext through backend downcasting
+        // IMPLEMENTATION NOTE: This temporarily breaks abstraction to access Vulkan resources
+        // TODO: Refactor to proper abstraction when GameObject system is fully integrated
+        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::renderer::VulkanRenderer>() {
+            // Access VulkanContext and descriptor resources through the backend
+            let context = vulkan_backend.get_context();
+            let descriptor_pool = vulkan_backend.get_descriptor_pool();
+            let descriptor_set_layout = vulkan_backend.get_object_descriptor_set_layout();
+            let max_frames_in_flight = vulkan_backend.get_max_frames_in_flight();
+            
+            // Initialize GPU resources for the GameObject
+            game_object.create_resources(
+                context,
+                &descriptor_pool,
+                &descriptor_set_layout,
+                max_frames_in_flight,
+            ).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+            
+            log::debug!("Created GameObject with GPU resources initialized");
+        } else {
+            return Err("Renderer is not using Vulkan backend".into());
+        }
+        
+        Ok(game_object)
+    }
+    
+    /// Create SharedRenderingResources for efficient multi-object rendering
+    /// This handles the complex Vulkan resource creation for shared geometry
+    pub fn create_shared_rendering_resources(&self, mesh: &Mesh, materials: &[Material]) -> Result<shared_resources::SharedRenderingResources, Box<dyn std::error::Error>> {
+        // Access VulkanContext through backend downcasting
+        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
+            use ash::vk;
+            
+            log::info!("Creating SharedRenderingResources with {} vertices and {} indices", 
+                      mesh.vertices.len(), mesh.indices.len());
+            
+            // Get required components from VulkanRenderer
+            let context = vulkan_backend.get_context();
+            let frame_descriptor_set_layout = vulkan_backend.get_frame_descriptor_set_layout();
+            let material_descriptor_set_layout = vulkan_backend.get_object_descriptor_set_layout();
+            
+            // Create shared vertex buffer
+            let vertex_buffer = crate::render::vulkan::buffer::Buffer::new(
+                context.raw_device(),
+                context.instance().clone(),
+                context.physical_device().device,
+                (mesh.vertices.len() * std::mem::size_of::<Vertex>()) as vk::DeviceSize,
+                vk::BufferUsageFlags::VERTEX_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )?;
+            
+            // Upload vertex data
+            vertex_buffer.write_data(&mesh.vertices)?;
+            
+            // Create shared index buffer
+            let index_buffer = crate::render::vulkan::buffer::Buffer::new(
+                context.raw_device(),
+                context.instance().clone(),
+                context.physical_device().device,
+                (mesh.indices.len() * std::mem::size_of::<u32>()) as vk::DeviceSize,
+                vk::BufferUsageFlags::INDEX_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )?;
+            
+            // Upload index data
+            index_buffer.write_data(&mesh.indices)?;
+            
+            // Get pipeline and layouts (these should already exist in the VulkanRenderer)
+            let pipeline = vulkan_backend.get_graphics_pipeline();
+            let pipeline_layout = vulkan_backend.get_pipeline_layout();
+            
+            let shared_resources = shared_resources::SharedRenderingResources::new(
+                vertex_buffer,
+                index_buffer,
+                pipeline,
+                pipeline_layout,
+                material_descriptor_set_layout,
+                frame_descriptor_set_layout,
+                mesh.indices.len() as u32,
+                mesh.vertices.len() as u32,
+            );
+            
+            log::info!("SharedRenderingResources created successfully");
+            Ok(shared_resources)
+        } else {
+            Err("Renderer is not using Vulkan backend".into())
+        }
+    }
+    
+    /// Helper method to convert lighting environment (temporary until lighting refactor)
+    fn convert_lighting_to_multi_light_environment(&self, _lighting: &LightingEnvironment) -> lighting::MultiLightEnvironment {
+        // Convert from the old LightingEnvironment to the new MultiLightEnvironment
+        // For now, create a simple environment with ambient lighting
+        // TODO: Implement proper conversion when lighting system is refactored
+        lighting::MultiLightEnvironment::new()
+    }
+
+    // ================================
+    // LEGACY RENDERING API (TO BE DEPRECATED)
+    // ================================
     /// - apply_material() - Material state setup  
     /// - execute_draw_call() - Actual rendering
     pub fn draw_mesh_3d(&mut self, mesh: &Mesh, model_matrix: &Mat4, material: &Material) -> Result<(), Box<dyn std::error::Error>> {

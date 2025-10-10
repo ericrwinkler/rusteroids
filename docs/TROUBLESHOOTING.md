@@ -1,415 +1,518 @@
 # Rusteroids Troubleshooting Guide
 
-## 🚨 Common Issues & Quick Solutions
+## 🚨 **CRITICAL ISSUES**
 
-### Visual Rendering Problems
+### Performance Disaster: Multiple Objects Rendering
 
-#### Issue: Lighting Rotates with Object
-**Symptoms**: Light appears to move with teapot rotation instead of staying fixed in world space
-**Root Cause**: Incorrect normal matrix calculation
-**Quick Fix**:
+**Symptoms**:
+- Frame rate drops to <10 FPS with multiple objects
+- GPU memory spikes every frame  
+- High CPU usage during rendering
+- Visual lag and stuttering
+
+**Root Cause**: Immediate-mode rendering pattern
 ```rust
-// Check in command_recorder.rs
-let normal_matrix = if let Some(inverse) = mat3_model.try_inverse() {
-    inverse.transpose()  // Proper inverse-transpose
-} else {
-    Mat3::identity()     // Fallback for degenerate matrices
-};
+// BROKEN PATTERN (current)
+for object in objects {
+    let transformed_mesh = transform_mesh_on_cpu(object);  // ❌ CPU work
+    upload_mesh_to_gpu(transformed_mesh);                  // ❌ GPU upload  
+    draw_frame();                                          // ❌ Immediate submit
+}
 ```
-**Validation**: Use screenshot tool to verify lighting stays fixed during rotation
 
-#### Issue: Performance Drops or GPU Stalls
-**Symptoms**: Frame rate suddenly drops below 60 FPS, stuttering, or complete freezes
-**Root Cause**: Synchronization bottlenecks destroying GPU parallelism
-**Diagnostic Steps**:
-1. Check for excessive `device_wait_idle()` calls
-2. Look for missing memory barriers causing race conditions
-3. Verify proper frame-in-flight isolation
+**Solution**: Command recording pattern
+```rust  
+// CORRECT PATTERN (target)
+renderer.begin_frame();
+renderer.bind_shared_geometry();                          // ✅ Once per frame
+for object in objects {
+    object.update_uniform_buffer();                       // ✅ Small UBO update
+    renderer.record_draw_command(object);                 // ✅ Record only
+}
+renderer.submit_and_present();                           // ✅ Single submit
+```
 
-**Critical Patterns to Fix**:
+**Fix Status**: See TODO_CONSOLIDATED.md → Emergency Priority → Multiple Objects Architecture
+
+---
+
+### Vulkan Validation Errors
+
+**Common Issues & Solutions**:
+
+#### 1. **Descriptor Set Validation**
+```
+VUID-vkCmdDrawIndexed-None-02699: Descriptor set must be bound
+```
+
+**Cause**: Drawing without binding per-object descriptor sets
+**Fix**: 
 ```rust
-// ❌ PERFORMANCE KILLER - Remove immediately
-device.device_wait_idle(); // In render loop
-
-// ✅ PROPER PATTERN - Use fence-based sync
-fence.wait(timeout);
+// Ensure descriptor set is bound before drawing
+renderer.bind_descriptor_sets(command_buffer, descriptor_sets);
+renderer.draw_indexed(command_buffer, index_count);
 ```
 
-#### Issue: Race Conditions and Crashes
-**Symptoms**: Random crashes, validation errors, data corruption
-**Root Cause**: Thread safety violations in Vulkan resource access
-**Common Locations**:
-- Command pool sharing between threads
-- Descriptor set concurrent updates
-- Buffer writes without memory barriers
-
-**Diagnostic Commands**:
-```cmd
-# Enable all Vulkan validation layers
-set VK_LAYER_PATH=%VULKAN_SDK%\Bin
-set VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation:VK_LAYER_KHRONOS_synchronization2
-
-# Look for threading and synchronization errors
-cargo run 2>&1 | findstr /C:"THREADING" /C:"SYNC"
+#### 2. **Buffer Memory Mapping**
+```
+VUID-vkMapMemory-memory-00678: Memory must be host-visible
 ```
 
-#### Issue: Black/Blank Screen
-**Symptoms**: Application window shows solid black or no rendering
-**Diagnostic Steps**:
-1. Check Vulkan validation layers for errors
-2. Verify shader compilation: `cargo build` should show no shader errors
-3. Confirm teapot model loads correctly
-4. Check descriptor set bindings
-
-**Common Causes**:
-- Shader compilation failures
-- Missing or incorrect UBO data
-- Descriptor set binding errors
-- Pipeline state mismatches
-
-#### Issue: Screenshot Tool Shows "UnknownPattern"
-**Symptoms**: Screenshot analysis reports non-RenderedScene content
-**Diagnostic Commands**:
-```cmd
-cd tools\screenshot_tool
-cargo run -- --analyze "path\to\screenshot.png"
+**Cause**: Trying to map device-local memory
+**Fix**:
+```rust
+// Use host-visible memory for uniform buffers
+let memory_properties = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
 ```
-**Expected vs Actual**:
-- ✅ Expected: `Content Classification: RenderedScene`, >60% colored pixels
-- ❌ Actual: `Content Classification: UnknownPattern`, low colored pixels
 
-**Solutions**:
-1. Increase wait time: `--wait 6000` for slower initialization
-2. Check application is actually rendering (not just blank window)
-3. Verify window focus and visibility
+#### 3. **Synchronization Issues**
+```
+VUID-vkQueueSubmit-pCommandBuffers-00071: Command buffer in invalid state
+```
 
-### Build and Compilation Issues
+**Cause**: Submitting command buffer before recording is complete
+**Fix**:
+```rust
+// Ensure proper command buffer lifecycle
+command_recorder.begin_recording(cmd_buf)?;
+// ... record commands ...
+command_recorder.end_recording(cmd_buf)?;
+queue.submit(cmd_buf)?;
+```
 
-#### Issue: Shader Compilation Failures
-**Symptoms**: Build fails with shader compilation errors
-**Diagnostic**: Check build output for `glslc` errors
-**Common Fixes**:
-```cmd
-# Verify Vulkan SDK is installed and in PATH
-where glslc
+---
 
-# Check for shader syntax errors
+## ⚠️ **BUILD ISSUES**
+
+### Cargo Build Failures
+
+#### **Shader Compilation Errors**
+```
+error: failed to run custom build script for `rust_engine`
+```
+
+**Diagnosis**:
+```powershell
+# Check if glslc is available
 glslc --version
 
-# Clean and rebuild
-cargo clean
-cargo build
+# Manually compile shaders to see errors
+glslc resources/shaders/standard_pbr_vert.vert -o target/shaders/standard_pbr_vert.spv
 ```
-
-#### Issue: Missing Dependencies
-**Symptoms**: Compilation errors about missing crates or features
-**Solution**: Verify all workspace crates are properly configured
-```cmd
-# Build all workspace members
-cargo build --workspace
-
-# Check dependency resolution
-cargo tree
-```
-
-#### Issue: Vulkan Validation Errors
-**Symptoms**: Runtime validation layer messages in console
-**Diagnostic**: Enable full validation in debug builds
-**Common Validation Errors**:
-
-1. **WRITE_AFTER_READ Hazard**:
-   ```
-   Error: Pipeline barrier needed between vertex reads and buffer updates
-   ```
-   **Fix**: Add proper pipeline barriers in command recorder
-
-2. **Descriptor Set Binding Errors**:
-   ```
-   Error: Descriptor set not bound or out of date
-   ```
-   **Fix**: Verify descriptor set creation and binding order
-
-3. **Memory Barrier Issues**:
-   ```
-   Error: Missing memory barrier for buffer access
-   ```
-   **Fix**: Add appropriate access masks to pipeline barriers
-
-### Performance Issues
-
-#### Issue: Low Frame Rate (<60 FPS)
-**Diagnostic Steps**:
-1. Check CPU usage during rendering
-2. Monitor GPU utilization
-3. Profile command buffer submission patterns
-4. Verify efficient resource usage
-5. **NEW**: Check for synchronization bottlenecks
-
-**Common Causes**:
-- Excessive GPU synchronization (PRIMARY SUSPECT)
-- Inefficient buffer updates
-- Too many draw calls
-- Large vertex/index buffers
-- **Thread safety violations causing stalls**
 
 **Solutions**:
-- **CRITICAL**: Remove `device_wait_idle()` from render loops
-- Add proper memory barriers instead of heavy synchronization
-- Implement dirty tracking for UBO updates
-- Use staging buffers for dynamic data
-- Batch similar draw operations
-- Optimize vertex data layout
+1. **Missing Vulkan SDK**:
+   ```powershell
+   # Download and install Vulkan SDK
+   # Add to PATH: C:\VulkanSDK\<version>\Bin
+   ```
 
-#### Issue: GPU Synchronization Bottlenecks
-**Symptoms**: Good CPU utilization but poor GPU performance
-**Root Cause**: Excessive CPU-GPU synchronization destroying parallelism
+2. **Shader Syntax Errors**:
+   ```glsl
+   // Check shader version compatibility
+   #version 450 core  // Ensure version matches
+   ```
 
-**Patterns to Fix**:
-```rust
-// ❌ TERRIBLE: Sync after every operation
-for mesh in meshes {
-    update_mesh_buffer(mesh);
-    device.wait_idle(); // PERFORMANCE KILLER!
-    render_mesh();
-}
+3. **Missing Shader Files**:
+   ```bash
+   # Verify all shaders exist
+   ls resources/shaders/
+   ```
 
-// ✅ GOOD: Batch operations, minimal sync
-update_all_mesh_buffers(meshes);
-render_all_meshes();
-// Only sync at frame boundaries
+#### **Dependency Resolution**
+```
+error: could not compile `glfw-sys` due to 2 previous errors
 ```
 
-**Performance Targets**:
-- Maximum 1 fence wait per frame
-- Memory barriers only at transition points
-- No `device_wait_idle()` in render loop
+**Solutions**:
+1. **CMake Missing**:
+   ```powershell
+   choco install cmake
+   # Or download from cmake.org
+   ```
 
-#### Issue: Memory Leaks
-**Symptoms**: Increasing memory usage over time
-**Diagnostic Tools**:
-- Enable Vulkan memory tracking
-- Monitor system memory usage
-- Check for proper Drop implementations
+2. **MSVC Build Tools**:
+   ```powershell
+   # Install Visual Studio Build Tools
+   # Or full Visual Studio with C++ development tools
+   ```
+
+---
+
+## 🔧 **RUNTIME ISSUES**
+
+### Application Crashes
+
+#### **Segmentation Fault on Startup**
+```
+thread 'main' panicked at 'index out of bounds'
+```
+
+**Common Causes**:
+1. **Uninitialized Vulkan Objects**
+   ```rust
+   // Check all Vulkan objects are properly created
+   assert!(!device.is_null());
+   assert!(!swapchain.is_null());
+   ```
+
+2. **Invalid Buffer Access**
+   ```rust
+   // Ensure buffer indices are valid
+   assert!(vertex_index < vertex_buffer.len());
+   ```
+
+#### **Window Creation Failure**
+```
+Failed to create GLFW window
+```
+
+**Diagnosis**:
+```rust
+// Check GLFW initialization
+if !glfw.init().is_ok() {
+    panic!("Failed to initialize GLFW");
+}
+
+// Verify Vulkan support
+window.hints.client_api(glfw::ClientApiHint::NoApi);
+window.hints.resizable(false);
+```
+
+**Solutions**:
+1. **Graphics Driver Update**: Update GPU drivers
+2. **Vulkan Support**: Verify GPU supports Vulkan 1.0+
+3. **Window Hints**: Ensure proper GLFW window hints
+
+---
+
+### Memory Issues
+
+#### **Memory Leaks**
+```
+Vulkan objects not properly destroyed
+```
+
+**Detection**:
+```rust
+// Add debug tracking
+impl Drop for VulkanRenderer {
+    fn drop(&mut self) {
+        println!("Destroying Vulkan objects...");
+        // Ensure all cleanup is called
+    }
+}
+```
 
 **Prevention**:
-- All Vulkan resources wrapped in RAII structs
-- Explicit cleanup in Drop implementations
-- No raw handle exposure outside owning structs
-
-## 🔧 Debugging Workflows
-
-### Visual Issue Debugging
-
-#### Step 1: Screenshot Baseline
-```cmd
-# Capture known-good baseline
-.\tools\validate_rendering.bat baseline
-
-# Expected output:
-# Content Classification: RenderedScene
-# Colored Pixels: 98.2%
-# Build completed successfully
-```
-
-#### Step 2: Isolate the Problem
-1. **Test Simple Scene**: Use basic material without complex shaders
-2. **Disable Features**: Comment out advanced rendering features
-3. **Check Primitives**: Verify basic triangle/quad rendering works
-4. **Progressive Complexity**: Add features back one at a time
-
-#### Step 3: Validate Changes
-```cmd
-# After each change
-.\tools\validate_rendering.bat validation
-
-# Compare with baseline
-# Look for visual regressions
-```
-
-### Vulkan Debugging
-
-#### Enable Validation Layers
 ```rust
-// In VulkanContext creation
-let validation_layers = vec![
-    CString::new("VK_LAYER_KHRONOS_validation").unwrap(),
-    CString::new("VK_LAYER_KHRONOS_synchronization2").unwrap(), // For threading issues
-];
-```
+// Use RAII patterns
+struct BufferGuard {
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+    device: Device,
+}
 
-#### Common Validation Patterns
-```rust
-// Proper pipeline barrier pattern
-fn safe_buffer_update(&mut self) -> VulkanResult<()> {
-    // Wait for any previous vertex reads
-    self.cmd_pipeline_barrier(
-        vk::PipelineStageFlags::VERTEX_INPUT,
-        vk::PipelineStageFlags::TRANSFER,
-        &[vk::MemoryBarrier {
-            src_access_mask: vk::AccessFlags::VERTEX_ATTRIBUTE_READ,
-            dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-            ..Default::default()
-        }]
-    );
-    
-    // Safe to update buffer now
-    self.update_vertex_buffer()?;
-    Ok(())
+impl Drop for BufferGuard {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_buffer(self.buffer, None);
+            self.device.free_memory(self.memory, None);
+        }
+    }
 }
 ```
 
-#### Thread Safety Validation
-```rust
-// Enable threading validation
-set VK_LAYER_PATH=%VULKAN_SDK%\Bin
-set VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation:VK_LAYER_KHRONOS_synchronization2
-
-// Look for specific threading violations
-cargo run 2>&1 | findstr /C:"THREADING_ERROR" /C:"SYNC_ERROR"
+#### **GPU Memory Exhaustion**
+```
+VK_ERROR_OUT_OF_DEVICE_MEMORY
 ```
 
-#### Critical Validation Checks
-1. **Memory Barriers**: HOST_WRITE → UNIFORM_READ transitions
-2. **Resource Lifecycle**: No access after destruction
-3. **Thread Safety**: Command pools and descriptor sets
-4. **Synchronization**: Proper fence/semaphore usage
+**Diagnosis**:
+```rust
+// Monitor memory usage
+let memory_props = instance.get_physical_device_memory_properties(physical_device);
+for i in 0..memory_props.memory_heap_count {
+    println!("Heap {}: {} MB", i, memory_props.memory_heaps[i as usize].size / 1024 / 1024);
+}
+```
 
-### Performance Debugging
+**Solutions**:
+1. **Buffer Reuse**: Share vertex buffers between objects
+2. **Memory Pooling**: Implement custom memory allocator
+3. **Resource Cleanup**: Properly destroy unused resources
 
-#### Frame Time Analysis
+---
+
+## 🎯 **VISUAL ISSUES**
+
+### Rendering Problems
+
+#### **Black Screen**
+**Checklist**:
+- [ ] Shaders compiled successfully
+- [ ] Vertex data uploaded correctly  
+- [ ] Camera positioned to see objects
+- [ ] Lighting configured (objects may be too dark)
+- [ ] Depth testing enabled
+
+**Debug Steps**:
+```rust
+// 1. Verify vertex data
+println!("Vertex count: {}", vertices.len());
+println!("First vertex: {:?}", vertices[0]);
+
+// 2. Check camera position
+println!("Camera pos: {:?}", camera.position);
+println!("Camera target: {:?}", camera.target);
+
+// 3. Verify shader uniforms
+println!("Model matrix: {:?}", model_matrix);
+println!("View matrix: {:?}", view_matrix);
+```
+
+#### **Objects Not Appearing**
+**Common Issues**:
+1. **Camera Position**: Objects behind camera or outside view frustum
+2. **Scale Issues**: Objects too small/large to see
+3. **Culling Problems**: Wrong winding order causing backface culling
+4. **Depth Issues**: Objects behind other geometry
+
+**Solutions**:
+```rust
+// Reset camera to known good position
+camera.position = Vec3::new(0.0, 2.0, 8.0);
+camera.target = Vec3::new(0.0, 0.0, 0.0);
+
+// Check object bounds
+let bounds = calculate_mesh_bounds(&vertices);
+println!("Mesh bounds: {:?}", bounds);
+
+// Disable culling temporarily
+rasterization_state.cull_mode = vk::CullModeFlags::NONE;
+```
+
+#### **Wrong Colors/Materials**
+**Diagnosis**:
+```rust
+// Verify material data reaches shader
+println!("Material base color: {:?}", material.base_color);
+println!("Material metallic: {}", material.metallic);
+
+// Check lighting setup
+println!("Light count: {}", lights.len());
+println!("Light direction: {:?}", lights[0].direction);
+```
+
+---
+
+## 🛠️ **DEVELOPMENT TOOLS**
+
+### Debug Utilities
+
+#### **Screenshot Validation**
+```powershell
+# Automated visual testing
+.\tools\screenshot_tool\validate_rendering.bat
+
+# Manual screenshot capture
+cargo run --bin screenshot_tool -- --output validation_screenshot.png
+```
+
+**Interpreting Results**:
+- **Green**: Successful render with expected content
+- **Yellow**: Warning - content detected but may be incorrect
+- **Red**: Failure - no content or error state
+
+#### **Performance Profiling**
 ```rust
 // Add timing measurements
-let start_time = std::time::Instant::now();
+let start = std::time::Instant::now();
 renderer.render_frame()?;
-let frame_time = start_time.elapsed();
+let duration = start.elapsed();
+println!("Frame time: {:?}", duration);
 
-if frame_time.as_millis() > 16 { // >60 FPS
-    println!("Slow frame: {}ms", frame_time.as_millis());
-}
+// GPU memory tracking
+let memory_info = device.get_memory_properties();
+println!("GPU memory usage: {} MB", get_memory_usage() / 1024 / 1024);
 ```
 
-#### GPU Memory Tracking
+#### **Vulkan Debug Messages**
 ```rust
-// Monitor GPU memory usage
-let memory_properties = unsafe {
-    instance.get_physical_device_memory_properties(physical_device)
-};
+// Enable validation layers
+let validation_layers = vec!["VK_LAYER_KHRONOS_validation"];
 
-// Track allocations per memory type
-for (i, heap) in memory_properties.memory_heaps.iter().enumerate() {
-    println!("Heap {}: {} MB", i, heap.size / (1024 * 1024));
+// Set up debug messenger for detailed error info
+let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
+    .message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::all())
+    .message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
+    .pfn_user_callback(Some(debug_callback));
+```
+
+---
+
+## 📊 **PERFORMANCE DEBUGGING**
+
+### Frame Rate Analysis
+
+#### **Low FPS Diagnosis**
+```rust
+// Measure different phases
+struct FrameTimer {
+    cpu_time: Duration,
+    gpu_time: Duration,
+    present_time: Duration,
+}
+
+fn profile_frame(&mut self) -> FrameTimer {
+    let start = Instant::now();
+    
+    // CPU work
+    let cpu_start = Instant::now();
+    self.update_game_objects();
+    let cpu_time = cpu_start.elapsed();
+    
+    // GPU work  
+    let gpu_start = Instant::now();
+    self.renderer.render_frame();
+    let gpu_time = gpu_start.elapsed();
+    
+    // Present
+    let present_start = Instant::now();
+    self.renderer.present();
+    let present_time = present_start.elapsed();
+    
+    FrameTimer { cpu_time, gpu_time, present_time }
 }
 ```
 
-## 📋 Diagnostic Checklists
+#### **Memory Usage Tracking**
+```rust
+// Track allocations
+struct MemoryTracker {
+    vertex_buffer_size: usize,
+    uniform_buffer_size: usize,
+    texture_memory: usize,
+}
 
-### Pre-Commit Validation Checklist
-- [ ] Code compiles without warnings: `cargo build`
-- [ ] Baseline screenshot captured before changes
-- [ ] Changes implemented and tested
-- [ ] Validation screenshot shows expected results
-- [ ] No Vulkan validation errors in debug output
-- [ ] Performance maintained (60+ FPS)
-- [ ] Visual regression test passed
-
-### New Feature Testing Checklist
-- [ ] Feature works in isolation
-- [ ] Integration with existing systems tested
-- [ ] Backward compatibility maintained
-- [ ] Performance impact measured
-- [ ] Error handling implemented
-- [ ] Documentation updated
-
-### Release Preparation Checklist
-- [ ] All tests pass: `cargo test`
-- [ ] Clean Vulkan validation in release mode
-- [ ] Performance benchmarks meet requirements
-- [ ] Memory usage is stable
-- [ ] Visual quality matches expectations
-- [ ] Documentation is up to date
-
-## 🚀 Quick Fix Commands
-
-### Reset to Working State
-```cmd
-# Clean rebuild
-cargo clean
-cargo build
-
-# Reset shaders
-cd resources\shaders
-# Verify all .vert and .frag files exist
-dir *.vert *.frag
-
-# Test basic functionality
-cd ..\..\teapot_app
-cargo run
+impl MemoryTracker {
+    fn log_usage(&self) {
+        println!("Vertex buffers: {} KB", self.vertex_buffer_size / 1024);
+        println!("Uniform buffers: {} KB", self.uniform_buffer_size / 1024);
+        println!("Textures: {} KB", self.texture_memory / 1024);
+        println!("Total GPU: {} KB", self.total() / 1024);
+    }
+}
 ```
 
-### Emergency Screenshot Validation
-```cmd
-# Quick validation check
-cd tools\screenshot_tool
-cargo run -- --prefix "emergency" --wait 4000
+---
 
-# Analyze result immediately
-cargo run -- --analyze "screenshots\emergency_*.png"
+## 🚀 **OPTIMIZATION STRATEGIES**
+
+### Performance Improvements
+
+#### **Vulkan Best Practices**
+1. **Minimize State Changes**
+   ```rust
+   // Group draws by pipeline, then by vertex buffer, then by texture
+   for pipeline in pipelines {
+       bind_pipeline(pipeline);
+       for vertex_buffer in vertex_buffers {
+           bind_vertex_buffer(vertex_buffer);
+           for material in materials {
+               bind_material(material);
+               // Draw all objects with this state
+           }
+       }
+   }
+   ```
+
+2. **Efficient Uniform Updates**
+   ```rust
+   // Use push constants for small, frequently changing data
+   let push_constants = ObjectPushConstants {
+       model_matrix: object.get_model_matrix(),
+   };
+   cmd_buffer.push_constants(pipeline_layout, push_constants);
+   
+   // Use dynamic uniform buffers for larger data
+   let offset = object_index * dynamic_alignment;
+   cmd_buffer.bind_descriptor_sets_with_offsets(descriptor_set, &[offset]);
+   ```
+
+3. **Memory Management**
+   ```rust
+   // Allocate large memory chunks and sub-allocate
+   struct MemoryPool {
+       memory: DeviceMemory,
+       free_ranges: Vec<Range<u64>>,
+   }
+   
+   impl MemoryPool {
+       fn allocate(&mut self, size: u64) -> Option<u64> {
+           // Find suitable free range
+           // Return offset into pool
+       }
+   }
+   ```
+
+---
+
+## 📝 **DEBUGGING CHECKLIST**
+
+### Before Reporting Issues
+
+**Environment**:
+- [ ] Vulkan SDK version: ________________
+- [ ] GPU model: ________________________
+- [ ] Driver version: ___________________
+- [ ] Windows version: __________________
+
+**Build Status**:
+- [ ] `cargo build` succeeds without warnings
+- [ ] All shaders compile successfully
+- [ ] No Vulkan validation errors
+- [ ] Screenshot tool passes validation
+
+**Runtime Behavior**:
+- [ ] Application starts without crashing
+- [ ] Window appears with correct size
+- [ ] Frame rate is acceptable (>30 FPS)
+- [ ] Visual output matches expectations
+
+**Performance Metrics**:
+- [ ] Frame time: _____________ ms
+- [ ] GPU memory usage: _______ MB  
+- [ ] Object count: ____________
+- [ ] Vertex count per frame: ___________
+
+### Issue Reporting Template
+
+```markdown
+## Issue Description
+Brief description of the problem
+
+## Environment
+- OS: Windows [version]
+- GPU: [model and driver version]
+- Vulkan SDK: [version]
+
+## Steps to Reproduce
+1. Step one
+2. Step two
+3. Step three
+
+## Expected Behavior
+What should happen
+
+## Actual Behavior  
+What actually happens
+
+## Performance Data
+- Frame rate: X FPS
+- Memory usage: X MB
+- Validation errors: Yes/No
+
+## Additional Context
+Any other relevant information
 ```
-
-### Vulkan Validation Reset
-```cmd
-# Ensure clean Vulkan state
-set VK_LAYER_PATH=%VULKAN_SDK%\Bin
-set VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
-
-# Run with verbose validation
-cargo run 2>&1 | findstr /C:"Validation"
-```
-
-## 📞 Escalation Procedures
-
-### When to Seek Help
-1. **Vulkan Validation Errors**: Persistent validation failures after following standard fixes
-2. **Performance Regression**: >20% FPS drop with no clear cause
-3. **Visual Corruption**: Rendering artifacts that don't match known issues
-4. **Build System Issues**: Shader compilation failures across multiple systems
-
-### Information to Provide
-1. **System Information**: 
-   - Vulkan SDK version
-   - GPU driver version
-   - Rust toolchain version
-
-2. **Error Context**:
-   - Complete error messages
-   - Steps to reproduce
-   - Expected vs actual behavior
-
-3. **Diagnostic Output**:
-   - Screenshot comparison (baseline vs current)
-   - Vulkan validation layer output
-   - Performance measurements
-
-4. **Code Context**:
-   - Recent changes made
-   - Git commit hash
-   - Relevant code snippets
-
-## 📚 Reference Materials
-
-### Vulkan Debugging Resources
-- [Vulkan Validation Layers Guide](https://vulkan.lunarg.com/doc/view/latest/windows/validation_layers.html)
-- [RenderDoc Integration](https://renderdoc.org/docs/behind_scenes/vulkan_support.html)
-- [Hans-Kristian Arntzen's Synchronization Blog](https://themaister.net/blog/2019/08/14/yet-another-blog-explaining-vulkan-synchronization/)
-
-### Performance Analysis Tools
-- **Built-in**: Vulkan timeline semaphores for GPU timing
-- **External**: RenderDoc for frame analysis
-- **System**: Task Manager for CPU/memory monitoring
-
-### Code Quality Tools
-- **Rust Analyzer**: IDE integration for real-time error detection
-- **Clippy**: Advanced linting for Rust code quality
-- **Vulkan Validation Layers**: Runtime validation of Vulkan usage
-
-This troubleshooting guide provides systematic approaches to diagnosing and fixing common issues in the Rusteroids rendering engine.

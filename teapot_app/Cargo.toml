@@ -3,9 +3,18 @@ name = "teapot_app"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "teapot_static"
+path = "src/main.rs"
+
+[[bin]]
+name = "teapot_dynamic"
+path = "src/main_dynamic.rs"
+
 [dependencies]
 rust_engine = { path = "../crates/rust_engine" }
 glfw = "0.55"
 log = "0.4"
 env_logger = "0.9"  # Match workspace version
 thiserror = "1.0"
+rand = "0.8"

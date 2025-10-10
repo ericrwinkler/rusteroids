@@ -1,306 +1,566 @@
 # Rusteroids Development TODO
 
-## 🚨 CRITICAL PRIORITIES
+## 🚨 **EMERGENCY PRIORITY**
 
-### 1. **URGENT: Fix Parallelism and Concurrency Issues (THIS WEEK)**
-- **Critical Bugs Found**: Comprehensive parallelism audit revealed multiple race conditions
-- **Immediate Actions**:
-  - ✅ Fix SyncManager double-increment bug in `sync_manager.rs:126-129` (COMPLETED)
-  - ✅ Add memory barriers for UBO updates (COMPLETED)
-  - ✅ Remove excessive `device_wait_idle()` calls destroying GPU parallelism (COMPLETED)
-- **Risk**: Current code has race conditions that could cause crashes or data corruption
-- **Reference**: See `PARALLELISM_CONCURRENCY_AUDIT.md` for complete analysis
+### 1. **Fix Multiple Objects Rendering Architecture**
 
-**Latest Fix (3/3 Complete)**: Added HOST_WRITE → UNIFORM_READ memory barriers in command_recorder.rs before GPU shader access to prevent reading stale UBO data. All P0 parallelism issues now resolved!
+**Problem**: Current implementation has catastrophic performance due to immediate-mode rendering pattern.
 
-### 2. ~~Fix Normal Matrix Lighting Issue~~ **SKIPPED** ✅
-- **Problem**: Lighting appears to move with teapot rotation instead of staying fixed in world space
-- **Root Cause**: Normal matrix calculation in `command_recorder.rs` needs Vulkan left-handed coordinate fix
-- **Decision**: **SKIPPED** - Will be resolved in entity-based lighting system rewrite
-- **Rationale**: Don't fix throwaway code; focus on ECS foundation instead
-- **Status**: Will be naturally fixed when implementing proper multi-light entity system
+**Current Issues**:
+- Creating 189,600 vertices per frame (10 teapots × 18,960 vertices each)
+- CPU-side vertex transformation every frame  
+- Uploading 758KB mesh data per frame to GPU
+- `draw_mesh_3d()` calls `draw_frame()` internally, preventing batching
+- Single averaged material instead of per-object materials
 
-### 3. Thread Safety Implementation (WEEK 2)
-- **Critical**: Command pools are NOT thread-safe but lack protection
-- **Actions**:
-  - Implement thread-safe command pool management (2 days)
-  - Add descriptor set per-frame isolation (2 days)  
-  - Document thread safety guarantees (1 day)
-- **Impact**: Required before any multi-threading features
+**Target Performance**: 10+ objects at 60+ FPS with different materials
 
-### 4. Shader System Unification (6-DAY SPRINT)
-- **Problem**: Multiple disconnected shader management systems
-- **Current Issues**:
-  - Teapot app uses hardcoded paths, bypasses sophisticated systems
-  - ShaderManager completely unused despite advanced features
-  - No coordination between build system and applications
-- **Solution**: Implement unified shader registry with TOML configuration
-- **Timeline**: 6 days comprehensive development cycle
+#### **Implementation Plan**
 
-### 5. **Entity-Component System Foundation (2-3 WEEKS)**
-- **Goal**: Implement first ECS architecture for lights and teapot as entities
-- **Game Engine Architecture Lessons**:
-  - "Game object model provides real-time simulation of heterogeneous collection of objects"
-  - Lights should be first-class entities alongside cameras, meshes, and other objects
-  - Need proper lifetime management and state simulation for entities
-- **Phases**:
-  - Week 1: Core ECS foundation (Entity, Component, World)
-  - Week 2: Light entities and rendering system integration
-  - Week 3: Teapot as mesh entity, performance optimization
-- **Success Criteria**: Multiple light entities, teapot as entity, 60+ FPS
+##### **Step 1: Design Per-Object Architecture**
 
-### 6. Multi-Light System Foundation (2-3 WEEKS)
-- **Goal**: Support 4-8 lights simultaneously via entity system
-- **Phases**:
-  - Week 1: Light entity system foundation  
-  - Week 2: Vulkan UBO backend integration
-  - Week 3: Shadow mapping and optimization
-- **Success Criteria**: Multiple directional lights, teapot self-shadowing, 60+ FPS
-
-## 📋 IMMEDIATE ACTIONS (NEXT 7 DAYS) - UPDATED PRIORITIES
-
-### 🚨 **CRITICAL: Multi-Light GPU Architecture (IMMEDIATE FOCUS)**
-
-#### Day 1-2: GPU Data Structure Expansion
-- [ ] **Critical**: Expand SimpleLightingUBO to MultipleLightingUBO
-  ```rust
-  // Replace single light with light array
-  struct MultipleLightingUBO {
-      ambient_color: [f32; 4],
-      light_count: u32,
-      lights: [GpuLight; MAX_LIGHTS], // Support 4-8 lights
-  }
-  ```
-- [ ] **Update UboManager**: Modify lighting buffer allocation for larger structure
-- [ ] **Test**: Verify GPU memory allocation works with expanded structure
-
-#### Day 3-4: Shader Multi-Light Support  
-- [ ] **Critical**: Update fragment shaders to process light arrays
-  ```glsl
-  // Update from single light to light loop
-  for (int i = 0; i < lighting.light_count; ++i) {
-      // Process lights[i] 
-  }
-  ```
-- [ ] **Update Shaders**: standard_pbr_frag.frag, frag_ubo_simple.frag, frag_material_ubo.frag
-- [ ] **Test**: Verify multiple lights render correctly
-
-#### Day 5: Bridge Integration
-- [ ] **Update LightingBridge**: Send ALL lights instead of just first light
-- [ ] **Remove Bottleneck**: Eliminate single-light limitation in convert_to_legacy()
-- [ ] **Test**: Create multiple light entities and verify all reach GPU
-
-#### Day 6-7: Performance and Spatial Culling
-- [ ] **Implement Light Culling**: Quadtree/octree for spatial light queries
-- [ ] **Performance Testing**: Ensure 60+ FPS with 4-8 lights
-- [ ] **Optimization**: Distance-based light attenuation and importance sorting
-
-## 🎮 ENTITY SYSTEM IMPLEMENTATION (IMMEDIATE PRIORITY)
-
-### Week 1: Core ECS Foundation
-Following Game Engine Architecture principles for "heterogeneous object collections":
-
-#### Day 1-2: Entity and Component Foundation (✅ COMPLETED September 7)
-- [x] **Entity System**: Implement EntityId, Entity lifecycle management ✓
-- [x] **Component Trait**: Define Component trait and registration system ✓
-- [x] **Basic Components**: Transform, Name components ✓ (Transform complete)
-- [x] **World Container**: Entity storage and basic queries ✓
-- [x] **Entity Builder**: Convenient entity creation pattern ✓
-- [x] **Demo Verification**: ECS teapot demo successfully creates entities ✅
-
-#### Day 3-4: Light Entity Integration (✅ COMPLETED September 7)
-- [x] **LightComponent**: Directional, point, spot light types ✓
-- [x] **Light Entities**: Create light entities in teapot demo ✓  
-- [x] **Lighting System**: Query light entities, update lighting data ✓
-- [x] **Demo Success**: ECS demo shows "2 lights active" with correct properties ✅
-- [x] **Renderer Bridge**: LightingBridge converts ECS data to legacy renderer format ✅
-- [x] **Live Integration**: Teapot app now uses ECS entities for lighting ✅
-- [x] **Success Verification**: App runs with identical visual quality using ECS lighting ✅
-
-#### Day 5-7: Mesh Entity Implementation
-- [ ] **MeshComponent**: Mesh, material, transform integration
-- [ ] **Teapot Entity**: Convert hardcoded teapot to entity
-- [ ] **Render System**: Query mesh entities, submit to renderer
-- [ ] **Performance Testing**: Ensure 60+ FPS maintained
-
-## 🔥 **CRITICAL: Multi-Light GPU Architecture Bottleneck (IMMEDIATE PRIORITY)**
-
-### **ECS Lighting Integration: SUCCESS ✅**
-- **Achievement**: ECS lighting system fully operational and integrated with teapot app
-- **Architecture**: Clean separation with LightingSystem → LightingBridge → Legacy Renderer
-- **Performance**: Identical visual quality, 60+ FPS maintained
-- **Components**: Light, Transform entities working correctly with type-safe storage
-
-### **GPU Multi-Light Support: MAJOR BOTTLENECK IDENTIFIED 🚨**
-- **Problem**: Current GPU pipeline only supports 1 directional light in SimpleLightingUBO
-- **Impact**: ECS can create multiple light entities, but only first light reaches GPU
-- **Root Cause**: Shader and UBO data structures hardcoded for single light
-
-**Current Flow (BOTTLENECKED)**:
-```
-ECS: [Light1, Light2, Light3, ...] → LightingSystem → Multiple ProcessedLights
-    ↓ 
-LightingBridge: Takes ONLY first light → Converts to legacy format
-    ↓
-SimpleLightingUBO: { 1 directional light only } → GPU shaders
-    ↓  
-Shaders: Process only 1 light → Visual output limited
-```
-
-**Required Multi-Light Architecture**:
+**GameObject Structure** (based on Vulkan tutorial):
 ```rust
-// NEW: Multi-light UBO structure needed
-#[repr(C, align(16))]
-struct MultipleLightingUBO {
-    ambient_color: [f32; 4],
-    light_count: u32,
-    _padding: [u32; 3], 
-    lights: [GpuLight; MAX_LIGHTS], // Array of lights!
+// crates/rust_engine/src/render/game_object.rs
+pub struct GameObject {
+    // Transform properties
+    pub position: Vec3,
+    pub rotation: Vec3,
+    pub scale: Vec3,
+    
+    // Per-object GPU resources (one per frame-in-flight)
+    pub uniform_buffers: Vec<Buffer>,
+    pub uniform_memory: Vec<DeviceMemory>, 
+    pub uniform_mapped: Vec<*mut u8>,
+    
+    // Per-object descriptor sets (one per frame-in-flight)
+    pub descriptor_sets: Vec<DescriptorSet>,
+    
+    // Material for this object
+    pub material: Material,
 }
 
-// NEW: Shader updates required
-layout(set = 0, binding = 1) uniform LightingUBO {
-    vec4 ambient_color;
-    uvec4 light_count_and_padding;
-    GpuLight lights[MAX_LIGHTS];  // Process light arrays!
-} lighting;
+impl GameObject {
+    pub fn get_model_matrix(&self) -> Mat4 {
+        let translation = Mat4::new_translation(&self.position);
+        let rotation_x = Mat4::rotation_x(self.rotation.x);
+        let rotation_y = Mat4::rotation_y(self.rotation.y);
+        let rotation_z = Mat4::rotation_z(self.rotation.z);
+        let scale = Mat4::new_scaling(self.scale.x);
+        translation * rotation_z * rotation_y * rotation_x * scale
+    }
+}
 ```
 
-### **Spatial Light Culling (Performance Optimization)**
-- **User Request**: Quadtree/octree spatial data structure for light culling
-- **Goal**: Only lights within effective radius affect entities
-- **Benefits**: Performance optimization for many lights, realistic attenuation
+**Shared Resources Structure**:
+```rust
+// crates/rust_engine/src/render/shared_resources.rs
+pub struct SharedRenderingResources {
+    pub vertex_buffer: Buffer,
+    pub index_buffer: Buffer,
+    pub pipeline: Pipeline,
+    pub descriptor_set_layout: DescriptorSetLayout,
+}
+```
 
-### Week 2: Advanced Entity Features
-- [ ] **Entity Queries**: Efficient multi-component queries  
-- [ ] **System Scheduling**: Proper update order (lighting before rendering)
-- [ ] **Entity Lifetime**: Proper creation/destruction lifecycle
-- [ ] **Component Storage**: Optimized memory layout for components
+##### **Step 2: Modify Renderer Architecture**
 
-## 🔄 ONGOING WORK
+**New Renderer API**:
+```rust
+// crates/rust_engine/src/render/mod.rs
+impl Renderer {
+    /// Begin frame and start command buffer recording
+    pub fn begin_frame(&mut self) -> Result<(), RenderError> {
+        // 1. Acquire swapchain image
+        // 2. Begin command buffer recording
+        // 3. Begin render pass
+        // 4. Set viewport and scissor
+    }
+    
+    /// Bind shared resources (call once per frame)
+    pub fn bind_shared_resources(&mut self, shared: &SharedRenderingResources) -> Result<(), RenderError> {
+        // 1. Bind vertex buffer
+        // 2. Bind index buffer  
+        // 3. Bind graphics pipeline
+    }
+    
+    /// Draw single object with its own uniform buffer
+    pub fn draw_object(&mut self, object: &GameObject, frame_index: usize) -> Result<(), RenderError> {
+        // 1. Update object's uniform buffer with current model matrix
+        // 2. Bind object's descriptor set for this frame
+        // 3. Record draw indexed command (no submission)
+    }
+    
+    /// End frame and submit all recorded commands
+    pub fn end_frame(&mut self, window: &mut WindowHandle) -> Result<(), RenderError> {
+        // 1. End render pass
+        // 2. End command buffer recording
+        // 3. Submit command buffer
+        // 4. Present swapchain image
+    }
+}
+```
 
-### Infrastructure Maintenance
-- [ ] Keep material UBO system operational
-- [ ] Maintain 60+ FPS performance
-- [ ] Ensure clean Vulkan validation
-- [ ] Update screenshot validation before commits
+**Usage Pattern**:
+```rust
+// teapot_app/src/main_dynamic.rs
+fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    // Begin frame
+    self.renderer.begin_frame()?;
+    
+    // Set camera and lighting (once per frame)
+    self.renderer.set_camera(&self.camera);
+    self.renderer.set_multi_light_environment(&multi_light_env);
+    
+    // Bind shared geometry (once per frame)
+    self.renderer.bind_shared_resources(&self.shared_resources)?;
+    
+    // Draw each object with its own transform and material
+    for object in &self.game_objects {
+        self.renderer.draw_object(object, self.current_frame)?;
+    }
+    
+    // Submit all commands and present
+    self.renderer.end_frame(&mut self.window)?;
+    
+    Ok(())
+}
+```
 
-### Code Quality
-- [ ] Remove any remaining dead code from previous cleanup
-- [ ] Maintain zero compiler warnings
-- [ ] Follow Rust idioms and safety practices
-- [ ] Document major architectural decisions
+##### **Step 3: Implement Per-Object Uniform Buffers**
 
-## 📅 MEDIUM-TERM ROADMAP (1-3 MONTHS)
+**Uniform Buffer Object Structure**:
+```rust
+// crates/rust_engine/src/render/uniforms.rs
+#[repr(C, align(16))]
+pub struct ObjectUBO {
+    pub model_matrix: [[f32; 4]; 4],
+    pub normal_matrix: [[f32; 3]; 3],  // For lighting calculations
+}
+```
 
-### Enhanced Lighting (Month 1)
-- [ ] Multiple directional lights (4-8 lights)
-- [ ] Point lights with distance attenuation
-- [ ] Spot lights with cone angles
-- [ ] Light culling and optimization
-- [ ] Performance testing with many lights
+**GameObject Resource Creation**:
+```rust
+impl GameObject {
+    pub fn create_resources(
+        &mut self, 
+        device: &Device, 
+        descriptor_pool: &DescriptorPool,
+        descriptor_set_layout: &DescriptorSetLayout,
+        max_frames_in_flight: usize
+    ) -> Result<(), RenderError> {
+        // Create uniform buffers for each frame in flight
+        for i in 0..max_frames_in_flight {
+            let buffer_size = std::mem::size_of::<ObjectUBO>() as u64;
+            
+            // Create uniform buffer
+            let (buffer, memory) = create_buffer(
+                device,
+                buffer_size,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT
+            )?;
+            
+            // Map memory for updates
+            let mapped = unsafe { 
+                device.map_memory(memory, 0, buffer_size, vk::MemoryMapFlags::empty())? 
+            };
+            
+            self.uniform_buffers.push(buffer);
+            self.uniform_memory.push(memory);
+            self.uniform_mapped.push(mapped as *mut u8);
+        }
+        
+        // Create descriptor sets
+        self.create_descriptor_sets(device, descriptor_pool, descriptor_set_layout, max_frames_in_flight)?;
+        
+        Ok(())
+    }
+    
+    pub fn update_uniform_buffer(&self, frame_index: usize) -> Result<(), RenderError> {
+        let ubo = ObjectUBO {
+            model_matrix: self.get_model_matrix().into(),
+            normal_matrix: self.calculate_normal_matrix().into(),
+        };
+        
+        unsafe {
+            let mapped = self.uniform_mapped[frame_index];
+            std::ptr::copy_nonoverlapping(
+                &ubo as *const ObjectUBO as *const u8,
+                mapped,
+                std::mem::size_of::<ObjectUBO>()
+            );
+        }
+        
+        Ok(())
+    }
+}
+```
 
-### Shadow System (Month 2)
-- [ ] Basic shadow mapping
-- [ ] Teapot self-shadowing (spout/handle shadows)
-- [ ] Shadow map quality optimization
-- [ ] Cascaded shadow maps for directional lights
+##### **Step 4: Update Descriptor Pool Size**
 
-### Advanced Features (Month 3)
-- [ ] Image-Based Lighting (IBL)
-- [ ] Area lights for soft shadows
-- [ ] Light animation system
-- [ ] Environmental lighting effects
+**Modified Descriptor Pool Creation**:
+```rust
+// crates/rust_engine/src/render/vulkan/ubo_manager.rs
+pub fn create_descriptor_pool(device: &Device, max_objects: u32, max_frames_in_flight: u32) -> Result<DescriptorPool, RenderError> {
+    let pool_sizes = [
+        // Per-frame descriptor sets (camera + lighting)
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::UNIFORM_BUFFER,
+            descriptor_count: max_frames_in_flight * 2, // Camera UBO + Lighting UBO
+        },
+        // Per-object descriptor sets (model matrices)
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::UNIFORM_BUFFER,  
+            descriptor_count: max_objects * max_frames_in_flight,
+        },
+        // Texture samplers
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            descriptor_count: max_objects * max_frames_in_flight * 3, // Base, normal, metallic-roughness
+        },
+    ];
+    
+    let pool_info = vk::DescriptorPoolCreateInfo::builder()
+        .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
+        .max_sets(max_frames_in_flight + (max_objects * max_frames_in_flight))
+        .pool_sizes(&pool_sizes);
+    
+    unsafe { device.create_descriptor_pool(&pool_info, None) }
+        .map_err(RenderError::VulkanError)
+}
+```
 
-## 🔧 PARALLELISM AND CONCURRENCY IMPROVEMENTS
+##### **Step 5: Implement Command Buffer Recording**
 
-### Thread Safety Implementation (Month 1)
-- [ ] **Thread-safe command pool management** (per-thread pools or mutex protection)
-- [ ] **Descriptor set per-frame isolation** (eliminate concurrent access)
-- [ ] **Memory barrier audit and implementation** (all resource transitions)
-- [ ] **Frame resource isolation** (complete 3x buffering)
+**Modified VulkanRenderer**:
+```rust
+// crates/rust_engine/src/render/vulkan/renderer/mod.rs
+impl VulkanRenderer {
+    pub fn begin_command_recording(&mut self) -> VulkanResult<()> {
+        // Wait for previous frame
+        self.sync_manager.wait_for_frame(self.current_frame)?;
+        
+        // Acquire swapchain image
+        let (image_index, _) = self.swapchain_manager.acquire_next_image(
+            &self.context,
+            self.sync_manager.get_image_available_semaphore(self.current_frame)
+        )?;
+        
+        self.current_image_index = image_index;
+        
+        // Begin command buffer
+        let command_buffer = self.command_recorder.get_command_buffer(self.current_frame);
+        self.command_recorder.begin_recording(command_buffer)?;
+        
+        // Begin render pass
+        self.command_recorder.begin_render_pass(
+            command_buffer,
+            &self.swapchain_manager.get_framebuffer(image_index as usize),
+            self.swapchain_manager.get_extent()
+        )?;
+        
+        Ok(())
+    }
+    
+    pub fn record_draw_object(&mut self, descriptor_set: vk::DescriptorSet, index_count: u32) -> VulkanResult<()> {
+        let command_buffer = self.command_recorder.get_command_buffer(self.current_frame);
+        
+        // Bind per-object descriptor set
+        self.command_recorder.bind_descriptor_sets(
+            command_buffer,
+            vk::PipelineBindPoint::GRAPHICS,
+            self.pipeline_manager.get_current_pipeline_layout(),
+            1, // Set index for per-object data
+            &[descriptor_set]
+        )?;
+        
+        // Record draw command
+        self.command_recorder.draw_indexed(command_buffer, index_count);
+        
+        Ok(())
+    }
+    
+    pub fn end_command_recording_and_submit(&mut self) -> VulkanResult<()> {
+        let command_buffer = self.command_recorder.get_command_buffer(self.current_frame);
+        
+        // End render pass and command buffer
+        self.command_recorder.end_render_pass(command_buffer);
+        self.command_recorder.end_recording(command_buffer)?;
+        
+        // Submit and present
+        self.sync_manager.submit_and_present(
+            &self.context,
+            command_buffer,
+            self.sync_manager.get_image_available_semaphore(self.current_frame),
+            self.current_image_index,
+            self.current_frame
+        )?;
+        
+        // Advance frame
+        self.current_frame = (self.current_frame + 1) % self.max_frames_in_flight;
+        
+        Ok(())
+    }
+}
+```
 
-### Performance Optimization (Month 2) 
-- [ ] **Eliminate all `device_wait_idle()` calls** except cleanup
-- [ ] **Implement VMA integration** for efficient memory management
-- [ ] **GPU memory access pattern optimization** (coalesced access)
-- [ ] **Timeline semaphore upgrade** (Vulkan 1.2 features)
+##### **Step 6: Update Dynamic Teapot Application**
 
-### Advanced Concurrency Features (Month 3)
-- [ ] **Multi-threaded command recording** (secondary command buffers)
-- [ ] **GPU timeline profiling** (performance monitoring)
-- [ ] **Lock-free resource updates** where possible
-- [ ] **SIMT-optimized shader patterns** (minimize branch divergence)
+**Modified Application Structure**:
+```rust
+// teapot_app/src/main_dynamic.rs
+pub struct DynamicTeapotApp {
+    window: WindowHandle,
+    renderer: Renderer,
+    camera: Camera,
+    
+    // Shared resources
+    shared_resources: SharedRenderingResources,
+    teapot_mesh_data: (Vec<Vertex>, Vec<u32>), // Original mesh data
+    
+    // Per-object data
+    game_objects: Vec<GameObject>,
+    
+    // Lighting system
+    world: World,
+    lighting_system: EcsLightingSystem,
+    
+    // Frame management
+    current_frame: usize,
+    max_frames_in_flight: usize,
+    start_time: Instant,
+}
 
-## 🎯 SUCCESS METRICS - UPDATED STATUS
+impl DynamicTeapotApp {
+    pub fn new() -> Self {
+        // ... initialization ...
+        
+        // Create game objects with different positions, rotations, materials
+        let mut game_objects = Vec::new();
+        let grid_size = 4; // 4x4 grid of teapots
+        let spacing = 3.0;
+        
+        for i in 0..10 {
+            let row = i / grid_size;
+            let col = i % grid_size;
+            let x = (col as f32 - grid_size as f32 * 0.5) * spacing;
+            let z = (row as f32 - grid_size as f32 * 0.5) * spacing;
+            
+            let mut object = GameObject {
+                position: Vec3::new(x, 0.0, z),
+                rotation: Vec3::new(0.0, i as f32 * 0.3, 0.0),
+                scale: Vec3::new(0.8, 0.8, 0.8),
+                material: self.create_material_for_object(i),
+                uniform_buffers: Vec::new(),
+                uniform_memory: Vec::new(),
+                uniform_mapped: Vec::new(),
+                descriptor_sets: Vec::new(),
+            };
+            
+            // Create GPU resources for this object
+            object.create_resources(
+                &device,
+                &descriptor_pool,
+                &descriptor_set_layout,
+                max_frames_in_flight
+            )?;
+            
+            game_objects.push(object);
+        }
+        
+        Self {
+            game_objects,
+            // ... other fields ...
+        }
+    }
+    
+    fn create_material_for_object(&self, index: usize) -> Material {
+        let colors = [
+            Vec3::new(0.9, 0.85, 0.7),   // Cream ceramic
+            Vec3::new(0.7, 0.4, 0.3),    // Terracotta
+            Vec3::new(0.95, 0.93, 0.88), // Silver
+            Vec3::new(1.0, 0.8, 0.2),    // Gold
+            Vec3::new(0.2, 0.6, 0.9),    // Blue
+            Vec3::new(0.8, 0.2, 0.3),    // Red
+            Vec3::new(0.3, 0.8, 0.3),    // Green
+            Vec3::new(0.8, 0.3, 0.8),    // Magenta
+            Vec3::new(0.9, 0.6, 0.1),    // Orange
+            Vec3::new(0.6, 0.4, 0.8),    // Purple
+        ];
+        
+        Material::standard_pbr(StandardMaterialParams {
+            base_color: colors[index % colors.len()],
+            alpha: 1.0,
+            metallic: if index % 3 == 0 { 0.9 } else { 0.1 },
+            roughness: if index % 3 == 0 { 0.1 } else { 0.4 },
+            ..Default::default()
+        })
+    }
+}
 
-### Technical Goals
-- ✅ **60+ FPS**: Maintained with ECS lighting integration
-- ✅ **Clean Validation**: Zero Vulkan validation errors in current implementation
-- ✅ **Multiple Materials**: Current 5-material system working perfectly
-- ✅ **Entity-Component System**: Fully operational ECS with light entities
-- ✅ **ECS Integration**: Live teapot app uses entity-based lighting
-- ⚠️ **Multi-Light Support**: ECS supports unlimited lights, GPU bottlenecked at 1
-- ⚠️ **World-Space Lighting**: Works correctly but can be improved
-- 🔄 **Unified Shaders**: Deferred pending multi-light GPU architecture
-- 🔄 **Spatial Light Culling**: Needed for performance with many lights
+impl Application for DynamicTeapotApp {
+    fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Begin frame
+        self.renderer.begin_frame()?;
+        
+        // Set per-frame uniforms
+        self.renderer.set_camera(&self.camera);
+        let multi_light_env = self.build_multi_light_environment_from_entities();
+        self.renderer.set_multi_light_environment(&multi_light_env);
+        
+        // Bind shared resources
+        self.renderer.bind_shared_resources(&self.shared_resources)?;
+        
+        // Update and draw each object
+        let elapsed = self.start_time.elapsed().as_secs_f32();
+        for (i, object) in self.game_objects.iter_mut().enumerate() {
+            // Update object animation
+            object.rotation.y = elapsed * 0.5 + i as f32 * 0.3;
+            object.position.y = (elapsed * 1.2 + i as f32 * 0.5).sin() * 1.0;
+            
+            // Update uniform buffer
+            object.update_uniform_buffer(self.current_frame)?;
+            
+            // Record draw command
+            self.renderer.draw_object(object, self.current_frame)?;
+        }
+        
+        // Submit all commands
+        self.renderer.end_frame(&mut self.window)?;
+        
+        Ok(())
+    }
+}
+```
 
-### Quality Gates - CURRENT STATUS
-- ✅ **ECS Architecture**: Complete Entity-Component-System following Gregory's principles
-- ✅ **Rendering Integration**: ECS lighting seamlessly bridges to legacy renderer
-- ✅ **Performance**: 60+ FPS maintained during ECS integration
-- ✅ **Visual Quality**: Identical rendering results with entity-based lighting
-- ✅ **Code Quality**: Clean separation of concerns, proper Rust idioms
-- ❌ **Multi-Light GPU**: Critical bottleneck identified in GPU data structures
-- ❌ **Shader Arrays**: Fragment shaders need light array processing
-- ❌ **Spatial Optimization**: Light culling needed for many lights
+##### **Step 7: Success Criteria & Validation**
 
-### Architecture Success Indicators
-- ✅ **Game Object Model**: Lights are first-class entities in game world
-- ✅ **Heterogeneous Collection**: ECS manages different entity types (lights, transforms)
-- ✅ **Lifetime Management**: Proper entity creation, updates, and system processing
-- ✅ **State Simulation**: LightingSystem processes entity state each frame
-- ✅ **Separation of Concerns**: Clean ECS → System → Bridge → Renderer pipeline
-- ✅ **Type Safety**: Component storage and retrieval with Rust type system
-- ❌ **GPU Scalability**: Single light bottleneck prevents true multi-light scenes
+**Performance Targets**:
+- [ ] 10+ objects rendering at 60+ FPS
+- [ ] Each object has different material (colors visible)
+- [ ] GPU memory usage <5MB (vs 758KB/frame currently)
+- [ ] Clean Vulkan validation (zero errors)
 
-### Risk Mitigation - UPDATED
-- ✅ **P0 Complete**: ECS foundation successfully implemented and integrated
-- 🚨 **P1 Critical**: Multi-light GPU architecture - immediate priority
-- 🔄 **P2 High**: Spatial light culling for performance optimization  
-- 🔄 **P3 Medium**: Advanced lighting features (shadows, IBL)
-- 🔄 **P4 Low**: Shader system unification (can wait)
+**Testing Protocol**:
+```bash
+# Build and run
+cargo build --release
+cargo run --bin teapot_dynamic
 
-## � ARCHITECTURAL LESSONS FROM GAME ENGINE ARCHITECTURE
+# Validate performance
+# Should see: "Rendering 10 objects at 60+ FPS with individual materials"
 
-Based on analysis of Jason Gregory's "Game Engine Architecture" (Chapters 8, 11, 15, 16):
+# Screenshot validation
+.\tools\validate_rendering.bat validation
+# Should see: RenderedScene with >60% colored pixels, multiple colors visible
+```
 
-### Chapter 8: Game Loop and Real-Time Simulation
-- **Key Lesson**: "Game loop runs repeatedly, giving various systems chance to update state for next discrete time step"
-- **Application**: Entity systems need proper scheduling - lighting system updates before rendering system
-- **Implementation**: Frame-based entity updates with proper system ordering
+**Rollback Plan**: If implementation fails, revert to single object rendering until issues resolved.
 
-### Chapter 11: The Rendering Engine  
-- **Key Lesson**: Layered rendering with "dynamic lighting system" as core component
-- **Application**: Lights should integrate with low-level renderer via well-defined interfaces
-- **Implementation**: Light entities → Light system → Vulkan backend → GPU
+---
 
-### Chapter 15: Introduction to Gameplay Systems
-- **Key Lesson**: "Game object model provides real-time simulation of heterogeneous collection of objects"
-- **Application**: Lights, cameras, meshes are all first-class entities in the game world
-- **Implementation**: ECS treats lights as entities with Transform + LightComponent
+## 🟡 **HIGH PRIORITY** 
 
-### Chapter 16: Runtime Gameplay Foundation Systems
-- **Key Lesson**: Need for "object identification, lifetime management, and state simulation over time"  
-- **Application**: Proper entity lifecycle, component queries, and system scheduling
-- **Implementation**: EntityId, World container, Component storage, System execution
+### 2. **Multi-Light System Enhancement** 
+*Status: Core implementation complete, needs optimization*
 
-### Software Object Model Questions (Gregory's Framework)
-Applied to our Rusteroids architecture:
-- **Object-oriented design?** Yes, component-based with entity aggregation
-- **Language?** Rust with strong typing and ownership semantics
-- **Class hierarchy?** Flat component composition over inheritance
-- **Object references?** EntityId handles, not direct pointers
-- **Unique identification?** EntityId(u64) for all entities
-- **Lifetime management?** RAII + explicit entity destruction
-- **State simulation?** Per-frame system updates over entity sets
+**Completed**:
+- ✅ MultiLightUBO supporting 4 directional + 8 point + 4 spot lights
+- ✅ All shaders process light arrays
+- ✅ ECS LightingSystem converts entities to GPU format
+
+**Remaining Work**:
+- [ ] Shadow mapping for directional lights
+- [ ] Light culling for performance with many lights
+- [ ] Dynamic light addition/removal during runtime
+
+---
+
+## 🟢 **MEDIUM PRIORITY**
+
+### 3. **Asset Pipeline System**
+
+**Goal**: Comprehensive asset loading with validation and optimization.
+
+**Components Needed**:
+- [ ] Model loader supporting .obj, .gltf, .fbx
+- [ ] Texture loader with format conversion
+- [ ] Shader hot-reloading for development
+- [ ] Asset validation and error reporting
+
+### 4. **Scene Management System**
+
+**Goal**: High-level scene graph with hierarchical transforms.
+
+**Features**:
+- [ ] Parent-child transform relationships  
+- [ ] Scene serialization/deserialization
+- [ ] Frustum culling optimization
+- [ ] Level-of-detail (LOD) system
+
+---
+
+## 🔵 **LOW PRIORITY**
+
+### 5. **Thread-Safe Engine Foundation**
+
+**Goal**: Prepare for multi-threaded system execution.
+
+**Implementation**:
+- [ ] Thread-safe component storage
+- [ ] System dependency graph
+- [ ] Parallel system execution
+- [ ] Lock-free data structures where possible
+
+### 6. **Advanced Rendering Features**
+
+**Post-Processing**:
+- [ ] Screen-space ambient occlusion (SSAO)
+- [ ] Temporal anti-aliasing (TAA)
+- [ ] Bloom and tone mapping
+- [ ] Debug visualization modes
+
+**Lighting**:
+- [ ] Shadow mapping (cascade, omnidirectional)
+- [ ] Image-based lighting (IBL)
+- [ ] Area lights
+- [ ] Volumetric lighting
+
+---
+
+## 📋 **DEVELOPMENT PROCESS**
+
+### Feature Implementation Workflow
+
+1. **Design Phase**
+   - [ ] Update TODO.md with detailed implementation plan
+   - [ ] Review architecture for compatibility
+   - [ ] Identify performance requirements
+
+2. **Implementation Phase**  
+   - [ ] Create feature branch
+   - [ ] Implement with unit tests
+   - [ ] Validate with screenshot tool
+   - [ ] Performance testing
+
+3. **Integration Phase**
+   - [ ] Code review
+   - [ ] Integration testing
+   - [ ] Documentation update
+   - [ ] Merge to main
+
+### Quality Gates
+
+**For Each Feature**:
+- [ ] Compiles without warnings
+- [ ] All tests pass
+- [ ] Screenshot validation passes
+- [ ] Performance requirements met
+- [ ] Documentation updated
+
+**For Each Release**:
+- [ ] Full integration test suite
+- [ ] Performance benchmarking
+- [ ] Memory leak testing
+- [ ] Vulkan validation clean

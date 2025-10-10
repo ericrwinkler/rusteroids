@@ -54,7 +54,8 @@ impl ResourceManager {
         )?;
         
         // Create descriptor pool
-        let max_descriptor_sets = (max_frames_in_flight + 10) as u32;
+        // Need enough sets for: frame sets (max_frames_in_flight) + material sets (50+ objects)
+        let max_descriptor_sets = (max_frames_in_flight + 100) as u32; // Increased from 10 to 100 to support many objects
         let descriptor_pool = DescriptorPool::new(context.raw_device().clone(), max_descriptor_sets)?;
         
         // Create command pool for transfers
@@ -299,6 +300,11 @@ impl ResourceManager {
     
     /// Get a reference to the material descriptor sets
     pub fn material_descriptor_sets(&self) -> &[vk::DescriptorSet] { &self.material_descriptor_sets }
+    
+    /// Get the descriptor pool for creating additional descriptor sets
+    pub fn get_descriptor_pool(&self) -> vk::DescriptorPool {
+        self.descriptor_pool.handle()
+    }
     
     /// Get the default white texture (base color placeholder)
     pub fn default_white_texture(&self) -> &Texture {

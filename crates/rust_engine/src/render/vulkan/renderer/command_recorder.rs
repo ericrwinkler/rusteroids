@@ -8,10 +8,10 @@ use crate::render::vulkan::*;
 /// Push constants structure for per-draw data
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-struct PushConstants {
-    model_matrix: [[f32; 4]; 4],    // 64 bytes - model transformation
-    normal_matrix: [[f32; 4]; 3],   // 48 bytes - normal transformation (3×4 padded)
-    material_color: [f32; 4],       // 16 bytes - material base color
+pub struct PushConstants {
+    pub model_matrix: [[f32; 4]; 4],    // 64 bytes - model transformation
+    pub normal_matrix: [[f32; 4]; 3],   // 48 bytes - normal transformation (3×4 padded)
+    pub material_color: [f32; 4],       // 16 bytes - material base color
 }
 
 unsafe impl bytemuck::Pod for PushConstants {}
@@ -22,6 +22,16 @@ pub struct CommandRecorder {
     command_pool: CommandPool,
     push_constants: PushConstants,
     pending_command_buffers: Vec<Option<vk::CommandBuffer>>,
+    // State for multiple object recording (Vulkan tutorial pattern)
+    active_recording: Option<ActiveRecording>,
+}
+
+/// Active recording session for multiple objects (following Vulkan tutorial exactly)
+struct ActiveRecording {
+    command_buffer: vk::CommandBuffer,
+    device: ash::Device,
+    frame_index: usize,
+    render_pass_active: bool,
 }
 
 impl CommandRecorder {
@@ -55,6 +65,7 @@ impl CommandRecorder {
                 material_color: [1.0, 1.0, 1.0, 1.0], // Default white material
             },
             pending_command_buffers: Vec::new(),
+            active_recording: None,
         })
     }
     
@@ -224,5 +235,348 @@ impl CommandRecorder {
         if let Some(command_buffer) = self.pending_command_buffers[frame_index].take() {
             self.command_pool.free_command_buffer(command_buffer);
         }
+    }
+    
+    /// Begin recording multiple objects (PROPER Vulkan tutorial implementation)
+    /// This starts a command buffer recording session and keeps render pass active
+    pub fn begin_multiple_object_recording(
+        &mut self,
+        context: &VulkanContext,
+        render_pass: &RenderPass,
+        swapchain_manager: &super::SwapchainManager,
+        resource_manager: &super::ResourceManager,
+        pipeline_manager: &crate::render::PipelineManager,
+        image_index: u32,
+        frame_index: usize,
+    ) -> VulkanResult<()> {
+        // Free previous command buffer for this frame
+        if let Some(prev_command_buffer) = self.pending_command_buffers[frame_index].take() {
+            self.command_pool.free_command_buffer(prev_command_buffer);
+        }
+        
+        // Begin recording command buffer
+        let command_buffers = self.command_pool.allocate_command_buffers(1)?;
+        let command_buffer = command_buffers[0];
+        
+        // Begin command buffer recording
+        let device = context.raw_device();
+        unsafe {
+            device.begin_command_buffer(
+                command_buffer,
+                &vk::CommandBufferBeginInfo::builder()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+                    .build(),
+            ).map_err(|e| VulkanError::Api(e))?;
+        }
+        
+        let render_area = vk::Rect2D::builder()
+            .offset(vk::Offset2D { x: 0, y: 0 })
+            .extent(context.swapchain().extent())
+            .build();
+            
+        let clear_values = [
+            vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.2, 0.3, 0.8, 1.0], // Nice blue background
+                },
+            },
+            vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            },
+        ];
+        
+        // Begin render pass
+        unsafe {
+            device.cmd_begin_render_pass(
+                command_buffer,
+                &vk::RenderPassBeginInfo::builder()
+                    .render_pass(render_pass.handle())
+                    .framebuffer(swapchain_manager.get_framebuffer(image_index as usize))
+                    .render_area(render_area)
+                    .clear_values(&clear_values)
+                    .build(),
+                vk::SubpassContents::INLINE,
+            );
+        }
+        
+        // Store active recording state
+        self.active_recording = Some(ActiveRecording {
+            command_buffer,
+            device: device.clone(),
+            frame_index,
+            render_pass_active: true,
+        });
+        
+        log::trace!("Started multiple object recording session for frame {}", frame_index);
+        Ok(())
+    }
+    
+    /// Setup shared resources (called once after beginning recording)
+    /// This implements the tutorial's "bind shared resources once" pattern
+    pub fn bind_shared_resources(
+        &mut self,
+        shared_resources: &crate::render::SharedRenderingResources,
+        context: &VulkanContext,
+        frame_descriptor_set: vk::DescriptorSet,
+    ) -> VulkanResult<()> {
+        let active_recording = self.active_recording.as_mut()
+            .ok_or_else(|| VulkanError::InvalidOperation {
+                reason: "No active recording session".to_string()
+            })?;
+        
+        if !active_recording.render_pass_active {
+            return Err(VulkanError::InvalidOperation {
+                reason: "Render pass not active".to_string()
+            });
+        }
+        
+        let command_buffer = active_recording.command_buffer;
+        let device = &active_recording.device;
+        
+        unsafe {
+            // Bind the graphics pipeline
+            device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                shared_resources.pipeline,
+            );
+            
+            // Set dynamic viewport and scissor (CRITICAL for rendering)
+            let extent = context.swapchain().extent();
+            let viewport = vk::Viewport::builder()
+                .x(0.0)
+                .y(0.0)
+                .width(extent.width as f32)
+                .height(extent.height as f32)
+                .min_depth(0.0)
+                .max_depth(1.0)
+                .build();
+            
+            let scissor = vk::Rect2D::builder()
+                .offset(vk::Offset2D { x: 0, y: 0 })
+                .extent(extent)
+                .build();
+                
+            device.cmd_set_viewport(command_buffer, 0, &[viewport]);
+            device.cmd_set_scissor(command_buffer, 0, &[scissor]);
+            
+            // Bind frame descriptor set (Set 0: camera + lighting data)
+            device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                shared_resources.pipeline_layout,
+                0, // Set 0: frame data
+                &[frame_descriptor_set],
+                &[], // no dynamic offsets
+            );
+            
+            // Bind vertex buffer
+            let vertex_buffers = [shared_resources.vertex_buffer.handle()];
+            let offsets = [0];
+            device.cmd_bind_vertex_buffers(command_buffer, 0, &vertex_buffers, &offsets);
+            
+            // Bind index buffer
+            device.cmd_bind_index_buffer(
+                command_buffer,
+                shared_resources.index_buffer.handle(),
+                0,
+                vk::IndexType::UINT32,
+            );
+        }
+        
+        log::trace!("Bound shared resources for multiple object rendering: pipeline, viewport, scissor, frame descriptor set, vertex buffer, index buffer");
+        Ok(())
+    }
+    
+    /// Record a draw call for a single object (tutorial pattern: multiple vkCmdDrawIndexed in same command buffer)
+    pub fn record_object_draw(
+        &mut self,
+        shared_resources: &crate::render::SharedRenderingResources,
+        object_descriptor_sets: &[vk::DescriptorSet],
+    ) -> VulkanResult<()> {
+        let active_recording = self.active_recording.as_mut()
+            .ok_or_else(|| VulkanError::InvalidOperation {
+                reason: "No active recording session".to_string()
+            })?;
+        
+        if !active_recording.render_pass_active {
+            return Err(VulkanError::InvalidOperation {
+                reason: "Render pass not active".to_string()
+            });
+        }
+        
+        let command_buffer = active_recording.command_buffer;
+        let device = &active_recording.device;
+        
+        unsafe {
+            // Bind per-object descriptor sets (material data for this specific object)
+            device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                shared_resources.pipeline_layout,
+                1, // Set 1: material descriptor sets (per-object)
+                object_descriptor_sets,
+                &[], // no dynamic offsets
+            );
+            
+            // CRITICAL FIX: Push constants for model matrix (required by shader)
+            device.cmd_push_constants(
+                command_buffer,
+                shared_resources.pipeline_layout,
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                0,
+                bytemuck::cast_slice(&[self.push_constants]),
+            );
+            
+            // Draw the indexed geometry for this object
+            device.cmd_draw_indexed(
+                command_buffer,
+                shared_resources.index_count,
+                1, // instance count
+                0, // first index
+                0, // vertex offset
+                0, // first instance
+            );
+        }
+        
+        log::trace!("Recorded draw call for object: {} indices", shared_resources.index_count);
+        Ok(())
+    }
+    
+    /// Finish multiple object recording and submit (tutorial pattern: end render pass and submit all commands)
+    pub fn finish_multiple_object_recording(&mut self) -> VulkanResult<vk::CommandBuffer> {
+        let mut active_recording = self.active_recording.take()
+            .ok_or_else(|| VulkanError::InvalidOperation {
+                reason: "No active recording session to finish".to_string()
+            })?;
+        
+        // End render pass
+        if active_recording.render_pass_active {
+            unsafe {
+                active_recording.device.cmd_end_render_pass(active_recording.command_buffer);
+            }
+            active_recording.render_pass_active = false;
+        }
+        
+        // End command buffer recording
+        unsafe {
+            active_recording.device.end_command_buffer(active_recording.command_buffer)
+                .map_err(|e| VulkanError::Api(e))?;
+        }
+        
+        // Store for cleanup later
+        self.pending_command_buffers[active_recording.frame_index] = Some(active_recording.command_buffer);
+        
+        log::trace!("Finished multiple object recording session");
+        Ok(active_recording.command_buffer)
+    }
+}
+
+/// Session for recording multiple objects with shared geometry
+/// This follows the Vulkan Multiple Objects tutorial pattern exactly
+pub struct MultipleObjectSession<'a> {
+    render_pass_recorder: crate::render::vulkan::commands::ActiveRenderPass<'a>,
+    resource_manager: &'a super::ResourceManager,
+    pipeline_manager: &'a crate::render::PipelineManager,
+    frame_index: usize,
+    pending_command_buffers: &'a mut Vec<Option<vk::CommandBuffer>>,
+}
+
+impl<'a> MultipleObjectSession<'a> {
+    /// Record a draw command for a single object
+    /// This uses the shared geometry but different per-object uniform buffer
+    pub fn record_object_draw(
+        &mut self,
+        object_descriptor_set: vk::DescriptorSet,
+        model_matrix: [[f32; 4]; 4],
+        material_color: [f32; 4],
+    ) -> VulkanResult<()> {
+        // Create push constants for this object
+        let push_constants = PushConstants {
+            model_matrix,
+            normal_matrix: Self::calculate_normal_matrix(model_matrix),
+            material_color,
+        };
+        
+        if let Some(active_pipeline) = self.pipeline_manager.get_active_pipeline() {
+            // Bind frame descriptor sets (Set 0: camera + lighting)
+            self.render_pass_recorder.cmd_bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                active_pipeline.layout(),
+                0, // First set
+                &[self.resource_manager.frame_descriptor_sets()[self.frame_index]],
+                &[],
+            );
+            
+            // Bind object-specific descriptor set (Set 1: per-object material)
+            self.render_pass_recorder.cmd_bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                active_pipeline.layout(),
+                1, // Second set  
+                &[object_descriptor_set],
+                &[],
+            );
+            
+            // Push per-object constants
+            self.render_pass_recorder.cmd_push_constants(
+                active_pipeline.layout(),
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                0,
+                bytemuck::cast_slice(&[push_constants]),
+            );
+            
+            // Draw this object (shared geometry, different uniforms)
+            self.render_pass_recorder.cmd_draw_indexed(
+                self.resource_manager.index_buffer().index_count(), 
+                1, // instance_count
+                0, // first_index
+                0, // vertex_offset
+                0  // first_instance
+            );
+        }
+        
+        Ok(())
+    }
+    
+    /// Complete recording and submit all draw commands
+    pub fn finish(self) -> VulkanResult<vk::CommandBuffer> {
+        // Drop render_pass_recorder which ends the render pass
+        drop(self.render_pass_recorder);
+        
+        // Get the command buffer from the recorder - this is a bit tricky since we consumed it
+        // For now, return a dummy command buffer; the real implementation would need refactoring
+        
+        // TODO: Properly handle command buffer completion
+        // This is a temporary implementation that needs architectural improvement
+        Err(VulkanError::InvalidOperation { 
+            reason: "Multiple object recording completion needs architectural refactoring".to_string() 
+        })
+    }
+    
+    /// Calculate normal matrix from model matrix
+    fn calculate_normal_matrix(model: [[f32; 4]; 4]) -> [[f32; 4]; 3] {
+        use nalgebra::Matrix3;
+        let mat3_model = Matrix3::new(
+            model[0][0], model[0][1], model[0][2],
+            model[1][0], model[1][1], model[1][2],
+            model[2][0], model[2][1], model[2][2],
+        );
+        
+        let normal_matrix = if let Some(inverse) = mat3_model.try_inverse() {
+            inverse.transpose()
+        } else {
+            Matrix3::identity()
+        };
+        
+        // Convert to GLSL column-major format with padding
+        let transposed = normal_matrix.transpose();
+        [
+            [transposed[(0, 0)], transposed[(1, 0)], transposed[(2, 0)], 0.0],
+            [transposed[(0, 1)], transposed[(1, 1)], transposed[(2, 1)], 0.0],
+            [transposed[(0, 2)], transposed[(1, 2)], transposed[(2, 2)], 0.0],
+        ]
     }
 }

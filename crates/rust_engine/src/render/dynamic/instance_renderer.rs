@@ -268,13 +268,13 @@ impl InstanceRenderer {
         self.current_frame = frame_index;
         self.active_command_buffer = Some(command_buffer);
         
-        // Clear batches from previous frame if needed
+        // Always clear batches - each mesh type gets a fresh start
         self.batches.clear();
         
-        // Reset statistics
+        // Reset statistics for this mesh type
         self.stats = RenderStats::default();
         
-        log::trace!("InstanceRenderer set active command buffer for frame {}", frame_index);
+        log::trace!("InstanceRenderer set active command buffer for frame {} (reset for mesh type)", frame_index);
     }
     
     /// Upload instance data from dynamic objects
@@ -545,6 +545,8 @@ impl InstanceRenderer {
                     current_instance_offset,  // first instance offset in buffer
                 );
                 
+                log::trace!("Drew {} instances successfully", instance_count);
+                
                 self.stats.draw_calls += 1;
                 total_objects += instance_count;
                 current_instance_offset += instance_count;
@@ -655,7 +657,6 @@ mod tests {
                 alpha: 1.0,
             }),
             spawn_time: Instant::now(),
-            lifetime: 5.0,
             generation: 0,
             state: crate::render::dynamic::object_manager::ResourceState::Active,
         };

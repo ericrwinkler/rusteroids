@@ -23,12 +23,16 @@ use rust_engine::render::{
     material::{MaterialId, MaterialType},
     GameObject,
     shared_resources::SharedRenderingResources,
-    dynamic::{DynamicObjectHandle, MaterialProperties},
+    dynamic::{DynamicObjectHandle, MaterialProperties, MeshType},
 };
 use rust_engine::foundation::math::Vec3;
 use glfw::{Action, Key, WindowEvent};
 use std::time::Instant;
 use rand::prelude::*;
+
+// Configuration constants
+const MAX_TEAPOTS: usize = 10;  // Maximum number of teapots before oldest are despawned
+const MAX_LIGHTS: usize = 8;    // Maximum number of lights before oldest are despawned
 
 #[derive(Clone)]
 struct TeapotInstance {
@@ -242,10 +246,6 @@ impl DynamicTeapotApp {
     }
     
     fn spawn_random_teapot(&mut self) {
-        if self.teapot_instances.len() >= self.max_teapots {
-            return; // Max limit reached
-        }
-        
         let mut rng = thread_rng();
         
         // Random position
@@ -314,11 +314,11 @@ impl DynamicTeapotApp {
         
         // Spawn dynamic object with random material properties
         match self.graphics_engine.spawn_dynamic_object(
+            MeshType::Teapot,
             position,
             Vec3::new(0.0, 0.0, 0.0), // No initial rotation
             Vec3::new(1.0, 1.0, 1.0), // Unit scale
             material_props,
-            lifetime,
         ) {
             Ok(dynamic_handle) => {
                 // Create instance tracker
@@ -426,7 +426,7 @@ impl DynamicTeapotApp {
         };
         
         // Spawn a colored sphere marker at the light position using sphere mesh
-        let sphere_handle = self.spawn_sphere_marker(position, color, lifetime);
+        let sphere_handle = self.spawn_sphere_marker(position, color);
         
         let instance = LightInstance {
             entity,
@@ -454,102 +454,94 @@ impl DynamicTeapotApp {
     /// - Separate mesh-specific spawning methods
     /// - Clear separation of concerns
     /// - Reusable systems with different resource sets
-    fn spawn_sphere_marker(&mut self, position: Vec3, color: Vec3, lifetime: f32) -> Option<DynamicObjectHandle> {
-        // Check if sphere resources are available
-        if self.sphere_shared_resources.is_none() {
-            log::warn!("Sphere shared resources not available, cannot spawn sphere marker");
-            return None;
-        }
-        
+    fn spawn_sphere_marker(&mut self, position: Vec3, color: Vec3) -> Option<DynamicObjectHandle> {
         // Create MaterialProperties with the light's color
         let sphere_material_props = MaterialProperties {
-            base_color: [color.x, color.y, color.z, 1.0], // Use light color
-            metallic: 0.1,
-            roughness: 0.3,
-            emission: [color.x * 0.2, color.y * 0.2, color.z * 0.2], // Slight emission to make it glow
+            base_color: [color.x, color.y, color.z, 1.0],
+            metallic: 0.0,
+            roughness: 0.1,
+            emission: [color.x * 2.0, color.y * 2.0, color.z * 2.0], // Bright emission
             alpha: 1.0,
         };
         
-        // TODO: Implement proper multi-mesh spawning architecture
-        // For now, this is a placeholder - the real fix requires extending
-        // the dynamic spawning system to support multiple mesh types
-        
-        // ARCHITECTURAL NOTE: The current system ties spawning to a single SharedRenderingResources
-        // A proper solution would either:
-        // 1. Extend the spawning system to accept a mesh type parameter
-        // 2. Create separate spawning systems for each mesh type  
-        // 3. Implement runtime mesh switching in the spawning system
-        
-        log::warn!("Multi-mesh spawning not yet implemented - using teapot system as fallback");
-        
-        // Fallback: use teapot system with small scale (not ideal but functional)
+        // Spawn sphere using multi-mesh system with appropriate scale
         match self.graphics_engine.spawn_dynamic_object(
+            MeshType::Sphere,
             position,
             Vec3::new(0.0, 0.0, 0.0), // No rotation
-            Vec3::new(0.15, 0.15, 0.15), // Very small scale
+            Vec3::new(0.5, 0.5, 0.5), // Medium sphere scale for visible light markers
             sphere_material_props,
-            lifetime,
         ) {
             Ok(handle) => {
-                log::trace!("Spawned sphere marker (using teapot fallback) at {:?} with color {:?}", position, color);
                 Some(handle)
             }
             Err(e) => {
-                log::warn!("Failed to spawn sphere marker: {}", e);
+                log::warn!("Failed to spawn sphere light marker: {}", e);
                 None
             }
         }
     }
     
-    fn despawn_expired_entities(&mut self) {
-        let now = Instant::now();
-        
-        // Remove expired teapots
+    fn despawn_excess_objects(&mut self) {
         let initial_teapot_count = self.teapot_instances.len();
-        self.teapot_instances.retain(|instance| {
-            let elapsed = now.duration_since(instance.spawn_time).as_secs_f32();
-            if elapsed >= instance.lifetime {
+        let initial_light_count = self.light_instances.len();
+        
+        // Despawn oldest teapots if we exceed the maximum
+        if self.teapot_instances.len() > MAX_TEAPOTS {
+            let excess_count = self.teapot_instances.len() - MAX_TEAPOTS;
+            
+            // Sort by spawn time to get oldest first
+            self.teapot_instances.sort_by_key(|instance| instance.spawn_time);
+            
+            // Remove the oldest excess teapots
+            for _ in 0..excess_count {
+                let instance = self.teapot_instances.remove(0);  // Remove first (oldest)
+                
+                let elapsed = instance.spawn_time.elapsed().as_secs_f32();
+                
                 // Handle both old entity system and new dynamic handle system
                 if let Some(entity) = instance.entity {
                     self.scene_manager.remove_entity(entity);
-                    log::info!("Despawned teapot entity (lived {:.1}s)", elapsed);
+                    log::info!("Despawned old teapot entity (lived {:.1}s)", elapsed);
                 }
                 if let Some(handle) = instance.dynamic_handle {
-                    if let Err(e) = self.graphics_engine.despawn_dynamic_object(handle) {
-                        log::warn!("Failed to despawn dynamic teapot: {}", e);
+                    if let Err(e) = self.graphics_engine.despawn_dynamic_object(MeshType::Teapot, handle) {
+                        log::warn!("Failed to despawn old teapot: {}", e);
                     } else {
-                        log::info!("Despawned dynamic teapot (lived {:.1}s)", elapsed);
+                        log::info!("Despawned old teapot (lived {:.1}s, over limit)", elapsed);
                     }
                 }
-                false
-            } else {
-                true
             }
-        });
+        }
         
-        // Remove expired lights
-        let initial_light_count = self.light_instances.len();
-        self.light_instances.retain(|instance| {
-            let elapsed = now.duration_since(instance.spawn_time).as_secs_f32();
-            if elapsed >= instance.lifetime {
+        // Despawn oldest lights if we exceed the maximum  
+        if self.light_instances.len() > MAX_LIGHTS {
+            let excess_count = self.light_instances.len() - MAX_LIGHTS;
+            
+            // Sort by spawn time to get oldest first
+            self.light_instances.sort_by_key(|instance| instance.spawn_time);
+            
+            // Remove the oldest excess lights
+            for _ in 0..excess_count {
+                let instance = self.light_instances.remove(0);  // Remove first (oldest)
+                
+                let elapsed = instance.spawn_time.elapsed().as_secs_f32();
+                
                 // Remove light component from ECS world
                 self.world.remove_component::<LightComponent>(instance.entity);
                 
                 // Also despawn the sphere marker if it exists
                 if let Some(sphere_handle) = instance.sphere_handle {
-                    if let Err(e) = self.graphics_engine.despawn_dynamic_object(sphere_handle) {
+                    if let Err(e) = self.graphics_engine.despawn_dynamic_object(MeshType::Sphere, sphere_handle) {
                         log::warn!("Failed to despawn light sphere marker: {}", e);
                     } else {
-                        log::trace!("Despawned sphere marker for light");
+                        log::trace!("Despawned sphere marker for old light");
                     }
                 }
                 
-                log::info!("Despawned light (lived {:.1}s)", elapsed);
-                false
-            } else {
-                true
+                log::info!("Despawned old light (lived {:.1}s, over limit)", elapsed);
             }
-        });
+        }
         
         let teapots_despawned = initial_teapot_count - self.teapot_instances.len();
         let lights_despawned = initial_light_count - self.light_instances.len();
@@ -775,15 +767,8 @@ impl DynamicTeapotApp {
         
         // Load sphere mesh for light markers
         match ObjLoader::load_obj("resources/models/sphere.obj") {
-            Ok(mut mesh) => {
-                // Scale sphere to be small (light markers should be small)
-                let scale_factor = 0.2; // Make spheres 20% of original size
-                for vertex in &mut mesh.vertices {
-                    vertex.position[0] *= scale_factor;
-                    vertex.position[1] *= scale_factor;
-                    vertex.position[2] *= scale_factor;
-                }
-                
+            Ok(mesh) => {
+                // Use original sphere mesh size - scaling will be done through transform scale
                 log::info!("Loaded sphere mesh successfully with {} vertices and {} indices", 
                           mesh.vertices.len(), mesh.indices.len());
                 self.sphere_mesh = Some(mesh);
@@ -803,53 +788,55 @@ impl DynamicTeapotApp {
         
         // Initialize GameObject system for multiple individual draw calls
         if let Some(ref teapot_mesh) = self.teapot_mesh {
-            // Create regular shared rendering resources (works with existing shaders)
-            let materials = Self::create_teapot_materials();
-            match self.graphics_engine.create_instanced_rendering_resources(teapot_mesh, &materials) {
-                Ok(shared_resources) => {
-                    log::info!("Created SharedRenderingResources successfully for multiple draw calls");
-                    self.shared_resources = Some(shared_resources);
-                    
-                    // Initialize the instance renderer system (now does multiple individual draw calls)
-                    match self.graphics_engine.initialize_instance_renderer(100) {
-                        Ok(()) => {
-                            log::info!("Initialized renderer with capacity for 100 individual draw calls");
-                        }
-                        Err(e) => {
-                            log::error!("Failed to initialize renderer: {}", e);
-                            return Err(e);
-                        }
-                    }
+            // Create materials for teapots
+            let teapot_materials = Self::create_teapot_materials();
+            
+            // Create mesh pool for teapots
+            if let Err(e) = self.graphics_engine.create_mesh_pool(
+                MeshType::Teapot,
+                teapot_mesh,
+                &teapot_materials,
+                100 // Max 100 teapots
+            ) {
+                log::error!("Failed to create teapot mesh pool: {}", e);
+                return Err(e);
+            }
+            log::info!("Created teapot mesh pool successfully");
+            
+            // Initialize the instance renderer system (now does multiple individual draw calls)
+            match self.graphics_engine.initialize_instance_renderer(100) {
+                Ok(()) => {
+                    log::info!("Initialized renderer with capacity for 100 individual draw calls");
                 }
                 Err(e) => {
-                    log::error!("Failed to create SharedRenderingResources: {}", e);
+                    log::error!("Failed to initialize renderer: {}", e);
                     return Err(e);
                 }
             }
         }
         
-        // Create SharedRenderingResources for sphere markers (for light visualization)
+        // Create sphere mesh pool for light markers
         if let Some(ref sphere_mesh) = self.sphere_mesh {
-            let sphere_materials = vec![
-                Material::standard_pbr(StandardMaterialParams {
-                    base_color: Vec3::new(1.0, 1.0, 1.0), // White base - colors come from MaterialProperties
-                    alpha: 1.0,
-                    metallic: 0.1,
-                    roughness: 0.3,
-                    ..Default::default()
-                }).with_name("Light Marker Sphere"),
-            ];
+            // Create simple materials for spheres (light markers)
+            let sphere_materials = vec![Material::standard_pbr(StandardMaterialParams {
+                base_color: Vec3::new(1.0, 1.0, 0.0), // Yellow for light markers
+                alpha: 1.0,
+                metallic: 0.0,
+                roughness: 0.8,
+                emission: Vec3::new(0.2, 0.2, 0.0), // Slight emission for visibility
+                ..Default::default()
+            }).with_name("Light Marker")];
             
-            match self.graphics_engine.create_instanced_rendering_resources(sphere_mesh, &sphere_materials) {
-                Ok(shared_resources) => {
-                    log::info!("Created sphere SharedRenderingResources successfully for light markers");
-                    self.sphere_shared_resources = Some(shared_resources);
-                }
-                Err(e) => {
-                    log::warn!("Failed to create sphere SharedRenderingResources: {}", e);
-                    // Not critical - lights will work without visual markers
-                }
+            if let Err(e) = self.graphics_engine.create_mesh_pool(
+                MeshType::Sphere,
+                sphere_mesh,
+                &sphere_materials,
+                50 // Max 50 light markers
+            ) {
+                log::error!("Failed to create sphere mesh pool: {}", e);
+                return Err(e);
             }
+            log::info!("Created sphere mesh pool successfully");
         }
 
         Ok(())
@@ -962,23 +949,20 @@ impl DynamicTeapotApp {
         let mut rng = thread_rng();
         let now = Instant::now();
         
-        // Spawn teapots randomly (every 1-3 seconds if under limit)
+        // Spawn teapots randomly (every 1-3 seconds)
         if now.duration_since(self.last_teapot_spawn).as_secs_f32() > rng.gen_range(1.0..3.0) {
             self.spawn_random_teapot();
             self.last_teapot_spawn = now;
         }
         
-        // Spawn lights randomly (every 2-4 seconds if under limit)
+        // Spawn lights randomly (every 2-4 seconds)
         if now.duration_since(self.last_light_spawn).as_secs_f32() > rng.gen_range(2.0..4.0) {
             self.spawn_random_light();
             self.last_light_spawn = now;
         }
         
-        // Remove expired entities
-        self.despawn_expired_entities();
-        
-        // Clean up expired teapot instances from dynamic system
-        self.cleanup_expired_instances();
+        // Remove excess objects AFTER spawning (keep only newest within limits)
+        self.despawn_excess_objects();
         
         // Update camera with orbital motion
         let camera_angle = elapsed_seconds * self.camera_orbit_speed;
@@ -1040,28 +1024,37 @@ impl DynamicTeapotApp {
                 light_comp.intensity = current_intensity.max(0.0); // Ensure non-negative
             }
             
-            // Update sphere marker position to follow the light
+            // Update sphere marker position and scale to follow the light
             if let Some(sphere_handle) = light_instance.sphere_handle {
-                // Update the dynamic object's transform to match the light's current position
-                if let Err(e) = self.graphics_engine.update_dynamic_object_transform(
-                    sphere_handle, 
-                    light_instance.current_position,
-                    Vec3::new(0.0, 0.0, 0.0), // No rotation
-                    Vec3::new(0.15, 0.15, 0.15) // Keep small scale
-                ) {
-                    log::warn!("Failed to update sphere marker position: {}", e);
-                }
-            }
-            
-            // Update sphere marker position to follow the light
-            if let Some(sphere_handle) = light_instance.sphere_handle {
-                if let Err(e) = self.graphics_engine.update_dynamic_object_transform(
-                    sphere_handle,
-                    light_instance.current_position,
-                    Vec3::new(0.0, 0.0, 0.0), // No rotation
-                    Vec3::new(0.15, 0.15, 0.15), // Small scale for markers
-                ) {
-                    log::warn!("Failed to update sphere marker position: {}", e);
+                // Get the current light component to read intensity and range
+                if let Some(light_comp) = self.world.get_component::<LightComponent>(light_instance.entity) {
+                    // Calculate scale based on light intensity and range
+                    // Much smaller base scale, then multiply by intensity and a fraction of range
+                    let base_scale = 0.5;
+                    let intensity_factor = light_comp.intensity.max(0.1); // Minimum visible scale
+                    let range_factor = (light_comp.range * 0.01).max(0.1); // 1% of range, minimum 0.1
+                    let combined_scale = base_scale * intensity_factor * range_factor;
+                    let scale_vec = Vec3::new(combined_scale, combined_scale, combined_scale);
+                    
+                    // Update both position and scale
+                    if let Err(e) = self.graphics_engine.update_dynamic_object_transform(
+                        MeshType::Sphere,
+                        sphere_handle,
+                        light_instance.current_position,
+                        Vec3::new(0.0, 0.0, 0.0), // No rotation
+                        scale_vec,
+                    ) {
+                        log::warn!("Failed to update sphere marker transform: {}", e);
+                    }
+                } else {
+                    // Fallback to position-only update if light component not found
+                    if let Err(e) = self.graphics_engine.update_dynamic_object_position(
+                        MeshType::Sphere,
+                        sphere_handle,
+                        light_instance.current_position,
+                    ) {
+                        log::warn!("Failed to update sphere marker position: {}", e);
+                    }
                 }
             }
         }
@@ -1096,63 +1089,13 @@ impl DynamicTeapotApp {
         let multi_light_env = self.build_multi_light_environment_from_entities().clone();
         self.graphics_engine.set_multi_light_environment(&multi_light_env);
         
-        // UPDATE DYNAMIC OBJECTS: Spawn new objects using the dynamic system
-        if self.teapot_mesh.is_some() {
-            // Convert material to MaterialProperties and spawn dynamic objects
-            for teapot_instance in &mut self.teapot_instances {
-                // Only create dynamic object if it doesn't have a handle yet
-                if teapot_instance.dynamic_handle.is_none() {
-                    let phase_offset = (teapot_instance.spawn_time.elapsed().as_secs_f32()) * 0.7;
-                    let y_offset = (elapsed_seconds * 1.0 + phase_offset).sin() * 1.2;
-                    let rotation_y = elapsed_seconds * 0.5 + phase_offset;
-                    
-                    // Calculate animated position
-                    let position = teapot_instance.position + Vec3::new(0.0, y_offset, 0.0);
-                    let rotation = Vec3::new(0.0, rotation_y, 0.0);
-                    let scale = Vec3::new(
-                        teapot_instance.scale, 
-                        teapot_instance.scale, 
-                        teapot_instance.scale
-                    );
-                    
-                    // Create MaterialProperties from Material (simplified for now)
-                    let material_props = MaterialProperties {
-                        base_color: [1.0, 0.8, 0.3, 1.0], // Golden teapot color
-                        metallic: 0.9,
-                        roughness: 0.1,
-                        emission: [0.0, 0.0, 0.0],
-                        alpha: 1.0,
-                    };
-                    
-                    // Spawn dynamic object using the pool system
-                    match self.graphics_engine.spawn_dynamic_object(
-                        position,
-                        rotation,
-                        scale,
-                        material_props,
-                        teapot_instance.lifetime
-                    ) {
-                        Ok(handle) => {
-                            teapot_instance.dynamic_handle = Some(handle);
-                            log::debug!("Spawned dynamic teapot at position {:?}", position);
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to spawn dynamic teapot: {}", e);
-                            // Continue without crashing - pool might be full
-                        }
-                    }
-                }
-            }
-        }
+        // UPDATE DYNAMIC OBJECTS: All objects are spawned directly in spawn methods
+        // No additional spawning logic needed here
         
-        // RECORD DYNAMIC DRAWS: Record all active dynamic objects (teapots and light markers)
-        if let Some(ref shared_resources) = self.shared_resources {
-            log::debug!("Recording dynamic draws for teapots and light markers...");
-            self.graphics_engine.record_dynamic_draws(shared_resources)?;
-            log::debug!("Dynamic draws recorded successfully");
-        } else {
-            log::warn!("No shared resources available for dynamic rendering");
-        }
+        // RECORD DYNAMIC DRAWS: Record all active dynamic objects for rendering
+        log::debug!("Recording dynamic object draw commands...");
+        self.graphics_engine.record_dynamic_draws()?;
+        log::debug!("Dynamic draw commands recorded successfully");
         
         // END DYNAMIC FRAME: Submit and present
         log::debug!("Ending dynamic frame...");
@@ -1164,10 +1107,15 @@ impl DynamicTeapotApp {
         unsafe {
             if elapsed_seconds - LAST_LOG_TIME >= 5.0 {
                 if let Some(stats) = self.graphics_engine.get_dynamic_stats() {
-                    log::info!("Dynamic rendering: {} active objects, {} total spawned, {}% pool utilization", 
-                              stats.active_objects,
+                    // Calculate utilization based on render batches (fewer batches = better performance)
+                    let utilization_estimate = ((stats.render_batches_per_frame as f32 / stats.active_pools as f32) * 100.0).min(100.0);
+                    log::info!("Dynamic rendering: {} active objects, {} total spawned, {} render batches/frame", 
+                              stats.total_active_objects,
                               stats.total_spawned,
-                              (stats.utilization * 100.0) as u32);
+                              stats.render_batches_per_frame);
+                    log::info!("Pool efficiency: {} active pools, estimated {}% efficiency",
+                              stats.active_pools,
+                              utilization_estimate as u32);
                 }
                 log::info!("Total teapot instances: {}, {} active lights (sunlight + {} dynamic)", 
                           self.teapot_instances.len(),

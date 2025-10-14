@@ -2,9 +2,9 @@
 
 ## ⚠️ **CURRENT STATUS** 
 
-**Architecture State**: Core systems working, dynamic rendering system design complete, ready for implementation
-**Performance**: 60+ FPS single object, dynamic objects blocked by architecture mismatch
-**Priority**: Implement Dynamic Rendering System for memory-safe dynamic object management
+**Architecture State**: Core systems working, single-mesh dynamic system architecture finalized
+**Performance**: 60+ FPS single object, implementing high-performance single-mesh pools
+**Priority**: Implement Single-Mesh Pool System for optimal batching performance
 
 ## Overview
 
@@ -24,11 +24,11 @@ Rusteroids is a modular ECS-based Vulkan rendering engine designed for 2D/3D gam
 - **Resource Management**: Pre-allocated pools for dynamic objects, permanent allocation for static objects
 - **Validation**: Comprehensive error handling, Vulkan validation layer integration
 
-### 3. **Dual Rendering Architecture**
-- **Static Objects**: Permanent GPU resources via GameObject system
-- **Dynamic Objects**: Pooled resources via DynamicObjectManager
-- **Clear API Boundaries**: Separate interfaces prevent architecture mixing
-- **Batch Rendering**: Single command buffer submission per frame
+### 3. **Single-Mesh Pool Architecture**
+- **Mesh-Specific Pools**: Separate DynamicObjectManager for each mesh type (teapots, spheres, cubes)
+- **Optimal Batching**: Each pool uses single instanced draw call for maximum performance
+- **Pool Management**: MeshPoolManager coordinates multiple single-mesh pools
+- **Performance**: O(1) rendering per mesh type, minimal state changes
 
 ## Project Structure
 
@@ -39,8 +39,9 @@ rusteroids/
 │   │   └── src/
 │   │       ├── ecs/                 # Entity-Component-System
 │   │       ├── render/              # Dual-path Vulkan rendering
-│   │       │   ├── dynamic/         # Dynamic object rendering system
-│   │       │   │   ├── object_manager.rs    # DynamicObjectManager
+│   │       │   ├── dynamic/         # Single-mesh pool rendering system
+│   │       │   │   ├── pool_manager.rs      # MeshPoolManager - coordinates multiple pools
+│   │       │   │   ├── object_manager.rs    # DynamicObjectManager - single mesh type
 │   │       │   │   ├── instance_renderer.rs # Batch rendering pipeline
 │   │       │   │   ├── resource_pool.rs     # Memory pools
 │   │       │   │   └── mod.rs              # Public interface
@@ -142,12 +143,25 @@ for object in &static_objects {
 graphics_engine.end_frame(&mut window)?;
 ```
 
-#### Dynamic Object Rendering (Pool System)
+#### Single-Mesh Pool System
 
-**Purpose**: Temporary objects with bounded lifetime and pooled resources
+**Purpose**: High-performance rendering with separate pools per mesh type
 
 ```rust
+pub struct MeshPoolManager {
+    // Multiple single-mesh pools
+    pools: HashMap<MeshType, DynamicObjectManager>,
+    
+    // Shared per-frame resources
+    camera_ubo: Buffer,
+    lighting_ubo: Buffer,
+}
+
 pub struct DynamicObjectManager {
+    // Single mesh type for this pool
+    mesh_type: MeshType,
+    shared_resources: SharedRenderingResources, // Specific to this mesh
+    
     // Pre-allocated object pools
     object_pool: ObjectPool<DynamicRenderData>,
     transform_pool: Pool<TransformComponent>,
@@ -156,15 +170,35 @@ pub struct DynamicObjectManager {
     // Active dynamic objects this frame
     active_objects: Vec<DynamicObjectHandle>,
     
-    // Shared GPU resources
-    shared_vertex_buffer: Buffer,
-    shared_uniform_buffer: Buffer,
-    shared_descriptor_sets: Vec<vk::DescriptorSet>,
-    
-    // Instance data for GPU upload
+    // Instance data for GPU upload (all same mesh type)
     instance_buffer: Buffer,
-    max_instances: usize, // Pre-allocated limit (e.g., 100)
+    max_instances: usize, // Pre-allocated limit (e.g., 100 per mesh type)
 }
+```
+
+**Characteristics**:
+- ✅ One DynamicObjectManager per mesh type (teapots, spheres, cubes)
+- ✅ Each pool has dedicated SharedRenderingResources for optimal batching
+- ✅ Single instanced draw call per mesh type for maximum performance  
+- ✅ O(1) rendering complexity per mesh type regardless of object count
+- ✅ Minimal state changes - only vertex buffer binding between mesh types
+
+**API Usage**:
+```rust
+// Create separate pools for each mesh type
+let mut pool_manager = MeshPoolManager::new();
+pool_manager.create_pool(MeshType::Teapot, teapot_shared_resources)?;
+pool_manager.create_pool(MeshType::Sphere, sphere_shared_resources)?;
+
+// Spawn objects into appropriate pools
+let teapot_handle = pool_manager.spawn_object(
+    MeshType::Teapot, 
+    position, rotation, scale, 
+    material_properties, lifetime
+)?;
+
+// Automatic optimal rendering
+pool_manager.render_all_pools(frame_index)?;
 ```
 
 **Data Structures**:
@@ -248,11 +282,11 @@ Cleanup: Automatic return to pool on lifetime expiration
 **Pool Configuration**:
 ```rust
 pub struct PoolConfiguration {
-    max_dynamic_objects: usize = 100,    // Growth capacity beyond typical usage
-    max_materials: usize = 20,           # Material variety for visual diversity
+    max_dynamic_objects: usize = 100,    // Per mesh type capacity
+    max_materials: usize = 20,           # Material variety per mesh type
     frames_in_flight: usize = 2,         # Standard double buffering
     
-    // Calculated buffer sizes
+    // Calculated buffer sizes per pool
     instance_buffer_size: usize = max_dynamic_objects * size_of::<DynamicInstanceData>(),
     uniform_buffer_size: usize = max_dynamic_objects * MAX_UNIFORM_SIZE,
 }
@@ -315,17 +349,27 @@ fn record_static_objects() -> VulkanResult<()> {
 }
 ```
 
-**Dynamic Objects**:
+**Single-Mesh Pools**:
 ```rust
-fn record_dynamic_objects() -> VulkanResult<()> {
+fn record_single_mesh_pool(pool: &DynamicObjectManager) -> VulkanResult<()> {
     // Bind per-frame descriptor set (camera + lighting)
     cmd_bind_descriptor_sets(set_0_frame_data);
     
-    // Upload instance data to GPU
-    update_instance_buffer(active_dynamic_objects);
+    // Bind mesh-specific vertex buffer (teapots, spheres, or cubes)
+    cmd_bind_vertex_buffers(pool.shared_resources.vertex_buffer);
+    cmd_bind_index_buffer(pool.shared_resources.index_buffer);
     
-    // Single instanced draw call for all objects
-    cmd_draw_indexed_indirect(instance_count);
+    // Upload instance data to GPU (all same mesh type)
+    update_instance_buffer(pool.active_objects);
+    
+    // Single optimized instanced draw call for this mesh type
+    cmd_draw_indexed_instanced(pool.instance_count);
+}
+
+fn render_all_pools() -> VulkanResult<()> {
+    for (mesh_type, pool) in &mesh_pools {
+        record_single_mesh_pool(pool)?; // One draw call per mesh type
+    }
 }
 ```
 
@@ -343,9 +387,10 @@ fn record_dynamic_objects() -> VulkanResult<()> {
 // - Memory: n × uniform_buffer_size × frames_in_flight
 // - Performance: n × descriptor_set_bind + n × draw_call
 
-// Dynamic Objects: O(1) regardless of active object count (up to pool limit)
-// - Memory: pool_size × uniform_buffer_size (pre-allocated)
-// - Performance: 1 × instance_data_upload + 1 × instanced_draw_call
+// Single-Mesh Pools: O(m) where m = number of active mesh types
+// - Memory: m × pool_size × uniform_buffer_size (pre-allocated)
+// - Performance: m × vertex_buffer_bind + m × instanced_draw_call
+// - Objects per pool: O(1) rendering regardless of count (up to pool limit)
 ```
 
 ### Coordinate System
@@ -414,7 +459,7 @@ pub struct MaterialProperties {
 
 ## Integration Patterns
 
-### Static + Dynamic Rendering Workflow
+### Single-Mesh Pool + Static Rendering Workflow
 ```rust
 fn render_frame() -> Result<()> {
     // Begin frame setup
@@ -427,9 +472,10 @@ fn render_frame() -> Result<()> {
     // Render static objects (buildings, terrain, UI)
     graphics_engine.render_static_objects(&static_scene)?;
     
-    // Update and render dynamic objects (particles, projectiles)
-    graphics_engine.update_dynamic_objects(delta_time)?;
-    graphics_engine.render_dynamic_objects()?;
+    // Render each mesh type pool efficiently
+    graphics_engine.render_teapot_pool()?;  // Single draw call for all teapots
+    graphics_engine.render_sphere_pool()?;  // Single draw call for all spheres  
+    graphics_engine.render_cube_pool()?;    // Single draw call for all cubes
     
     // Submit commands and present
     graphics_engine.end_frame(&mut window)?;
@@ -447,6 +493,7 @@ pub struct StaticRenderComponent {
 
 #[derive(Component)]
 pub struct DynamicRenderComponent {
+    mesh_type: MeshType,              // Which pool this object belongs to
     object_handle: DynamicObjectHandle,
     material_override: Option<MaterialInstance>,
     render_flags: RenderFlags,
@@ -455,15 +502,14 @@ pub struct DynamicRenderComponent {
 // Systems
 pub struct StaticRenderSystem { /* ... */ }
 pub struct DynamicRenderSystem { 
-    object_manager: DynamicObjectManager,
-    instance_renderer: InstanceRenderer,
+    pool_manager: MeshPoolManager,    // Manages multiple single-mesh pools
 }
 
 impl System for DynamicRenderSystem {
     fn update(&mut self, world: &mut World, delta_time: f32) {
         // Process entities with DynamicRenderComponent
-        // Update object manager with component data
-        // Handle spawning/despawning based on component lifecycle
+        // Route to appropriate mesh pool based on mesh_type
+        // Handle spawning/despawning with optimal batching per mesh type
     }
 }
 ```

@@ -124,19 +124,16 @@ pub struct DynamicSpawnParams {
     pub scale: Vec3,
     /// Material properties for this object
     pub material: Material,
-    /// How long this object should live (in seconds)
-    pub lifetime: f32,
 }
 
 impl DynamicSpawnParams {
     /// Create new spawn parameters
-    pub fn new(position: Vec3, rotation: Vec3, scale: Vec3, material: Material, lifetime: f32) -> Self {
+    pub fn new(position: Vec3, rotation: Vec3, scale: Vec3, material: Material) -> Self {
         Self {
             position,
             rotation,
             scale,
             material,
-            lifetime,
         }
     }
 }
@@ -167,8 +164,6 @@ pub struct DynamicRenderData {
     
     /// Lifecycle information
     pub spawn_time: Instant,
-    /// Time in seconds this object should remain alive
-    pub lifetime: f32,
     
     /// Pool management
     pub generation: u32,
@@ -184,7 +179,6 @@ impl Default for DynamicRenderData {
             scale: Vec3::new(1.0, 1.0, 1.0),
             material: Material::standard_pbr(crate::render::material::StandardMaterialParams::default()),
             spawn_time: Instant::now(),
-            lifetime: 0.0,
             generation: 0,
             state: ResourceState::Available,
         }
@@ -192,10 +186,6 @@ impl Default for DynamicRenderData {
 }
 
 impl DynamicRenderData {
-    /// Check if this object has expired
-    pub fn is_expired(&self) -> bool {
-        self.spawn_time.elapsed().as_secs_f32() >= self.lifetime
-    }
     
     /// Get the model matrix for this object
     pub fn get_model_matrix(&self) -> Mat4 {
@@ -206,7 +196,9 @@ impl DynamicRenderData {
         let scale_matrix = Mat4::new_nonuniform_scaling(&self.scale);
         
         // Apply transforms: scale -> rotation -> translation
-        translation * rotation_z * rotation_y * rotation_x * scale_matrix
+        let result = translation * rotation_z * rotation_y * rotation_x * scale_matrix;
+        
+        result
     }
 }
 
@@ -396,7 +388,6 @@ impl DynamicObjectManager {
                 object.scale = params.scale;
                 object.material = params.material;
                 object.spawn_time = Instant::now();
-                object.lifetime = params.lifetime;
                 object.generation = generation;
                 object.state = ResourceState::Active;
             }
@@ -458,6 +449,19 @@ impl DynamicObjectManager {
             })
         }
     }
+
+    /// Update only object position, preserving rotation and scale
+    pub fn update_object_position(&mut self, handle: DynamicObjectHandle, position: Vec3) -> Result<(), DynamicObjectError> {
+        if let Some(object) = self.object_pool.get_mut_with_handle(handle) {
+            object.position = position;
+            Ok(())
+        } else {
+            Err(DynamicObjectError::InvalidHandle {
+                handle,
+                reason: "Object not found or generation mismatch".to_string(),
+            })
+        }
+    }
     
     /// Get object data by handle
     pub fn get_object(&self, handle: DynamicObjectHandle) -> Result<&DynamicRenderData, DynamicObjectError> {
@@ -471,20 +475,20 @@ impl DynamicObjectManager {
         }
     }
     
-    /// Update all dynamic objects (handle lifetime expiration)
+    /// Update all dynamic objects
     pub fn update(&mut self, _delta_time: f32) {
         let mut objects_to_cleanup = Vec::new();
         
-        // Check for expired objects
+        // Only clean up objects that were manually marked for cleanup
         for &handle in &self.active_objects {
             if let Some(object) = self.object_pool.get_with_handle(handle) {
-                if object.is_expired() || object.state == ResourceState::PendingCleanup {
+                if object.state == ResourceState::PendingCleanup {
                     objects_to_cleanup.push(handle);
                 }
             }
         }
         
-        // Clean up expired/marked objects
+        // Clean up marked objects
         for handle in objects_to_cleanup {
             self.cleanup_object(handle);
         }
@@ -656,7 +660,6 @@ mod tests {
             Vec3::zeros(),
             Vec3::new(1.0, 1.0, 1.0),
             create_test_material(),
-            5.0,
         );
         
         let handle = manager.spawn_object(params).expect("Should spawn object");
@@ -664,7 +667,6 @@ mod tests {
         
         let object = manager.get_object(handle).expect("Should get object");
         assert_eq!(object.position, Vec3::new(1.0, 2.0, 3.0));
-        assert_eq!(object.lifetime, 5.0);
     }
     
     #[test]
@@ -676,7 +678,6 @@ mod tests {
             Vec3::zeros(),
             Vec3::new(1.0, 1.0, 1.0),
             create_test_material(),
-            5.0,
         );
         
         // Fill the pool
@@ -697,7 +698,6 @@ mod tests {
             Vec3::zeros(),
             Vec3::new(1.0, 1.0, 1.0),
             create_test_material(),
-            5.0,
         );
         
         let handle = manager.spawn_object(params).expect("Should spawn object");

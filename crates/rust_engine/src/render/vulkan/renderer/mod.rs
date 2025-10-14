@@ -289,6 +289,10 @@ impl crate::render::RenderBackend for VulkanRenderer {
         self
     }
     
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+    
     fn begin_render_pass(&mut self) -> crate::render::BackendResult<()> {
         log::trace!("Beginning render pass for multiple objects");
         
@@ -443,6 +447,40 @@ impl crate::render::RenderBackend for VulkanRenderer {
 }
 
 impl VulkanRenderer {
+    /// Record dynamic draws using a dedicated InstanceRenderer (new architecture)
+    ///
+    /// This method provides the Vulkan-specific parameters needed for dedicated InstanceRenderer
+    /// per mesh pool, preventing state corruption between different mesh types.
+    pub fn record_dynamic_draws_with_dedicated_renderer(&mut self,
+                                                       instance_renderer: &mut crate::render::dynamic::InstanceRenderer,
+                                                       dynamic_objects: &std::collections::HashMap<crate::render::dynamic::DynamicObjectHandle, crate::render::dynamic::DynamicRenderData>,
+                                                       shared_resources: &crate::render::SharedRenderingResources) 
+                                                       -> crate::render::BackendResult<()> {
+        if let Some(ref state) = self.command_recording_state {
+            // Use the provided dedicated InstanceRenderer instead of the shared one
+            instance_renderer.set_active_command_buffer(state.command_buffer, self.current_frame);
+            
+            // Upload instance data from active dynamic objects
+            instance_renderer.upload_instance_data(dynamic_objects)
+                .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+            
+            // Get frame descriptor set for this frame
+            let frame_descriptor_set = self.resource_manager.frame_descriptor_sets()[self.current_frame];
+            
+            // Get material descriptor set (use first one as default for all objects)
+            let material_descriptor_set = self.resource_manager.material_descriptor_sets()[0];
+            
+            // Record instanced draw commands
+            instance_renderer.record_instanced_draw(shared_resources, &self.context, frame_descriptor_set, material_descriptor_set)
+                .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+            
+            log::trace!("Recorded dynamic draws for {} objects with dedicated renderer", dynamic_objects.len());
+            Ok(())
+        } else {
+            Err(crate::render::RenderError::BackendError("No active command recording".to_string()))
+        }
+    }
+    
     // Getter methods for GameObject creation
     /// Get access to the VulkanContext for resource creation
     pub fn get_context(&self) -> &VulkanContext {
@@ -594,6 +632,46 @@ impl VulkanRenderer {
         } else {
             Err(VulkanError::InvalidOperation {
                 reason: "Instance renderer not initialized or no active command recording".to_string()
+            })
+        }
+    }
+    
+    /// Record dynamic object rendering using instance renderer
+    ///
+    /// Public interface to render dynamic objects using the internal instance renderer.
+    /// This is called from the GraphicsEngine's record_dynamic_draws method.
+    ///
+    /// # Arguments
+    /// * `dynamic_objects` - HashMap of active dynamic objects to render
+    /// * `shared_resources` - Shared rendering resources (mesh, textures, materials)
+    ///
+    /// # Returns
+    /// Result indicating successful rendering
+    pub fn record_dynamic_objects_public(
+        &mut self,
+        dynamic_objects: &std::collections::HashMap<crate::render::dynamic::DynamicObjectHandle, crate::render::dynamic::DynamicRenderData>,
+        shared_resources: &crate::render::SharedRenderingResources,
+    ) -> VulkanResult<()> {
+        if let Some(ref mut instance_renderer) = self.instance_renderer {
+            log::trace!("Recording dynamic objects using instance renderer");
+            
+            // Upload instance data from active dynamic objects
+            instance_renderer.upload_instance_data(dynamic_objects)?;
+            
+            // Get frame descriptor set for this frame
+            let frame_descriptor_set = self.resource_manager.frame_descriptor_sets()[self.current_frame];
+            
+            // Get material descriptor set (use first one as default for all objects)
+            let material_descriptor_set = self.resource_manager.material_descriptor_sets()[0];
+            
+            // Record instanced draw commands
+            instance_renderer.record_instanced_draw(shared_resources, &self.context, frame_descriptor_set, material_descriptor_set)?;
+            
+            log::trace!("Recorded dynamic draws for {} objects", dynamic_objects.len());
+            Ok(())
+        } else {
+            Err(VulkanError::InvalidOperation {
+                reason: "Instance renderer not initialized".to_string()
             })
         }
     }

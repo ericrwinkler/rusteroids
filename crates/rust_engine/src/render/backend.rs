@@ -57,6 +57,10 @@ pub trait RenderBackend {
     /// This breaks abstraction but is needed for complex resource management
     fn as_any(&self) -> &dyn std::any::Any;
     
+    /// Downcast to mutable concrete backend type for advanced operations
+    /// This breaks abstraction but is needed for complex resource management
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    
     /// Begin recording draw commands for multiple objects (proper Vulkan pattern)
     fn begin_render_pass(&mut self) -> BackendResult<()>;
     

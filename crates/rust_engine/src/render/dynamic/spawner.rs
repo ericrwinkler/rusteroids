@@ -116,8 +116,6 @@ pub struct ValidatedSpawnParams {
     pub scale: Vec3,
     /// Material properties for rendering
     pub material: MaterialProperties,
-    /// Object lifetime in seconds (must be positive)
-    pub lifetime: f32,
     /// Optional entity ID for ECS integration
     pub entity_id: Option<u64>,
     /// Render flags for special rendering modes
@@ -130,17 +128,15 @@ impl ValidatedSpawnParams {
         position: Vec3, 
         rotation: Vec3, 
         scale: Vec3, 
-        material: MaterialProperties, 
-        lifetime: f32
+        material: MaterialProperties
     ) -> Result<Self, SpawnerError> {
-        Self::validate_parameters(&position, &rotation, &scale, lifetime)?;
+        Self::validate_parameters(&position, &rotation, &scale)?;
         
         Ok(Self {
             position,
             rotation,
             scale,
             material,
-            lifetime,
             entity_id: None,
             render_flags: 0,
         })
@@ -162,8 +158,7 @@ impl ValidatedSpawnParams {
     fn validate_parameters(
         position: &Vec3,
         rotation: &Vec3,
-        scale: &Vec3,
-        lifetime: f32
+        scale: &Vec3
     ) -> Result<(), SpawnerError> {
         // Check for NaN or infinite values
         if !position.iter().all(|x| x.is_finite()) {
@@ -184,12 +179,6 @@ impl ValidatedSpawnParams {
             });
         }
         
-        if !lifetime.is_finite() || lifetime <= 0.0 {
-            return Err(SpawnerError::InvalidParameters {
-                reason: format!("Lifetime must be positive and finite: {}", lifetime),
-            });
-        }
-        
         // Check reasonable bounds
         const MAX_POSITION: f32 = 1000000.0;
         if position.iter().any(|x| x.abs() > MAX_POSITION) {
@@ -202,13 +191,6 @@ impl ValidatedSpawnParams {
         if scale.iter().any(|x| *x > MAX_SCALE) {
             return Err(SpawnerError::InvalidParameters {
                 reason: format!("Scale values too large: {:?}", scale),
-            });
-        }
-        
-        const MAX_LIFETIME: f32 = 3600.0; // 1 hour
-        if lifetime > MAX_LIFETIME {
-            return Err(SpawnerError::InvalidParameters {
-                reason: format!("Lifetime too long: {} seconds", lifetime),
             });
         }
         
@@ -295,10 +277,6 @@ pub struct ObjectInfo {
     pub scale: Vec3,
     /// When the object was spawned
     pub spawn_time: Instant,
-    /// Object lifetime in seconds
-    pub lifetime: f32,
-    /// Time remaining until automatic despawn
-    pub time_remaining: f32,
     /// Associated entity ID (if any)
     pub entity_id: Option<u64>,
     /// Current render flags
@@ -394,6 +372,9 @@ impl DefaultDynamicSpawner {
         self.object_manager.get_active_objects_map()
     }
     
+    /// Get objects grouped by mesh type for multi-mesh rendering
+    ///
+    /// Returns objects organized by MeshType for efficient batch rendering.
     /// Iterate over active objects without cloning (more efficient)
     ///
     /// Provides direct access to active objects for rendering without the overhead
@@ -420,7 +401,7 @@ impl DynamicObjectSpawner for DefaultDynamicSpawner {
             });
         }
         
-        // Convert to DynamicSpawnParams
+        // Convert to DynamicSpawnParams (no mesh_type - single mesh pool)
         let spawn_params = DynamicSpawnParams {
             position: params.position,
             rotation: params.rotation,
@@ -443,7 +424,6 @@ impl DynamicObjectSpawner for DefaultDynamicSpawner {
                     ..Default::default()
                 }
             ),
-            lifetime: params.lifetime,
         };
         
         // Spawn object through manager
@@ -484,16 +464,12 @@ impl DynamicObjectSpawner for DefaultDynamicSpawner {
     fn get_object_info(&self, handle: DynamicObjectHandle) -> Option<ObjectInfo> {
         let render_data = self.object_manager.get_object(handle).ok()?;
         
-        let time_remaining = render_data.lifetime - render_data.spawn_time.elapsed().as_secs_f32();
-        
         Some(ObjectInfo {
             handle,
             position: render_data.position,
             rotation: render_data.rotation,
             scale: render_data.scale,
             spawn_time: render_data.spawn_time,
-            lifetime: render_data.lifetime,
-            time_remaining: time_remaining.max(0.0),
             entity_id: None, // TODO: Add entity_id to DynamicRenderData
             render_flags: 0, // TODO: Add render_flags to DynamicRenderData
         })
@@ -535,13 +511,11 @@ mod tests {
             Vec3::new(0.1, 0.2, 0.3),
             Vec3::new(1.0, 1.0, 1.0),
             MaterialProperties::default(),
-            5.0
         );
         
         assert!(params.is_ok());
         let params = params.unwrap();
         assert_eq!(params.position, Vec3::new(1.0, 2.0, 3.0));
-        assert_eq!(params.lifetime, 5.0);
     }
     
     #[test]
@@ -551,32 +525,12 @@ mod tests {
             Vec3::zeros(),
             Vec3::new(0.0, 1.0, 1.0), // Zero scale is invalid
             MaterialProperties::default(),
-            5.0
         );
         
         assert!(result.is_err());
         match result.unwrap_err() {
             SpawnerError::InvalidParameters { reason } => {
                 assert!(reason.contains("Scale must be positive"));
-            }
-            _ => panic!("Expected InvalidParameters error"),
-        }
-    }
-    
-    #[test]
-    fn test_invalid_lifetime_validation() {
-        let result = ValidatedSpawnParams::new(
-            Vec3::zeros(),
-            Vec3::zeros(),
-            Vec3::new(1.0, 1.0, 1.0),
-            MaterialProperties::default(),
-            -1.0 // Negative lifetime is invalid
-        );
-        
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            SpawnerError::InvalidParameters { reason } => {
-                assert!(reason.contains("Lifetime must be positive"));
             }
             _ => panic!("Expected InvalidParameters error"),
         }
@@ -625,7 +579,6 @@ mod tests {
             Vec3::zeros(),
             Vec3::new(1.0, 1.0, 1.0),
             MaterialProperties::default(),
-            5.0
         );
         
         assert!(result.is_err());
@@ -636,18 +589,6 @@ mod tests {
             Vec3::zeros(),
             Vec3::new(2000.0, 1.0, 1.0),
             MaterialProperties::default(),
-            5.0
-        );
-        
-        assert!(result.is_err());
-        
-        // Test extremely long lifetime
-        let result = ValidatedSpawnParams::new(
-            Vec3::zeros(),
-            Vec3::zeros(),
-            Vec3::new(1.0, 1.0, 1.0),
-            MaterialProperties::default(),
-            5000.0
         );
         
         assert!(result.is_err());

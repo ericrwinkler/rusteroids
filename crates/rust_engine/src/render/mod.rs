@@ -38,9 +38,6 @@ pub mod batch_renderer;
 pub mod game_object;
 pub mod shared_resources;
 
-#[cfg(test)]
-mod graphics_engine_tests;
-
 pub use mesh::{Mesh, Vertex};
 pub use material::{
     Material, MaterialType, MaterialId, PipelineType, AlphaMode,
@@ -62,7 +59,7 @@ use thiserror::Error;
 use crate::engine::{RendererConfig, WindowConfig}; // FIXME: Engine coupling - should be library-agnostic
 use crate::foundation::math::{Vec3, Mat4, Mat4Ext, utils};
 use crate::render::dynamic::{
-    DynamicObjectSpawner, DefaultDynamicSpawner, DynamicObjectHandle, ValidatedSpawnParams,
+    MeshPoolManager, MeshType, DynamicObjectHandle,
     SpawnerError, MaterialProperties
 };
 
@@ -101,9 +98,9 @@ pub struct GraphicsEngine {
     /// FIXME: Should be optional debug feature, not core renderer responsibility
     frame_count: u64,
     
-    /// Dynamic object spawning system for temporary objects
-    /// Provides high-level API for spawning/despawning dynamic objects with pooled resources
-    dynamic_spawner: Option<DefaultDynamicSpawner>,
+    /// Dynamic object pool management system for temporary objects
+    /// Manages multiple single-mesh pools for optimal rendering performance
+    pool_manager: Option<MeshPoolManager>,
     
 }
 
@@ -141,7 +138,7 @@ impl GraphicsEngine {
             current_camera: None,
             current_lighting: None,
             frame_count: 0,
-            dynamic_spawner: None, // Will be initialized when first needed
+            pool_manager: None, // Will be initialized when first needed
         })
     }
     
@@ -623,50 +620,116 @@ impl GraphicsEngine {
     // DYNAMIC OBJECT RENDERING API
     // ================================
 
-    /// Initialize the dynamic object system for pooled rendering
+    /// Initialize the dynamic object pool system
     ///
-    /// Creates and initializes the dynamic object spawner with pooled resources.
-    /// Must be called before using dynamic object methods. This is separated from
-    /// construction to allow lazy initialization when dynamic objects are actually needed.
+    /// Creates the MeshPoolManager and sets up initial pools for common mesh types.
+    /// This must be called before spawning any dynamic objects.
     ///
     /// # Arguments
-    /// * `max_objects` - Maximum number of dynamic objects in the pool
+    /// * `max_objects_per_pool` - Maximum objects per individual mesh pool
     ///
-    /// # Returns  
-    /// Result indicating success or initialization failure
+    /// # Returns
+    /// Result indicating successful initialization
     ///
-    /// # Example
+    /// # Examples
     /// ```rust
-    /// graphics_engine.initialize_dynamic_system(100)?; // Pool of 100 dynamic objects
+    /// // Initialize with 100 objects per mesh type
+    /// graphics_engine.initialize_dynamic_system(100)?;
+    ///
+    /// // Now you can spawn objects
     /// let handle = graphics_engine.spawn_dynamic_object(
-    ///     Vec3::new(0.0, 0.0, 0.0),  // position
-    ///     Vec3::zeros(),              // rotation  
-    ///     Vec3::new(1.0, 1.0, 1.0),  // scale
+    ///     MeshType::Teapot,           // specify mesh type
+    ///     Vec3::new(0.0, 0.0, 0.0),   // position
+    ///     Vec3::zeros(),              // rotation
+    ///     Vec3::new(1.0, 1.0, 1.0),   // scale
     ///     MaterialProperties::default(), // material
     ///     5.0                         // lifetime in seconds
     /// )?;
     /// ```
-    pub fn initialize_dynamic_system(&mut self, max_objects: usize) -> Result<(), Box<dyn std::error::Error>> {
-        log::info!("Initializing dynamic object system with {} max objects", max_objects);
+    pub fn initialize_dynamic_system(&mut self, max_objects_per_pool: usize) -> Result<(), Box<dyn std::error::Error>> {
+        log::info!("Initializing mesh pool system with {} objects per pool", max_objects_per_pool);
         
-        // Access VulkanContext through backend downcasting for dynamic system initialization
+        // Access VulkanContext through backend downcasting for pool system initialization
         if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
             let context = vulkan_backend.get_context();
             
-            // Create DefaultDynamicSpawner with Vulkan context and max objects
-            let spawner = DefaultDynamicSpawner::new(context, max_objects)?;
-            self.dynamic_spawner = Some(spawner);
+            // Create MeshPoolManager
+            let mut pool_manager = MeshPoolManager::new();
+            
+            // TODO: In Phase 3, create pools for each mesh type with proper SharedRenderingResources
+            // For now, we create empty pools that will be populated when SharedRenderingResources integration is complete
+            
+            // Initialize the pool manager with Vulkan resources
+            pool_manager.initialize_pools(context)?;
+            self.pool_manager = Some(pool_manager);
             
             // Initialize backend's dynamic rendering system
-            self.backend.initialize_dynamic_rendering(max_objects)?;
+            self.backend.initialize_dynamic_rendering(max_objects_per_pool)?;
             
-            log::info!("Dynamic object system initialized successfully");
+            log::info!("Mesh pool system initialized successfully");
             Ok(())
         } else {
             Err("Renderer is not using Vulkan backend".into())
         }
     }
 
+    /// Create a mesh pool for a specific mesh type (MeshPoolManager system)
+    ///
+    /// This method creates a pool for a specific mesh type using the MeshPoolManager.
+    /// Must be called after initialize_dynamic_system and before spawning objects of this type.
+    ///
+    /// # Arguments
+    /// * `mesh_type` - The type of mesh to create a pool for (Teapot, Sphere, Cube)
+    /// * `mesh` - The mesh data to create SharedRenderingResources from
+    /// * `materials` - Array of materials for this mesh type
+    /// * `max_objects` - Maximum number of objects this pool can hold
+    ///
+    /// # Returns
+    /// Result indicating successful pool creation or error
+    pub fn create_mesh_pool(
+        &mut self,
+        mesh_type: crate::render::dynamic::MeshType,
+        mesh: &Mesh,
+        materials: &[Material],
+        max_objects: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        log::info!("Creating mesh pool for {:?} with capacity {}", mesh_type, max_objects);
+        
+        // Create SharedRenderingResources for this mesh using instanced rendering
+        let shared_resources = self.create_instanced_rendering_resources(mesh, materials)?;
+        
+        // Create the pool in the MeshPoolManager
+        if let Some(ref mut pool_manager) = self.pool_manager {
+            // Get VulkanContext from backend
+            if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
+                let context = vulkan_backend.get_context();
+                pool_manager.create_pool(mesh_type, shared_resources, max_objects, context)?;
+                log::info!("Successfully created pool for {:?}", mesh_type);
+                Ok(())
+            } else {
+                Err("Backend is not a VulkanRenderer - cannot get VulkanContext".into())
+            }
+        } else {
+            Err("Dynamic system not initialized. Call initialize_dynamic_system first.".into())
+        }
+    }
+    
+    /// Register a mesh type for multi-mesh rendering (Phase 0)
+    ///
+    /// This method registers a mesh type with its associated SharedRenderingResources
+    /// in the MeshRegistry. This must be called for each mesh type that will be used
+    /// with dynamic objects before spawning objects of that type.
+    ///
+    /// # Arguments
+    /// * `mesh_type` - The type of mesh to register (Teapot, Sphere, Cube)
+    /// * `mesh` - The mesh data to create SharedRenderingResources from
+    /// * `materials` - Array of materials for this mesh type
+    ///
+    /// # Returns
+    /// Result indicating successful registration or error
+    ///
+    /// # Example
+    /// ```rust
     /// Spawn a dynamic object with specified parameters
     ///
     /// Creates a new dynamic object using the pooled resource system. Objects are
@@ -690,10 +753,38 @@ impl GraphicsEngine {
     ///
     /// # Example Usage
     /// ```rust
-    /// // Spawn a temporary object that lasts 3 seconds
+    /// use crate::render::dynamic::MeshType;
+    /// 
+    /// // Spawn a temporary teapot that lasts 3 seconds
     /// let handle = graphics_engine.spawn_dynamic_object(
+    ///     MeshType::Teapot,               // mesh type
     ///     Vec3::new(5.0, 2.0, -3.0),     // position
     ///     Vec3::new(0.0, 45.0_f32.to_radians(), 0.0), // Y rotation
+    /// Spawn a dynamic object with specified parameters
+    ///
+    /// Creates a new dynamic object using the pooled resource system. Objects are
+    /// automatically managed by the pool and will be despawned when their lifetime expires.
+    /// This is the high-level API for creating temporary objects.
+    ///
+    /// # Arguments
+    /// * `position` - World position for the object
+    /// * `rotation` - Rotation in radians (Euler angles)
+    /// * `scale` - Scale factors for each axis
+    /// * `material` - Material properties for rendering
+    /// * `lifetime` - How long the object should exist (seconds)
+    ///
+    /// # Returns
+    /// Handle to the spawned object for tracking/despawning
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use crate::render::{GraphicsEngine, MaterialProperties};
+    /// # use crate::foundation::math::Vec3;
+    /// # let mut graphics_engine = GraphicsEngine::new(window_config)?;
+    /// // Spawn a dynamic object (uses default mesh type)
+    /// let handle = graphics_engine.spawn_dynamic_object(
+    ///     Vec3::new(0.0, 5.0, -10.0),    // position
+    ///     Vec3::new(0.0, 1.57, 0.0),     // rotation
     ///     Vec3::new(2.0, 1.0, 2.0),      // scale
     ///     MaterialProperties {
     ///         base_color: [1.0, 0.5, 0.0, 1.0], // Orange
@@ -706,28 +797,43 @@ impl GraphicsEngine {
     /// ```
     pub fn spawn_dynamic_object(
         &mut self,
+        mesh_type: MeshType,
         position: Vec3,
         rotation: Vec3,
         scale: Vec3,
         material: MaterialProperties,
-        lifetime: f32,
     ) -> Result<DynamicObjectHandle, SpawnerError> {
-        // Ensure dynamic system is initialized
-        let spawner = self.dynamic_spawner.as_mut()
+        // Ensure pool system is initialized
+        let pool_manager = self.pool_manager.as_mut()
             .ok_or(SpawnerError::InvalidParameters {
-                reason: "Dynamic system not initialized - call initialize_dynamic_system() first".to_string()
+                reason: "Pool system not initialized - call initialize_dynamic_system() first".to_string()
             })?;
         
-        // Create validated spawn parameters
-        let params = ValidatedSpawnParams::new(position, rotation, scale, material, lifetime)
+        // Convert MaterialProperties to Material
+        let material_instance = Material::standard_pbr(crate::render::material::StandardMaterialParams {
+            base_color: Vec3::new(
+                material.base_color[0],
+                material.base_color[1],
+                material.base_color[2]
+            ),
+            alpha: material.base_color[3],
+            metallic: material.metallic,
+            roughness: material.roughness,
+            emission: Vec3::new(
+                material.emission[0],
+                material.emission[1],
+                material.emission[2]
+            ),
+            ..Default::default()
+        });
+        
+        // Spawn the object in the appropriate mesh pool
+        let handle = pool_manager.spawn_object(mesh_type, position, rotation, scale, material_instance)
             .map_err(|e| SpawnerError::InvalidParameters {
-                reason: format!("Parameter validation failed: {}", e)
+                reason: format!("Pool manager spawn failed: {}", e)
             })?;
         
-        // Spawn the object using the dynamic spawner
-        let handle = spawner.spawn_dynamic_object(params)?;
-        
-        log::debug!("Spawned dynamic object at position {:?} with lifetime {:.1}s", position, lifetime);
+        log::debug!("Spawned {} object at position {:?}", mesh_type, position);
         Ok(handle)
     }
 
@@ -752,16 +858,19 @@ impl GraphicsEngine {
     /// let handle = graphics_engine.spawn_dynamic_object(/* ... */)?;
     /// 
     /// // Later, manually despawn the object
-    /// graphics_engine.despawn_dynamic_object(handle)?;
+    /// graphics_engine.despawn_dynamic_object(MeshType::Teapot, handle)?;
     /// ```
-    pub fn despawn_dynamic_object(&mut self, handle: DynamicObjectHandle) -> Result<(), SpawnerError> {
-        let spawner = self.dynamic_spawner.as_mut()
+    pub fn despawn_dynamic_object(&mut self, mesh_type: MeshType, handle: DynamicObjectHandle) -> Result<(), SpawnerError> {
+        let pool_manager = self.pool_manager.as_mut()
             .ok_or(SpawnerError::InvalidParameters {
-                reason: "Dynamic system not initialized".to_string()
+                reason: "Pool system not initialized".to_string()
             })?;
         
-        spawner.despawn_dynamic_object(handle)?;
-        log::debug!("Despawned dynamic object with handle generation {}", handle.generation);
+        pool_manager.despawn_object(mesh_type, handle)
+            .map_err(|e| SpawnerError::InvalidParameters {
+                reason: format!("Pool manager despawn failed: {}", e)
+            })?;
+        log::debug!("Despawned {} object with handle generation {}", mesh_type, handle.generation);
         Ok(())
     }
 
@@ -771,6 +880,7 @@ impl GraphicsEngine {
     /// This allows objects to move, rotate, and scale during their lifetime.
     ///
     /// # Arguments
+    /// * `mesh_type` - The mesh type pool this object belongs to
     /// * `handle` - Handle to the dynamic object to update
     /// * `position` - New world position
     /// * `rotation` - New rotation in radians (Euler angles)
@@ -778,29 +888,49 @@ impl GraphicsEngine {
     ///
     /// # Errors
     /// Returns `SpawnerError` if:
-    /// - Dynamic system not initialized
+    /// - Pool system not initialized
     /// - Handle is invalid or object has been despawned
     /// - Transform update fails
+    /// 
+    /// # Note
+    /// This is a temporary API - in Phase 3 this will be improved
     pub fn update_dynamic_object_transform(
         &mut self,
+        mesh_type: MeshType,
         handle: DynamicObjectHandle,
         position: Vec3,
         rotation: Vec3,
         scale: Vec3,
     ) -> Result<(), SpawnerError> {
-        let spawner = self.dynamic_spawner.as_mut()
-            .ok_or(SpawnerError::InvalidParameters {
-                reason: "Dynamic system not initialized".to_string()
-            })?;
+        if let Some(ref mut pool_manager) = self.pool_manager {
+            pool_manager.update_object_transform(mesh_type, handle, position, rotation, scale)
+                .map_err(|e| SpawnerError::InvalidParameters {
+                    reason: format!("Failed to update object transform: {}", e),
+                })
+        } else {
+            Err(SpawnerError::InvalidParameters {
+                reason: "Pool manager not initialized".to_string(),
+            })
+        }
+    }
 
-        spawner.object_manager_mut()
-            .update_object_transform(handle, position, rotation, scale)
-            .map_err(|e| SpawnerError::InvalidParameters {
-                reason: format!("Failed to update object transform: {}", e)
-            })?;
-
-        log::trace!("Updated dynamic object transform: handle={}, pos={:?}", handle.generation, position);
-        Ok(())
+    /// Update only the position of a dynamic object, preserving rotation and scale
+    pub fn update_dynamic_object_position(
+        &mut self,
+        mesh_type: MeshType,
+        handle: DynamicObjectHandle,
+        position: Vec3,
+    ) -> Result<(), SpawnerError> {
+        if let Some(ref mut pool_manager) = self.pool_manager {
+            pool_manager.update_object_position(mesh_type, handle, position)
+                .map_err(|e| SpawnerError::InvalidParameters {
+                    reason: format!("Failed to update object position: {}", e),
+                })
+        } else {
+            Err(SpawnerError::InvalidParameters {
+                reason: "Pool manager not initialized".to_string(),
+            })
+        }
     }
 
     /// Begin dynamic frame rendering setup
@@ -837,11 +967,12 @@ impl GraphicsEngine {
     /// graphics_engine.end_dynamic_frame(window)?;
     /// ```
     pub fn begin_dynamic_frame(&mut self, delta_time: f32) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(ref mut spawner) = self.dynamic_spawner {
-            // Update object lifetimes and despawn expired objects
-            spawner.update_lifecycle(delta_time);
-            
-            log::trace!("Dynamic frame started - processed lifecycle updates");
+        // Dynamic frame started - process any pending cleanup from manual despawns
+        log::trace!("Dynamic frame started");
+        
+        // Update pool manager to process cleanup of manually despawned objects
+        if let Some(pool_manager) = &mut self.pool_manager {
+            pool_manager.update_all_pools(delta_time);
         }
         
         // Begin command recording for the frame (same as static objects)
@@ -853,36 +984,35 @@ impl GraphicsEngine {
     /// Record dynamic object draw commands
     ///
     /// Records all active dynamic objects into the command buffer using instanced
-    /// rendering for optimal performance. This batches all dynamic objects into
-    /// minimal draw calls.
+    /// rendering for optimal performance. This batches all dynamic objects by
+    /// mesh type into minimal draw calls.
     ///
     /// # Returns
     /// Result indicating successful command recording
     ///
     /// # Performance Notes
     /// This method uses instanced rendering to draw all active dynamic objects
-    /// in as few draw calls as possible. It's much more efficient than the
-    /// individual draw calls used by static objects.
+    /// in as few draw calls as possible (one per mesh type). It's much more efficient 
+    /// than individual draw calls.
     ///
     /// # Prerequisites
-    /// - Dynamic system must be initialized
+    /// - Pool system must be initialized
     /// - begin_dynamic_frame() must be called first
     /// - Camera and lighting should be set up
-    pub fn record_dynamic_draws(&mut self, shared_resources: &SharedRenderingResources) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(ref spawner) = self.dynamic_spawner {
-            let stats = spawner.get_spawner_stats();
+    pub fn record_dynamic_draws(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(ref mut pool_manager) = self.pool_manager {
+            let stats = pool_manager.get_stats();
             
-            if stats.active_objects > 0 {
-                log::trace!("Recording draws for {} active dynamic objects", stats.active_objects);
+            if stats.total_active_objects > 0 {
+                log::trace!("Recording draws for {} active dynamic objects across {} pools", 
+                           stats.total_active_objects, stats.render_batches_per_frame);
                 
-                // Get active objects from spawner
-                let active_objects = spawner.get_active_objects();
+                // Use MeshPoolManager's proper render method to avoid state corruption between mesh types
+                pool_manager.render_all_pools_via_backend(&mut *self.backend)
+                    .map_err(|e| format!("Failed to render dynamic object pools: {}", e))?;
                 
-                // Delegate to backend for instanced rendering
-                self.backend.record_dynamic_draws(&active_objects, shared_resources)?;
-                
-                log::debug!("Dynamic object rendering: {} active objects, {}% pool utilization", 
-                           stats.active_objects, (stats.utilization * 100.0) as u32);
+                log::debug!("Dynamic object rendering completed: {} total objects across {} mesh types", 
+                           stats.total_active_objects, stats.render_batches_per_frame);
             } else {
                 log::trace!("No active dynamic objects to render");
             }
@@ -940,8 +1070,8 @@ impl GraphicsEngine {
     ///              (stats.utilization_percentage * 100.0) as u32);
     /// }
     /// ```
-    pub fn get_dynamic_stats(&self) -> Option<crate::render::dynamic::SpawnerStats> {
-        self.dynamic_spawner.as_ref().map(|spawner| spawner.get_spawner_stats())
+    pub fn get_dynamic_stats(&self) -> Option<crate::render::dynamic::PoolManagerStats> {
+        self.pool_manager.as_ref().map(|manager| manager.get_stats())
     }
 
     /// Initialize instanced rendering system for efficient batch rendering

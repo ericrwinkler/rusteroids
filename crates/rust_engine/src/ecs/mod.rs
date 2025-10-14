@@ -30,5 +30,5 @@ pub use components::{
     MovementComponent, MovementFactory,
     LifecycleComponent, LifecycleFactory, EntityState
 };
-pub use systems::{LightingSystem, CoordinateSystemValidator, RenderingSystem};
+pub use systems::{LightingSystem, CoordinateSystemValidator, RenderableCollector};
 pub use scene_manager::{SceneManager, SceneConfig, SceneStats};

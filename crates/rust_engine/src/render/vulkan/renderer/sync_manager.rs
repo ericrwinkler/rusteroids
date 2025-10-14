@@ -67,7 +67,8 @@ impl SyncManager {
     
     /// Acquire next swapchain image
     pub fn acquire_next_image(&self, context: &VulkanContext, current_frame: usize) -> VulkanResult<(u32, &Semaphore)> {
-        // Use current frame's image_available semaphore for acquire
+        // We need to acquire first to know which image, then return the correct semaphore
+        // For now, use frame-based semaphore but this may need fixing
         let acquire_semaphore = &self.frame_sync_objects[current_frame].image_available;
         
         let (image_index, _) = match unsafe {
@@ -126,9 +127,6 @@ impl SyncManager {
                 frame_sync.in_flight.handle(),
             ).map_err(VulkanError::Api)?;
         }
-        
-        // Track that this frame has been submitted
-        self.frames_submitted = self.frames_submitted.max(frame_index + 1);
         
         // Track that this frame has been submitted
         self.frames_submitted = self.frames_submitted.max(frame_index + 1);

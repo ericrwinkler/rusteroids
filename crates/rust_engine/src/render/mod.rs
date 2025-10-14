@@ -28,6 +28,7 @@ pub mod material;
 pub mod pipeline;
 pub mod lighting;
 pub mod coordinates;
+pub mod dynamic;
 pub mod config;
 pub mod window;
 pub mod vulkan;
@@ -36,6 +37,9 @@ pub mod render_queue;
 pub mod batch_renderer;
 pub mod game_object;
 pub mod shared_resources;
+
+#[cfg(test)]
+mod graphics_engine_tests;
 
 pub use mesh::{Mesh, Vertex};
 pub use material::{
@@ -57,26 +61,30 @@ pub use batch_renderer::{BatchRenderer, RenderBatch, BatchError, BatchStats, Bat
 use thiserror::Error;
 use crate::engine::{RendererConfig, WindowConfig}; // FIXME: Engine coupling - should be library-agnostic
 use crate::foundation::math::{Vec3, Mat4, Mat4Ext, utils};
+use crate::render::dynamic::{
+    DynamicObjectSpawner, DefaultDynamicSpawner, DynamicObjectHandle, ValidatedSpawnParams,
+    SpawnerError, MaterialProperties
+};
 
-/// # Main Renderer
+/// # Graphics Engine
 ///
-/// High-level rendering coordinator that provides an application-friendly interface
+/// High-level graphics coordinator that provides an application-friendly interface
 /// over the Vulkan rendering backend. Manages the rendering state, camera, lighting,
 /// and coordinates frame rendering operations.
 ///
 /// ## Responsibilities
 ///
-/// - **Rendering Coordination**: Orchestrates frame rendering with proper sequencing
+/// - **Graphics Coordination**: Orchestrates frame rendering with proper sequencing
 /// - **State Management**: Tracks camera, lighting, and per-frame state
 /// - **Resource Binding**: Connects high-level resources (meshes, materials) to GPU
 /// - **Backend Abstraction**: Hides Vulkan complexity behind clean API
 ///
 /// ## Design Notes
 ///
-/// The Renderer acts as a facade pattern implementation, providing a simplified
+/// The GraphicsEngine acts as a facade pattern implementation, providing a simplified
 /// interface over the complex Vulkan rendering pipeline. It maintains minimal
 /// state and delegates actual rendering work to the Vulkan backend.
-pub struct Renderer {
+pub struct GraphicsEngine {
     /// Backend abstraction for graphics rendering
     /// FIXME: Should support dynamic backend selection at runtime
     backend: Box<dyn RenderBackend>,
@@ -92,9 +100,14 @@ pub struct Renderer {
     /// Frame counter for debugging and performance tracking
     /// FIXME: Should be optional debug feature, not core renderer responsibility
     frame_count: u64,
+    
+    /// Dynamic object spawning system for temporary objects
+    /// Provides high-level API for spawning/despawning dynamic objects with pooled resources
+    dynamic_spawner: Option<DefaultDynamicSpawner>,
+    
 }
 
-impl Renderer {
+impl GraphicsEngine {
     /// Create a new renderer from a window handle with configuration
     ///
     /// This is the preferred construction method as it maintains clear ownership
@@ -128,6 +141,7 @@ impl Renderer {
             current_camera: None,
             current_lighting: None,
             frame_count: 0,
+            dynamic_spawner: None, // Will be initialized when first needed
         })
     }
     
@@ -478,12 +492,446 @@ impl Renderer {
         }
     }
     
+    /// Create SharedRenderingResources for instanced dynamic object rendering
+    /// This creates resources with an instanced pipeline for efficient batch rendering
+    pub fn create_instanced_rendering_resources(&self, mesh: &Mesh, _materials: &[Material]) -> Result<shared_resources::SharedRenderingResources, Box<dyn std::error::Error>> {
+        // Access VulkanContext through backend downcasting
+        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
+            use ash::vk;
+            
+            log::info!("Creating InstancRenderingResources with {} vertices and {} indices", 
+                      mesh.vertices.len(), mesh.indices.len());
+            
+            // Get required components from VulkanRenderer
+            let context = vulkan_backend.get_context();
+            let frame_descriptor_set_layout = vulkan_backend.get_frame_descriptor_set_layout();
+            let material_descriptor_set_layout = vulkan_backend.get_object_descriptor_set_layout();
+            
+            // Create shared vertex buffer (same as regular)
+            let vertex_buffer = crate::render::vulkan::buffer::Buffer::new(
+                context.raw_device(),
+                context.instance().clone(),
+                context.physical_device().device,
+                (mesh.vertices.len() * std::mem::size_of::<Vertex>()) as vk::DeviceSize,
+                vk::BufferUsageFlags::VERTEX_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )?;
+            
+            // Upload vertex data
+            vertex_buffer.write_data(&mesh.vertices)?;
+            
+            // Create shared index buffer (same as regular)
+            let index_buffer = crate::render::vulkan::buffer::Buffer::new(
+                context.raw_device(),
+                context.instance().clone(),
+                context.physical_device().device,
+                (mesh.indices.len() * std::mem::size_of::<u32>()) as vk::DeviceSize,
+                vk::BufferUsageFlags::INDEX_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )?;
+            
+            // Upload index data
+            index_buffer.write_data(&mesh.indices)?;
+            
+            // Create INSTANCED pipeline (different from regular)
+            let (pipeline, pipeline_layout) = self.create_instanced_pipeline(context, frame_descriptor_set_layout, material_descriptor_set_layout)?;
+            
+            // Build SharedRenderingResources with instanced pipeline
+            let shared_resources = shared_resources::SharedRenderingResources::new(
+                vertex_buffer,
+                index_buffer,
+                pipeline,
+                pipeline_layout,
+                material_descriptor_set_layout,
+                frame_descriptor_set_layout,
+                mesh.indices.len() as u32,
+                mesh.vertices.len() as u32,
+            );
+            
+            log::info!("InstancRenderingResources created successfully");
+            Ok(shared_resources)
+        } else {
+            Err("Renderer is not using Vulkan backend".into())
+        }
+    }
+    
+    /// Create instanced pipeline for dynamic object rendering
+    fn create_instanced_pipeline(&self, context: &crate::render::vulkan::VulkanContext, frame_layout: ash::vk::DescriptorSetLayout, material_layout: ash::vk::DescriptorSetLayout) -> Result<(ash::vk::Pipeline, ash::vk::PipelineLayout), Box<dyn std::error::Error>> {
+        use crate::render::vulkan::{VulkanVertexLayout, shader::ShaderModule};
+        use ash::vk;
+        
+        // Load the same shaders (they'll adapt to instanced input via vertex attributes)
+        let vertex_shader = ShaderModule::from_file(
+            context.raw_device(),
+            "target/shaders/standard_pbr_vert.spv",
+        )?;
+        
+        let fragment_shader = ShaderModule::from_file(
+            context.raw_device(),
+            "target/shaders/standard_pbr_frag.spv",
+        )?;
+        
+        // Create INSTANCED vertex input state
+        let (binding_descriptions, attribute_descriptions) = VulkanVertexLayout::get_instanced_input_state();
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder()
+            .vertex_binding_descriptions(&binding_descriptions)
+            .vertex_attribute_descriptions(&attribute_descriptions)
+            .build();
+        
+        // Create pipeline layout with descriptor sets and push constants
+        let descriptor_set_layouts = [frame_layout, material_layout];
+        let push_constant_range = vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            offset: 0,
+            size: 128, // Same as regular pipeline: model matrix + normal matrix + material color
+        };
+        
+        let push_constant_ranges = [push_constant_range];
+        let layout_info = vk::PipelineLayoutCreateInfo::builder()
+            .set_layouts(&descriptor_set_layouts)
+            .push_constant_ranges(&push_constant_ranges);
+            
+        let pipeline_layout = unsafe {
+            context.raw_device().create_pipeline_layout(&layout_info, None)?
+        };
+        
+        // Get render pass from VulkanRenderer (need to access it through backend)
+        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
+            let render_pass = vulkan_backend.get_render_pass();
+            
+            // Create instanced graphics pipeline
+            let pipeline = crate::render::vulkan::shader::GraphicsPipeline::new_with_descriptor_layouts(
+                context.raw_device(),
+                render_pass,
+                &vertex_shader,
+                &fragment_shader,
+                vertex_input_info,
+                &descriptor_set_layouts,
+            )?;
+            
+            Ok((pipeline.handle(), pipeline_layout))
+        } else {
+            Err("Backend is not Vulkan".into())
+        }
+    }
+    
     /// Helper method to convert lighting environment (temporary until lighting refactor)
     fn convert_lighting_to_multi_light_environment(&self, _lighting: &LightingEnvironment) -> lighting::MultiLightEnvironment {
         // Convert from the old LightingEnvironment to the new MultiLightEnvironment
         // For now, create a simple environment with ambient lighting
         // TODO: Implement proper conversion when lighting system is refactored
         lighting::MultiLightEnvironment::new()
+    }
+
+    // ================================
+    // DYNAMIC OBJECT RENDERING API
+    // ================================
+
+    /// Initialize the dynamic object system for pooled rendering
+    ///
+    /// Creates and initializes the dynamic object spawner with pooled resources.
+    /// Must be called before using dynamic object methods. This is separated from
+    /// construction to allow lazy initialization when dynamic objects are actually needed.
+    ///
+    /// # Arguments
+    /// * `max_objects` - Maximum number of dynamic objects in the pool
+    ///
+    /// # Returns  
+    /// Result indicating success or initialization failure
+    ///
+    /// # Example
+    /// ```rust
+    /// graphics_engine.initialize_dynamic_system(100)?; // Pool of 100 dynamic objects
+    /// let handle = graphics_engine.spawn_dynamic_object(
+    ///     Vec3::new(0.0, 0.0, 0.0),  // position
+    ///     Vec3::zeros(),              // rotation  
+    ///     Vec3::new(1.0, 1.0, 1.0),  // scale
+    ///     MaterialProperties::default(), // material
+    ///     5.0                         // lifetime in seconds
+    /// )?;
+    /// ```
+    pub fn initialize_dynamic_system(&mut self, max_objects: usize) -> Result<(), Box<dyn std::error::Error>> {
+        log::info!("Initializing dynamic object system with {} max objects", max_objects);
+        
+        // Access VulkanContext through backend downcasting for dynamic system initialization
+        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
+            let context = vulkan_backend.get_context();
+            
+            // Create DefaultDynamicSpawner with Vulkan context and max objects
+            let spawner = DefaultDynamicSpawner::new(context, max_objects)?;
+            self.dynamic_spawner = Some(spawner);
+            
+            // Initialize backend's dynamic rendering system
+            self.backend.initialize_dynamic_rendering(max_objects)?;
+            
+            log::info!("Dynamic object system initialized successfully");
+            Ok(())
+        } else {
+            Err("Renderer is not using Vulkan backend".into())
+        }
+    }
+
+    /// Spawn a dynamic object with specified parameters
+    ///
+    /// Creates a new dynamic object using the pooled resource system. Objects are
+    /// automatically managed by the pool and will be despawned when their lifetime expires.
+    /// This is the high-level API for creating temporary objects.
+    ///
+    /// # Arguments
+    /// * `position` - World space position of the object
+    /// * `rotation` - Rotation angles in radians (Euler angles: X, Y, Z)
+    /// * `scale` - Scale factors for each axis
+    /// * `material` - Material properties for rendering
+    /// * `lifetime` - Object lifetime in seconds (0.0 for infinite)
+    ///
+    /// # Returns
+    /// Handle to the spawned object for safe access, or SpawnerError on failure
+    ///
+    /// # Error Conditions
+    /// - Pool exhaustion: No more objects available in the pool
+    /// - Invalid parameters: Position/scale contains NaN or infinite values
+    /// - System not initialized: initialize_dynamic_system() not called
+    ///
+    /// # Example Usage
+    /// ```rust
+    /// // Spawn a temporary object that lasts 3 seconds
+    /// let handle = graphics_engine.spawn_dynamic_object(
+    ///     Vec3::new(5.0, 2.0, -3.0),     // position
+    ///     Vec3::new(0.0, 45.0_f32.to_radians(), 0.0), // Y rotation
+    ///     Vec3::new(2.0, 1.0, 2.0),      // scale
+    ///     MaterialProperties {
+    ///         base_color: [1.0, 0.5, 0.0, 1.0], // Orange
+    ///         metallic: 0.2,
+    ///         roughness: 0.8,
+    ///         emission: [0.0, 0.0, 0.0, 0.0],
+    ///     },
+    ///     3.0  // 3 second lifetime
+    /// )?;
+    /// ```
+    pub fn spawn_dynamic_object(
+        &mut self,
+        position: Vec3,
+        rotation: Vec3,
+        scale: Vec3,
+        material: MaterialProperties,
+        lifetime: f32,
+    ) -> Result<DynamicObjectHandle, SpawnerError> {
+        // Ensure dynamic system is initialized
+        let spawner = self.dynamic_spawner.as_mut()
+            .ok_or(SpawnerError::InvalidParameters {
+                reason: "Dynamic system not initialized - call initialize_dynamic_system() first".to_string()
+            })?;
+        
+        // Create validated spawn parameters
+        let params = ValidatedSpawnParams::new(position, rotation, scale, material, lifetime)
+            .map_err(|e| SpawnerError::InvalidParameters {
+                reason: format!("Parameter validation failed: {}", e)
+            })?;
+        
+        // Spawn the object using the dynamic spawner
+        let handle = spawner.spawn_dynamic_object(params)?;
+        
+        log::debug!("Spawned dynamic object at position {:?} with lifetime {:.1}s", position, lifetime);
+        Ok(handle)
+    }
+
+    /// Despawn a specific dynamic object by handle
+    ///
+    /// Immediately removes a dynamic object from the rendering system and returns
+    /// its resources to the pool. This allows manual cleanup before the object's
+    /// lifetime expires.
+    ///
+    /// # Arguments
+    /// * `handle` - Handle to the object to despawn
+    ///
+    /// # Returns
+    /// Result indicating success or despawn failure
+    ///
+    /// # Error Conditions
+    /// - Invalid handle: Handle is not valid or object already despawned
+    /// - System not initialized: Dynamic system not properly set up
+    ///
+    /// # Example
+    /// ```rust
+    /// let handle = graphics_engine.spawn_dynamic_object(/* ... */)?;
+    /// 
+    /// // Later, manually despawn the object
+    /// graphics_engine.despawn_dynamic_object(handle)?;
+    /// ```
+    pub fn despawn_dynamic_object(&mut self, handle: DynamicObjectHandle) -> Result<(), SpawnerError> {
+        let spawner = self.dynamic_spawner.as_mut()
+            .ok_or(SpawnerError::InvalidParameters {
+                reason: "Dynamic system not initialized".to_string()
+            })?;
+        
+        spawner.despawn_dynamic_object(handle)?;
+        log::debug!("Despawned dynamic object with handle generation {}", handle.generation);
+        Ok(())
+    }
+
+    /// Begin dynamic frame rendering setup
+    ///
+    /// Prepares the dynamic rendering system for a new frame. This should be called
+    /// once per frame before any dynamic object operations. Handles automatic
+    /// lifecycle updates and resource cleanup.
+    ///
+    /// # Arguments
+    /// * `delta_time` - Time elapsed since last frame in seconds
+    ///
+    /// # Returns
+    /// Result indicating successful frame setup
+    ///  
+    /// # Frame Workflow
+    /// The proper dynamic rendering workflow is:
+    /// 1. `begin_dynamic_frame(delta_time)` - Setup and lifecycle updates
+    /// 2. Spawn/despawn dynamic objects as needed
+    /// 3. `record_dynamic_draws()` - Record drawing commands
+    /// 4. `end_dynamic_frame()` - Submit and present
+    ///
+    /// # Example
+    /// ```rust
+    /// // At start of render loop
+    /// graphics_engine.begin_dynamic_frame(delta_time)?;
+    /// 
+    /// // Spawn objects as needed
+    /// if should_spawn_asteroid {
+    ///     graphics_engine.spawn_dynamic_object(/* ... */)?;
+    /// }
+    /// 
+    /// // Record and submit rendering
+    /// graphics_engine.record_dynamic_draws()?;
+    /// graphics_engine.end_dynamic_frame(window)?;
+    /// ```
+    pub fn begin_dynamic_frame(&mut self, delta_time: f32) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(ref mut spawner) = self.dynamic_spawner {
+            // Update object lifetimes and despawn expired objects
+            spawner.update_lifecycle(delta_time);
+            
+            log::trace!("Dynamic frame started - processed lifecycle updates");
+        }
+        
+        // Begin command recording for the frame (same as static objects)
+        self.begin_command_recording()?;
+        
+        Ok(())
+    }
+
+    /// Record dynamic object draw commands
+    ///
+    /// Records all active dynamic objects into the command buffer using instanced
+    /// rendering for optimal performance. This batches all dynamic objects into
+    /// minimal draw calls.
+    ///
+    /// # Returns
+    /// Result indicating successful command recording
+    ///
+    /// # Performance Notes
+    /// This method uses instanced rendering to draw all active dynamic objects
+    /// in as few draw calls as possible. It's much more efficient than the
+    /// individual draw calls used by static objects.
+    ///
+    /// # Prerequisites
+    /// - Dynamic system must be initialized
+    /// - begin_dynamic_frame() must be called first
+    /// - Camera and lighting should be set up
+    pub fn record_dynamic_draws(&mut self, shared_resources: &SharedRenderingResources) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(ref spawner) = self.dynamic_spawner {
+            let stats = spawner.get_spawner_stats();
+            
+            if stats.active_objects > 0 {
+                log::trace!("Recording draws for {} active dynamic objects", stats.active_objects);
+                
+                // Get active objects from spawner
+                let active_objects = spawner.get_active_objects();
+                
+                // Delegate to backend for instanced rendering
+                self.backend.record_dynamic_draws(&active_objects, shared_resources)?;
+                
+                log::debug!("Dynamic object rendering: {} active objects, {}% pool utilization", 
+                           stats.active_objects, (stats.utilization * 100.0) as u32);
+            } else {
+                log::trace!("No active dynamic objects to render");
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// End dynamic frame and submit commands
+    ///
+    /// Finalizes the dynamic rendering frame by submitting all recorded commands
+    /// and presenting the frame. This completes the dynamic rendering workflow.
+    ///
+    /// # Arguments
+    /// * `window` - Window handle for presentation
+    ///
+    /// # Returns
+    /// Result indicating successful frame completion
+    ///
+    /// # Frame Completion
+    /// This method handles:
+    /// - Command buffer submission
+    /// - Frame presentation  
+    /// - Frame counter increment
+    /// - Resource state updates
+    pub fn end_dynamic_frame(&mut self, window: &mut WindowHandle) -> Result<(), Box<dyn std::error::Error>> {
+        // Submit commands and present (same as static objects)
+        self.submit_commands_and_present(window)?;
+        
+        log::trace!("Dynamic frame {} completed", self.frame_count);
+        Ok(())
+    }
+
+    /// Get dynamic system statistics
+    ///
+    /// Returns statistics about the dynamic object system including pool utilization,
+    /// active object count, and performance metrics. Useful for debugging and
+    /// performance monitoring.
+    ///
+    /// # Returns
+    /// Option containing spawner statistics, or None if system not initialized
+    ///
+    /// # Statistics Include
+    /// - Active object count
+    /// - Pool utilization percentage
+    /// - Peak usage statistics
+    /// - Automatic vs manual despawn counts
+    ///
+    /// # Example
+    /// ```rust
+    /// if let Some(stats) = graphics_engine.get_dynamic_stats() {
+    ///     println!("Dynamic objects: {}/{} ({}% utilization)", 
+    ///              stats.active_objects, 
+    ///              stats.pool_capacity,
+    ///              (stats.utilization_percentage * 100.0) as u32);
+    /// }
+    /// ```
+    pub fn get_dynamic_stats(&self) -> Option<crate::render::dynamic::SpawnerStats> {
+        self.dynamic_spawner.as_ref().map(|spawner| spawner.get_spawner_stats())
+    }
+
+    /// Initialize instanced rendering system for efficient batch rendering
+    ///
+    /// Sets up the instance renderer for efficient batch rendering of multiple objects
+    /// with the same mesh using Vulkan instanced rendering (vkCmdDrawInstanced).
+    /// This provides significant performance improvements over individual draw calls.
+    ///
+    /// # Arguments
+    /// * `max_instances` - Maximum number of instances that can be rendered in a single batch
+    ///
+    /// # Returns
+    /// Result indicating successful initialization or error
+    ///
+    /// # Example
+    /// ```rust
+    /// // Initialize for up to 100 instances per batch
+    /// graphics_engine.initialize_instance_renderer(100)?;
+    /// ```
+    pub fn initialize_instance_renderer(&mut self, max_instances: usize) -> Result<(), Box<dyn std::error::Error>> {
+        // Use the backend trait method for initialization
+        self.backend.initialize_instance_renderer(max_instances)?;
+        log::info!("Initialized instance renderer with max {} instances", max_instances);
+        Ok(())
     }
 
     // ================================

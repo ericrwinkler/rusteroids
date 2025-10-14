@@ -77,7 +77,7 @@ pub mod prelude {
         },
         ecs::{World, Entity, Component, System, Query},
         assets::{Asset, AssetHandle, AssetManager},
-        render::{Renderer, Camera, Mesh, Material},
+        render::{GraphicsEngine, Camera, Mesh, Material},
         input::{InputManager, KeyCode, MouseButton},
         // New unified config system
         core::config::{ApplicationConfig, VulkanRendererConfig, ShaderConfig},

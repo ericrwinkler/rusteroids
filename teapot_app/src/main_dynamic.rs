@@ -9,23 +9,23 @@ use rust_engine::assets::obj_loader::ObjLoader;
 use rust_engine::ecs::{
     World, Entity, LightFactory, LightingSystem as EcsLightingSystem, 
     TransformComponent, LightComponent,
-    SceneManager, SceneConfig, RenderableComponent, MovementComponent
+    SceneManager,
 };
 use rust_engine::render::{
     Camera,
     Mesh,
-    Vertex,
     Material,
     StandardMaterialParams,
     lighting::MultiLightEnvironment,
-    Renderer,
+    GraphicsEngine,
     VulkanRendererConfig,
     WindowHandle,
-    material::MaterialId,
+    material::{MaterialId, MaterialType},
     GameObject,
     shared_resources::SharedRenderingResources,
+    dynamic::{DynamicObjectHandle, MaterialProperties},
 };
-use rust_engine::foundation::math::{Vec3, Vec4, Mat4, Mat4Ext};
+use rust_engine::foundation::math::Vec3;
 use glfw::{Action, Key, WindowEvent};
 use std::time::Instant;
 use rand::prelude::*;
@@ -33,6 +33,7 @@ use rand::prelude::*;
 #[derive(Clone)]
 struct TeapotInstance {
     entity: Option<Entity>,
+    dynamic_handle: Option<DynamicObjectHandle>, // Dynamic object handle for pooled rendering
     position: Vec3,
     rotation: Vec3,      // Rotation angles in radians
     scale: f32,
@@ -41,6 +42,8 @@ struct TeapotInstance {
     orbit_speed: f32,    // Speed of orbital motion
     orbit_center: Vec3,  // Center point for orbit
     material_index: usize,
+    spawn_time: Instant, // When this instance was created
+    lifetime: f32,       // How long it should live (in seconds)
 }
 
 #[derive(Clone)]
@@ -54,6 +57,8 @@ struct LightInstance {
     movement_pattern: MovementPattern,
     effect_pattern: EffectPattern,
     phase_offset: f32,   // Phase offset for animation variety
+    spawn_time: Instant, // When this instance was created
+    lifetime: f32,       // How long it should live (in seconds)
 }
 
 #[derive(Clone)]
@@ -80,7 +85,7 @@ enum EffectPattern {
 
 pub struct DynamicTeapotApp {
     window: WindowHandle,
-    renderer: Renderer,
+    graphics_engine: GraphicsEngine,
     camera: Camera,
     
     // New SceneManager for batch rendering
@@ -90,8 +95,8 @@ pub struct DynamicTeapotApp {
     world: World,
     lighting_system: EcsLightingSystem,
     
-    // Dynamic content (entities managed by SceneManager now)
-    teapot_entities: Vec<Entity>,
+    // Dynamic content tracking
+    teapot_instances: Vec<TeapotInstance>,
     light_instances: Vec<LightInstance>,
     teapot_mesh: Option<Mesh>,
     material_ids: Vec<MaterialId>,
@@ -107,6 +112,15 @@ pub struct DynamicTeapotApp {
     camera_orbit_radius: f32,
     camera_height_oscillation: f32,
     last_shown_teapot_index: usize, // Track which teapot was shown last frame
+    
+    // Dynamic spawning state
+    last_teapot_spawn: Instant,
+    last_light_spawn: Instant,
+    max_teapots: usize,
+    max_lights: usize,
+    
+    // Sunlight entity
+    sunlight_entity: Option<Entity>,
 }
 
 impl DynamicTeapotApp {
@@ -126,9 +140,15 @@ impl DynamicTeapotApp {
                 "target/shaders/standard_pbr_vert.spv".to_string(),
                 "target/shaders/standard_pbr_frag.spv".to_string()
             );
-        let renderer = Renderer::new_from_window(&mut window, &renderer_config)
-            .expect("Failed to create renderer");
-        log::info!("Vulkan renderer created successfully");
+        let mut graphics_engine = GraphicsEngine::new_from_window(&mut window, &renderer_config)
+            .expect("Failed to create graphics engine");
+        log::info!("Graphics engine created successfully");
+        
+        // Initialize dynamic object system with pool for 50 objects
+        log::info!("Initializing dynamic object system...");
+        graphics_engine.initialize_dynamic_system(50)
+            .expect("Failed to initialize dynamic object system");
+        log::info!("Dynamic object system initialized successfully");
         
         // Create camera with wider view for multiple teapots
         log::info!("Creating camera...");
@@ -159,51 +179,312 @@ impl DynamicTeapotApp {
             .map(|i| MaterialId(i as u32))
             .collect();
         
-        // Generate random scene content using SceneManager
+        // Initialize empty dynamic content
+        let teapot_instances = Vec::new();
+        
+        // Create sunlight - one gentle directional light at an angle
+        let sunlight_entity = Self::create_sunlight(&mut world);
+        
+        // Generate random light instances (excluding sunlight)
         let mut rng = thread_rng();
-        let mut teapot_entities = Vec::new();
+        let light_instances = Vec::new(); // Start with no dynamic lights
         
-        // Create 10 random teapots with movement
-        for i in 0..10 {
-            let position = Vec3::new(
-                rng.gen_range(-10.0..10.0),
-                rng.gen_range(-2.0..4.0),
-                rng.gen_range(-10.0..10.0),
-            );
-            let velocity = Vec3::new(
-                rng.gen_range(-2.0..2.0),
-                rng.gen_range(-1.0..1.0),
-                rng.gen_range(-2.0..2.0),
-            );
-            let material_id = material_ids[i % material_ids.len()];
-            
-            let entity = scene_manager.create_moving_teapot(material_id, position, velocity);
-            teapot_entities.push(entity);
-        }
+        log::info!("Created sunlight and prepared for dynamic spawning");
         
-        let light_instances = Self::generate_random_lights(&mut world, &mut rng);
-        
-        log::info!("Generated {} teapots and {} lights", teapot_entities.len(), light_instances.len());
+        let now = Instant::now();
         
         Self {
             window,
-            renderer,
+            graphics_engine,
             camera,
             scene_manager,
             world,
             lighting_system,
-            teapot_entities,
+            teapot_instances,
             light_instances,
             teapot_mesh: None,
             material_ids,
             teapot_game_objects: Vec::new(),
             shared_resources: None,
-            last_material_switch: Instant::now(),
-            start_time: Instant::now(),
+            last_material_switch: now,
+            start_time: now,
             camera_orbit_speed: 0.15, // Slow camera orbit
             camera_orbit_radius: 20.0,
             camera_height_oscillation: 3.0,
             last_shown_teapot_index: usize::MAX, // Initialize to invalid index
+            last_teapot_spawn: now,
+            last_light_spawn: now,
+            max_teapots: 10,
+            max_lights: 10,
+            sunlight_entity: Some(sunlight_entity),
+        }
+    }
+    
+    fn create_sunlight(world: &mut World) -> Entity {
+        // Create a gentle directional sunlight at an angle
+        let sunlight_entity = world.create_entity();
+        
+        let sunlight = LightFactory::directional(
+            Vec3::new(-1.0, -1.5, -1.0).normalize(), // Direction (angled from top-left-front)
+            Vec3::new(1.0, 0.95, 0.8), // Warm sunlight color (slightly yellowish)
+            0.3 // Gentle intensity (not too bright)
+        );
+        
+        world.add_component(sunlight_entity, sunlight);
+        log::info!("Created gentle sunlight at angle");
+        sunlight_entity
+    }
+    
+    fn spawn_random_teapot(&mut self) {
+        if self.teapot_instances.len() >= self.max_teapots {
+            return; // Max limit reached
+        }
+        
+        let mut rng = thread_rng();
+        
+        // Random position
+        let position = Vec3::new(
+            rng.gen_range(-12.0..12.0),
+            rng.gen_range(-1.0..5.0),
+            rng.gen_range(-12.0..12.0),
+        );
+        
+        // Random lifetime between 5-15 seconds
+        let lifetime = rng.gen_range(5.0..15.0);
+        
+        // Select random material and convert to MaterialProperties
+        let materials = Self::create_teapot_materials();
+        let material_index = rng.gen_range(0..materials.len());
+        let selected_material = &materials[material_index];
+        
+        // Convert Material to MaterialProperties for dynamic system
+        let material_props = match &selected_material.material_type {
+            MaterialType::StandardPBR(params) => {
+                MaterialProperties {
+                    base_color: [params.base_color.x, params.base_color.y, params.base_color.z, params.alpha],
+                    metallic: params.metallic,
+                    roughness: params.roughness,
+                    emission: [0.0, 0.0, 0.0], // No emission for now
+                    alpha: params.alpha,
+                }
+            }
+            MaterialType::Unlit(params) => {
+                MaterialProperties {
+                    base_color: [params.color.x, params.color.y, params.color.z, params.alpha],
+                    metallic: 0.0,
+                    roughness: 1.0,
+                    emission: [0.0, 0.0, 0.0],
+                    alpha: params.alpha,
+                }
+            }
+            MaterialType::Transparent { base_material, .. } => {
+                // Handle transparent materials by using their base material
+                match base_material.as_ref() {
+                    MaterialType::StandardPBR(params) => {
+                        MaterialProperties {
+                            base_color: [params.base_color.x, params.base_color.y, params.base_color.z, params.alpha],
+                            metallic: params.metallic,
+                            roughness: params.roughness,
+                            emission: [0.0, 0.0, 0.0],
+                            alpha: params.alpha,
+                        }
+                    }
+                    MaterialType::Unlit(params) => {
+                        MaterialProperties {
+                            base_color: [params.color.x, params.color.y, params.color.z, params.alpha],
+                            metallic: 0.0,
+                            roughness: 1.0,
+                            emission: [0.0, 0.0, 0.0],
+                            alpha: params.alpha,
+                        }
+                    }
+                    MaterialType::Transparent { .. } => {
+                        // Nested transparent materials, use default
+                        MaterialProperties::default()
+                    }
+                }
+            }
+        };
+        
+        // Spawn dynamic object with random material properties
+        match self.graphics_engine.spawn_dynamic_object(
+            position,
+            Vec3::new(0.0, 0.0, 0.0), // No initial rotation
+            Vec3::new(1.0, 1.0, 1.0), // Unit scale
+            material_props,
+            lifetime,
+        ) {
+            Ok(dynamic_handle) => {
+                // Create instance tracker
+                let instance = TeapotInstance {
+                    entity: None, // No longer using SceneManager
+                    dynamic_handle: Some(dynamic_handle),
+                    position,
+                    rotation: Vec3::new(0.0, 0.0, 0.0),
+                    scale: 1.0,
+                    spin_speed: Vec3::new(
+                        rng.gen_range(-2.0..2.0),
+                        rng.gen_range(-2.0..2.0),
+                        rng.gen_range(-2.0..2.0),
+                    ),
+                    orbit_radius: rng.gen_range(2.0..8.0),
+                    orbit_speed: rng.gen_range(0.5..2.0),
+                    orbit_center: position,
+                    material_index,
+                    spawn_time: Instant::now(),
+                    lifetime,
+                };
+                
+                self.teapot_instances.push(instance);
+                
+                let material_name = selected_material.name.as_deref().unwrap_or("Unknown");
+                
+                log::info!("Spawned teapot #{} at {:?} with {} material (lifetime: {:.1}s)", 
+                          self.teapot_instances.len(), position, material_name, lifetime);
+            }
+            Err(e) => {
+                log::error!("Failed to spawn dynamic teapot: {}", e);
+            }
+        }
+    }
+    
+    fn spawn_random_light(&mut self) {
+        if self.light_instances.len() >= self.max_lights {
+            return; // Max limit reached
+        }
+        
+        let mut rng = thread_rng();
+        
+        // Random position
+        let position = Vec3::new(
+            rng.gen_range(-15.0..15.0),
+            rng.gen_range(2.0..8.0),
+            rng.gen_range(-15.0..15.0),
+        );
+        
+        // Random color (hue-based for vibrant colors)
+        let hue = rng.gen_range(0.0..360.0);
+        let color = Self::hue_to_rgb(hue);
+        
+        // Random lifetime between 5-15 seconds
+        let lifetime = rng.gen_range(5.0..15.0);
+        
+        // Create entity and light component
+        let entity = self.world.create_entity();
+        let intensity = rng.gen_range(0.8..2.5); // Random intensity
+        let light = LightFactory::point(
+            position,
+            color,
+            intensity,
+            rng.gen_range(5.0..15.0) // Random range
+        );
+        self.world.add_component(entity, light);
+        
+        // Random movement pattern
+        let movement_pattern = match rng.gen_range(0..4) {
+            0 => MovementPattern::Static,
+            1 => MovementPattern::Circular {
+                radius: rng.gen_range(3.0..8.0),
+                speed: rng.gen_range(0.5..1.5),
+                axis: Vec3::new(0.0, 1.0, 0.0),
+            },
+            2 => MovementPattern::Figure8 {
+                radius: rng.gen_range(2.0..6.0),
+                speed: rng.gen_range(0.4..1.0),
+            },
+            _ => MovementPattern::Bounce {
+                amplitude: rng.gen_range(2.0..5.0),
+                speed: rng.gen_range(0.5..1.5),
+                direction: Vec3::new(
+                    rng.gen_range(-1.0..1.0),
+                    rng.gen_range(0.2..1.0),
+                    rng.gen_range(-1.0..1.0),
+                ).normalize(),
+            },
+        };
+        
+        // Random effect pattern
+        let effect_pattern = match rng.gen_range(0..4) {
+            0 => EffectPattern::Steady,
+            1 => EffectPattern::Pulse {
+                frequency: rng.gen_range(0.5..3.0),
+                amplitude: rng.gen_range(0.3..0.8),
+            },
+            2 => EffectPattern::Flicker {
+                base_rate: rng.gen_range(5.0..15.0),
+                chaos: rng.gen_range(0.2..0.6),
+            },
+            _ => EffectPattern::Breathe {
+                frequency: rng.gen_range(0.3..1.2),
+            },
+        };
+        
+        let instance = LightInstance {
+            entity,
+            light_type: LightType::Point,
+            base_position: position,
+            current_position: position,
+            color,
+            base_intensity: intensity,
+            movement_pattern,
+            effect_pattern,
+            phase_offset: rng.gen_range(0.0..std::f32::consts::TAU),
+            spawn_time: Instant::now(),
+            lifetime,
+        };
+        
+        self.light_instances.push(instance);
+        log::info!("Spawned light #{} at {:?} (lifetime: {:.1}s, color: {:?})", 
+                  self.light_instances.len(), position, lifetime, color);
+    }
+    
+    fn despawn_expired_entities(&mut self) {
+        let now = Instant::now();
+        
+        // Remove expired teapots
+        let initial_teapot_count = self.teapot_instances.len();
+        self.teapot_instances.retain(|instance| {
+            let elapsed = now.duration_since(instance.spawn_time).as_secs_f32();
+            if elapsed >= instance.lifetime {
+                // Handle both old entity system and new dynamic handle system
+                if let Some(entity) = instance.entity {
+                    self.scene_manager.remove_entity(entity);
+                    log::info!("Despawned teapot entity (lived {:.1}s)", elapsed);
+                }
+                if let Some(handle) = instance.dynamic_handle {
+                    if let Err(e) = self.graphics_engine.despawn_dynamic_object(handle) {
+                        log::warn!("Failed to despawn dynamic teapot: {}", e);
+                    } else {
+                        log::info!("Despawned dynamic teapot (lived {:.1}s)", elapsed);
+                    }
+                }
+                false
+            } else {
+                true
+            }
+        });
+        
+        // Remove expired lights
+        let initial_light_count = self.light_instances.len();
+        self.light_instances.retain(|instance| {
+            let elapsed = now.duration_since(instance.spawn_time).as_secs_f32();
+            if elapsed >= instance.lifetime {
+                // Remove light component from ECS world
+                self.world.remove_component::<LightComponent>(instance.entity);
+                log::info!("Despawned light (lived {:.1}s)", elapsed);
+                false
+            } else {
+                true
+            }
+        });
+        
+        let teapots_despawned = initial_teapot_count - self.teapot_instances.len();
+        let lights_despawned = initial_light_count - self.light_instances.len();
+        
+        if teapots_despawned > 0 || lights_despawned > 0 {
+            log::info!("Despawned {} teapots and {} lights. Active: {} teapots, {} lights",
+                      teapots_despawned, lights_despawned,
+                      self.teapot_instances.len(), self.light_instances.len());
         }
     }
     
@@ -295,60 +576,9 @@ impl DynamicTeapotApp {
         ]
     }
     
-    fn generate_random_teapots(rng: &mut ThreadRng, materials: &[Material]) -> Vec<TeapotInstance> {
-        let num_teapots = rng.gen_range(3..=10); // 3-10 teapots
-        let mut teapots = Vec::with_capacity(num_teapots);
-        
-        for i in 0..num_teapots {
-            // Position teapots in a rough grid with some randomness
-            let grid_size = (num_teapots as f32).sqrt().ceil() as i32;
-            let x_index = i as i32 % grid_size;
-            let z_index = i as i32 / grid_size;
-            
-            let base_x = (x_index as f32 - grid_size as f32 * 0.5) * 6.0;
-            let base_z = (z_index as f32 - grid_size as f32 * 0.5) * 6.0;
-            
-            // Add randomness to position
-            let position = Vec3::new(
-                base_x + rng.gen_range(-2.0..2.0),
-                rng.gen_range(-1.0..1.0), // Slight height variation
-                base_z + rng.gen_range(-2.0..2.0),
-            );
-            
-            // Random orbital motion parameters
-            let orbit_center = Vec3::new(
-                rng.gen_range(-5.0..5.0),
-                0.0,
-                rng.gen_range(-5.0..5.0),
-            );
-            
-            teapots.push(TeapotInstance {
-                entity: None,
-                position,
-                rotation: Vec3::new(
-                    rng.gen_range(0.0..std::f32::consts::TAU),
-                    rng.gen_range(0.0..std::f32::consts::TAU),
-                    rng.gen_range(0.0..std::f32::consts::TAU),
-                ),
-                scale: rng.gen_range(0.5..2.0), // Random size
-                spin_speed: Vec3::new(
-                    rng.gen_range(-1.0..1.0),
-                    rng.gen_range(-1.5..1.5), // Slightly faster Y rotation
-                    rng.gen_range(-0.8..0.8),
-                ),
-                orbit_radius: rng.gen_range(1.0..4.0),
-                orbit_speed: rng.gen_range(0.2..0.8),
-                orbit_center,
-                material_index: rng.gen_range(0..materials.len()),
-            });
-        }
-        
-        teapots
-    }
-    
     fn generate_random_lights(world: &mut World, rng: &mut ThreadRng) -> Vec<LightInstance> {
         let num_lights = rng.gen_range(4..=8); // 4-8 lights
-        let mut lights = Vec::with_capacity(num_lights);
+        let lights = Vec::with_capacity(num_lights);
         
         // Always include one main directional light
         let main_light_entity = world.create_entity();
@@ -358,7 +588,8 @@ impl DynamicTeapotApp {
             Vec3::new(1.0, 0.95, 0.9),  // Warm white
             0.6
         ));
-        
+        // TODO: Remove this old light creation code - using dynamic spawning now
+        /*
         lights.push(LightInstance {
             entity: main_light_entity,
             light_type: LightType::Directional,
@@ -370,6 +601,7 @@ impl DynamicTeapotApp {
             effect_pattern: EffectPattern::Steady,
             phase_offset: 0.0,
         });
+        */
         
         // Generate random point lights
         for _i in 1..num_lights {
@@ -431,6 +663,8 @@ impl DynamicTeapotApp {
                 },
             };
             
+            // TODO: Remove this old light creation code - using dynamic spawning now
+            /*
             lights.push(LightInstance {
                 entity,
                 light_type: LightType::Point,
@@ -442,6 +676,7 @@ impl DynamicTeapotApp {
                 effect_pattern: effect,
                 phase_offset: rng.gen_range(0.0..std::f32::consts::TAU),
             });
+            */
         }
         
         lights
@@ -494,53 +729,31 @@ impl DynamicTeapotApp {
             }
         }
         
-        // Initialize GameObject system
+        // Initialize GameObject system for multiple individual draw calls
         if let Some(ref teapot_mesh) = self.teapot_mesh {
-            // Create GameObjects for each teapot
+            // Create regular shared rendering resources (works with existing shaders)
             let materials = Self::create_teapot_materials();
-            let num_teapots = self.teapot_entities.len();
-            
-            // Create SharedRenderingResources for efficient multiple object rendering
-            match self.renderer.create_shared_rendering_resources(teapot_mesh, &materials) {
+            match self.graphics_engine.create_shared_rendering_resources(teapot_mesh, &materials) {
                 Ok(shared_resources) => {
-                    log::info!("Created SharedRenderingResources successfully");
+                    log::info!("Created SharedRenderingResources successfully for multiple draw calls");
                     self.shared_resources = Some(shared_resources);
+                    
+                    // Initialize the instance renderer system (now does multiple individual draw calls)
+                    match self.graphics_engine.initialize_instance_renderer(100) {
+                        Ok(()) => {
+                            log::info!("Initialized renderer with capacity for 100 individual draw calls");
+                        }
+                        Err(e) => {
+                            log::error!("Failed to initialize renderer: {}", e);
+                            return Err(e);
+                        }
+                    }
                 }
                 Err(e) => {
                     log::error!("Failed to create SharedRenderingResources: {}", e);
                     return Err(e);
                 }
             }
-            
-            for i in 0..num_teapots {
-                let material_index = i % materials.len();
-                let material = materials[material_index].clone();
-                
-                // Create GameObject with simple factory method
-                match self.renderer.create_game_object(
-                    rust_engine::foundation::math::Vec3::new(0.0, 0.0, 0.0), // Will be updated in render
-                    rust_engine::foundation::math::Vec3::new(0.0, 0.0, 0.0), // No rotation initially
-                    rust_engine::foundation::math::Vec3::new(0.8, 0.8, 0.8), // Scale
-                    material.clone()
-                ) {
-                    Ok(game_object) => {
-                        self.teapot_game_objects.push(game_object);
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to create GameObject {}: {}", i, e);
-                        // Create a basic GameObject without GPU resources for now
-                        let game_object = GameObject::new(
-                            rust_engine::foundation::math::Vec3::new(0.0, 0.0, 0.0),
-                            rust_engine::foundation::math::Vec3::new(0.0, 0.0, 0.0),
-                            rust_engine::foundation::math::Vec3::new(0.8, 0.8, 0.8),
-                            material
-                        );
-                        self.teapot_game_objects.push(game_object);
-                    }
-                }
-            }
-            
-            log::info!("Created {} GameObjects for teapot rendering", self.teapot_game_objects.len());
         }
         
         Ok(())
@@ -569,8 +782,8 @@ impl DynamicTeapotApp {
                         }
                     }
                     WindowEvent::Key(Key::Space, _, Action::Press, _) => {
-                        // Regenerate scene with new random content
-                        self.regenerate_scene();
+                        // Dynamic spawning is automatic now - space key disabled
+                        log::info!("Dynamic spawning is automatic - space key no longer regenerates scene");
                     }
                     WindowEvent::Key(Key::R, _, Action::Press, _) => {
                         // Reset camera to default position
@@ -583,8 +796,8 @@ impl DynamicTeapotApp {
             
             if framebuffer_resized {
                 log::info!("Framebuffer resized detected, recreating swapchain...");
-                self.renderer.recreate_swapchain(&mut self.window);
-                let (width, height) = self.renderer.get_swapchain_extent();
+                self.graphics_engine.recreate_swapchain(&mut self.window);
+                let (width, height) = self.graphics_engine.get_swapchain_extent();
                 if width > 0 && height > 0 {
                     self.camera.set_aspect_ratio(width as f32 / height as f32);
                 }
@@ -604,7 +817,8 @@ impl DynamicTeapotApp {
         log::info!("Dynamic teapot demo completed");
         Ok(())
     }
-    
+    // TODO: Remove this old regenerate_scene method - using dynamic spawning now
+    /*
     fn regenerate_scene(&mut self) {
         log::info!("Regenerating scene with new random content...");
         let mut rng = thread_rng();
@@ -642,10 +856,33 @@ impl DynamicTeapotApp {
         log::info!("Regenerated {} teapots and {} lights", 
                   self.teapot_entities.len(), self.light_instances.len());
     }
+    */
     
     fn update_scene(&mut self) {
         let elapsed_seconds = self.start_time.elapsed().as_secs_f32();
         let delta_time = 0.016; // Assume ~60 FPS for now
+        
+        // Dynamic spawning with random intervals
+        let mut rng = thread_rng();
+        let now = Instant::now();
+        
+        // Spawn teapots randomly (every 1-3 seconds if under limit)
+        if now.duration_since(self.last_teapot_spawn).as_secs_f32() > rng.gen_range(1.0..3.0) {
+            self.spawn_random_teapot();
+            self.last_teapot_spawn = now;
+        }
+        
+        // Spawn lights randomly (every 2-4 seconds if under limit)
+        if now.duration_since(self.last_light_spawn).as_secs_f32() > rng.gen_range(2.0..4.0) {
+            self.spawn_random_light();
+            self.last_light_spawn = now;
+        }
+        
+        // Remove expired entities
+        self.despawn_expired_entities();
+        
+        // Clean up expired teapot instances from dynamic system
+        self.cleanup_expired_instances();
         
         // Update camera with orbital motion
         let camera_angle = elapsed_seconds * self.camera_orbit_speed;
@@ -657,11 +894,11 @@ impl DynamicTeapotApp {
         self.camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
         
         // Update SceneManager (handles all teapot movement automatically)
-        self.scene_manager.update(delta_time, &mut self.renderer);
+        self.scene_manager.update(delta_time, &mut self.graphics_engine);
         
-        // Simplified light updates - keep existing light system working
+        // Update light movements and effects
         for light_instance in &mut self.light_instances {
-            // Simple light position updates
+            // Update light position based on movement pattern
             match &light_instance.movement_pattern {
                 MovementPattern::Static => {
                     light_instance.current_position = light_instance.base_position;
@@ -684,9 +921,27 @@ impl DynamicTeapotApp {
                 }
             }
             
+            // Update light intensity based on effect pattern
+            let current_intensity = match &light_instance.effect_pattern {
+                EffectPattern::Steady => light_instance.base_intensity,
+                EffectPattern::Pulse { frequency, amplitude } => {
+                    let pulse = (elapsed_seconds * frequency + light_instance.phase_offset).sin();
+                    light_instance.base_intensity * (1.0 + pulse * amplitude)
+                }
+                EffectPattern::Flicker { base_rate, chaos } => {
+                    let flicker = (elapsed_seconds * base_rate + light_instance.phase_offset).sin() * chaos;
+                    light_instance.base_intensity * (1.0 + flicker)
+                }
+                EffectPattern::Breathe { frequency } => {
+                    let breathe = (elapsed_seconds * frequency + light_instance.phase_offset).sin();
+                    light_instance.base_intensity * (0.5 + 0.5 * breathe.abs())
+                }
+            };
+            
             // Update the light component in ECS
             if let Some(light_comp) = self.world.get_component_mut::<LightComponent>(light_instance.entity) {
                 light_comp.position = light_instance.current_position;
+                light_comp.intensity = current_intensity.max(0.0); // Ensure non-negative
             }
         }
     }
@@ -707,80 +962,132 @@ impl DynamicTeapotApp {
     }
     
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Begin the frame for batch rendering
-        self.renderer.begin_frame();
+        let elapsed_seconds = self.start_time.elapsed().as_secs_f32();
+        let delta_time = 0.016; // Approximate 60 FPS delta time
+        
+        // BEGIN DYNAMIC FRAME: Setup and lifecycle updates
+        self.graphics_engine.begin_dynamic_frame(delta_time)?;
         
         // Set camera for the frame (this needs to be done before any rendering)
-        self.renderer.set_camera(&self.camera);
+        self.graphics_engine.set_camera(&self.camera);
         
         // Build multi-light environment from entity system
         let multi_light_env = self.build_multi_light_environment_from_entities().clone();
-        self.renderer.set_multi_light_environment(&multi_light_env);
+        self.graphics_engine.set_multi_light_environment(&multi_light_env);
         
-        // PROPER VULKAN MULTIPLE OBJECTS: Command recording with per-object uniform buffers
-        if let Some(ref teapot_mesh) = self.teapot_mesh {
-            if !self.teapot_game_objects.is_empty() {
-                let elapsed_seconds = self.start_time.elapsed().as_secs_f32();
-                
-                // Begin command recording for multiple objects
-                self.renderer.begin_command_recording()?;
-                
-                // Bind shared geometry once for all objects
-                if let Some(ref shared_resources) = self.shared_resources {
-                    self.renderer.bind_shared_geometry(shared_resources)?;
-                }
-                
-                // Arrange teapots in a grid pattern
-                let grid_size = (self.teapot_game_objects.len() as f32).sqrt().ceil() as usize;
-                let spacing = 4.0; // Distance between teapots
-                
-                // Record draw commands for all teapots
-                for (i, game_object) in self.teapot_game_objects.iter_mut().enumerate() {
-                    let row = i / grid_size;
-                    let col = i % grid_size;
+        // UPDATE DYNAMIC OBJECTS: Spawn new objects using the dynamic system
+        if self.teapot_mesh.is_some() {
+            // Convert material to MaterialProperties and spawn dynamic objects
+            for teapot_instance in &mut self.teapot_instances {
+                // Only create dynamic object if it doesn't have a handle yet
+                if teapot_instance.dynamic_handle.is_none() {
+                    let phase_offset = (teapot_instance.spawn_time.elapsed().as_secs_f32()) * 0.7;
+                    let y_offset = (elapsed_seconds * 1.0 + phase_offset).sin() * 1.2;
+                    let rotation_y = elapsed_seconds * 0.5 + phase_offset;
                     
-                    // Calculate grid position centered around origin
-                    let offset_x = (col as f32 - grid_size as f32 * 0.5) * spacing;
-                    let offset_z = (row as f32 - grid_size as f32 * 0.5) * spacing;
+                    // Calculate animated position
+                    let position = teapot_instance.position + Vec3::new(0.0, y_offset, 0.0);
+                    let rotation = Vec3::new(0.0, rotation_y, 0.0);
+                    let scale = Vec3::new(
+                        teapot_instance.scale, 
+                        teapot_instance.scale, 
+                        teapot_instance.scale
+                    );
                     
-                    // Individual animation for each teapot
-                    let phase_offset = i as f32 * 0.5; // Different phase for each teapot
-                    let y_offset = (elapsed_seconds * 1.2 + phase_offset).sin() * 1.5;
-                    let rotation_y = elapsed_seconds * 0.4 + phase_offset;
+                    // Create MaterialProperties from Material (simplified for now)
+                    let material_props = MaterialProperties {
+                        base_color: [1.0, 0.8, 0.3, 1.0], // Golden teapot color
+                        metallic: 0.9,
+                        roughness: 0.1,
+                        emission: [0.0, 0.0, 0.0],
+                        alpha: 1.0,
+                    };
                     
-                    // Update GameObject transforms
-                    game_object.position = rust_engine::foundation::math::Vec3::new(offset_x, y_offset, offset_z);
-                    game_object.rotation = rust_engine::foundation::math::Vec3::new(0.0, rotation_y, 0.0);
-                    game_object.scale = rust_engine::foundation::math::Vec3::new(1.0, 1.0, 1.0); // Normal size
-                    
-                    // Record draw command for this object (sets per-object uniforms)
-                    if let Some(ref shared_resources) = self.shared_resources {
-                        self.renderer.record_object_draw(game_object, shared_resources)?;
-                    }
-                }
-                
-                // Submit all recorded commands and present
-                self.renderer.submit_commands_and_present(&mut self.window)?;
-                
-                // Log performance info occasionally
-                static mut LAST_LOG_TIME: f32 = 0.0;
-                unsafe {
-                    if elapsed_seconds - LAST_LOG_TIME >= 2.0 {
-                        log::info!("Rendered {} teapots using proper Vulkan multiple objects pattern ({} vertices shared, {} triangles per teapot)", 
-                                  self.teapot_game_objects.len(),
-                                  teapot_mesh.vertices.len(),
-                                  teapot_mesh.indices.len() / 3);
-                        LAST_LOG_TIME = elapsed_seconds;
+                    // Spawn dynamic object using the pool system
+                    match self.graphics_engine.spawn_dynamic_object(
+                        position,
+                        rotation,
+                        scale,
+                        material_props,
+                        teapot_instance.lifetime
+                    ) {
+                        Ok(handle) => {
+                            teapot_instance.dynamic_handle = Some(handle);
+                            log::debug!("Spawned dynamic teapot at position {:?}", position);
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to spawn dynamic teapot: {}", e);
+                            // Continue without crashing - pool might be full
+                        }
                     }
                 }
             }
+        }
+        
+        // RECORD DYNAMIC DRAWS: Record all active dynamic objects
+        if let Some(ref shared_resources) = self.shared_resources {
+            log::debug!("Recording dynamic draws...");
+            self.graphics_engine.record_dynamic_draws(shared_resources)?;
+            log::debug!("Dynamic draws recorded successfully");
         } else {
-            log::warn!("No teapot mesh loaded");
-            // Still need to end the frame even if no rendering
-            self.renderer.end_frame(&mut self.window)?;
+            log::warn!("No shared resources available for dynamic rendering");
+        }
+        
+        // END DYNAMIC FRAME: Submit and present
+        log::debug!("Ending dynamic frame...");
+        self.graphics_engine.end_dynamic_frame(&mut self.window)?;
+        log::debug!("Dynamic frame ended successfully");
+        
+        // Log performance info occasionally
+        static mut LAST_LOG_TIME: f32 = 0.0;
+        unsafe {
+            if elapsed_seconds - LAST_LOG_TIME >= 5.0 {
+                if let Some(stats) = self.graphics_engine.get_dynamic_stats() {
+                    log::info!("Dynamic rendering: {} active objects, {} total spawned, {}% pool utilization", 
+                              stats.active_objects,
+                              stats.total_spawned,
+                              (stats.utilization * 100.0) as u32);
+                }
+                log::info!("Total teapot instances: {}, {} active lights (sunlight + {} dynamic)", 
+                          self.teapot_instances.len(),
+                          self.light_instances.len() + 1, // +1 for sunlight
+                          self.light_instances.len());
+                LAST_LOG_TIME = elapsed_seconds;
+            }
         }
         
         Ok(())
+    }
+
+    /// Clean up expired teapot instances that were automatically despawned by the dynamic system
+    fn cleanup_expired_instances(&mut self) {
+        let now = Instant::now();
+        
+        // Remove teapot instances that have exceeded their lifetime
+        self.teapot_instances.retain(|instance| {
+            let elapsed = now.duration_since(instance.spawn_time).as_secs_f32();
+            let should_keep = elapsed < instance.lifetime;
+            
+            if !should_keep {
+                log::debug!("Removing expired teapot instance (lived {:.1}s of {:.1}s)", 
+                           elapsed, instance.lifetime);
+            }
+            
+            should_keep
+        });
+        
+        // Also clean up light instances
+        self.light_instances.retain(|instance| {
+            let elapsed = now.duration_since(instance.spawn_time).as_secs_f32();
+            let should_keep = elapsed < instance.lifetime;
+            
+            if !should_keep {
+                log::debug!("Removing expired light instance (lived {:.1}s of {:.1}s)", 
+                           elapsed, instance.lifetime);
+            }
+            
+            should_keep
+        });
     }
 }
 

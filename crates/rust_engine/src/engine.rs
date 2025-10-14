@@ -5,7 +5,7 @@ use crate::{
     foundation::time::Timer,
     ecs::World,
     assets::AssetManager,
-    render::Renderer,
+    render::GraphicsEngine,
     input::InputManager,
 };
 use thiserror::Error;
@@ -20,8 +20,8 @@ pub struct Engine {
     /// Asset management system
     pub assets: AssetManager,
     
-    /// Rendering system
-    pub renderer: Renderer,
+    /// Graphics engine
+    pub graphics_engine: GraphicsEngine,
     
     /// Input handling system
     pub input: InputManager,
@@ -46,15 +46,15 @@ impl Engine {
         let world = World::new();
         let assets = AssetManager::new(&config.assets)
             .map_err(|e| EngineError::InitializationFailed(format!("Asset manager: {}", e)))?;
-        let renderer = Renderer::new(&config.renderer, &config.window)
-            .map_err(|e| EngineError::InitializationFailed(format!("Renderer: {}", e)))?;
+        let graphics_engine = GraphicsEngine::new(&config.renderer, &config.window)
+            .map_err(|e| EngineError::InitializationFailed(format!("Graphics engine: {}", e)))?;
         let input = InputManager::new();
         let timer = Timer::new();
         
         Ok(Self {
             world,
             assets,
-            renderer,
+            graphics_engine,
             input,
             timer,
             config,
@@ -106,7 +106,7 @@ impl Engine {
     
     /// Render the current frame
     pub fn render(&mut self) -> Result<(), AppError> {
-        self.renderer.render()
+        self.graphics_engine.render()
             .map_err(|e| AppError::Custom(format!("Render error: {}", e)))
     }
     
@@ -165,14 +165,14 @@ impl Engine {
         &mut self.assets
     }
     
-    /// Get the renderer
-    pub fn renderer(&self) -> &Renderer {
-        &self.renderer
+    /// Get the graphics engine
+    pub fn graphics_engine(&self) -> &GraphicsEngine {
+        &self.graphics_engine
     }
     
-    /// Get mutable access to the renderer
-    pub fn renderer_mut(&mut self) -> &mut Renderer {
-        &mut self.renderer
+    /// Get mutable access to the graphics engine
+    pub fn graphics_engine_mut(&mut self) -> &mut GraphicsEngine {
+        &mut self.graphics_engine
     }
     
     /// Get the input manager

@@ -5,7 +5,7 @@
             "type": "lldb",
             "request": "launch",
             "name": "Debug Teapot App",
-            "program": "${workspaceFolder}/target/debug/teapot_app.exe",
+            "program": "${workspaceFolder}/target/debug/teapot_dynamic.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
             "stopOnEntry": false,

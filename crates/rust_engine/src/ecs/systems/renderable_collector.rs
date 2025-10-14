@@ -28,7 +28,7 @@ pub struct RenderableCollector {
 }
 
 impl RenderableCollector {
-    /// Create a new rendering system
+    /// Create a new renderable collector
     pub fn new() -> Self {
         Self {
             batch_renderer: BatchRenderer::new(),
@@ -37,17 +37,17 @@ impl RenderableCollector {
         }
     }
     
-    /// Enable or disable the rendering system
+    /// Enable or disable the collector
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }
     
-    /// Check if the system is enabled
+    /// Check if the collector is enabled
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
     
-    /// Update the rendering system - collect entities and render them
+    /// Update the collector - collect entities and render them
     pub fn update(&mut self, world: &World, graphics_engine: &mut GraphicsEngine) {
         if !self.enabled {
             return;
@@ -62,7 +62,7 @@ impl RenderableCollector {
         // Sort commands by depth for proper transparency handling
         self.render_queue.sort_commands();
         
-        // Submit batches to the renderer
+        // Submit batches to the graphics engine
         if let Err(e) = self.batch_renderer.execute_with_renderer(&self.render_queue, graphics_engine) {
             eprintln!("Batch rendering error: {}", e);
         }

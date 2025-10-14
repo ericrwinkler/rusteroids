@@ -2,31 +2,33 @@
 
 ## ⚠️ **CURRENT STATUS** 
 
-**Architecture State**: Mixed - Core systems working, multiple objects rendering has critical performance issues
-**Performance**: 60+ FPS single object, ~10 FPS multiple objects due to architectural problems
-**Priority**: Fix multiple objects rendering (immediate mode → command recording pattern)
+**Architecture State**: Core systems working, dynamic rendering system design complete, ready for implementation
+**Performance**: 60+ FPS single object, dynamic objects blocked by architecture mismatch
+**Priority**: Implement Dynamic Rendering System for memory-safe dynamic object management
 
 ## Overview
 
-Rusteroids is a modular ECS-based Vulkan rendering engine designed for 2D/3D games. The engine follows separation of concerns with distinct modules for ECS, rendering, input, audio, and asset management.
+Rusteroids is a modular ECS-based Vulkan rendering engine designed for 2D/3D games. The engine follows separation of concerns with distinct modules for ECS, rendering, input, audio, and asset management. The architecture supports both static scene objects and dynamic temporary objects through separate but integrated rendering pathways.
 
 ## Core Design Principles
 
 ### 1. **Separation of Concerns**
 - **ECS Layer**: Entity management, component storage, system execution
-- **Rendering Layer**: Vulkan backend, material system, pipeline management  
+- **Rendering Layer**: Dual-path rendering (static objects + dynamic objects)
 - **Foundation Layer**: Math utilities, coordinate systems, transforms
 - **Platform Layer**: Window management, input handling, file I/O
 
-### 2. **Safety & Performance**
+### 2. **Memory Safety & Performance**
 - **Memory Safety**: RAII patterns, single ownership, automatic cleanup
 - **Performance**: Zero-allocation render loops, GPU-efficient data layouts
+- **Resource Management**: Pre-allocated pools for dynamic objects, permanent allocation for static objects
 - **Validation**: Comprehensive error handling, Vulkan validation layer integration
 
-### 3. **Modularity**
-- **Backend Agnostic**: Rendering abstracted through trait system
-- **Asset Format Agnostic**: Support for multiple model/texture formats
-- **Platform Agnostic**: Windows/Linux support through abstraction layers
+### 3. **Dual Rendering Architecture**
+- **Static Objects**: Permanent GPU resources via GameObject system
+- **Dynamic Objects**: Pooled resources via DynamicObjectManager
+- **Clear API Boundaries**: Separate interfaces prevent architecture mixing
+- **Batch Rendering**: Single command buffer submission per frame
 
 ## Project Structure
 
@@ -36,7 +38,15 @@ rusteroids/
 │   ├── rust_engine/                 # Core engine library
 │   │   └── src/
 │   │       ├── ecs/                 # Entity-Component-System
-│   │       ├── render/              # Vulkan rendering backend
+│   │       ├── render/              # Dual-path Vulkan rendering
+│   │       │   ├── dynamic/         # Dynamic object rendering system
+│   │       │   │   ├── object_manager.rs    # DynamicObjectManager
+│   │       │   │   ├── instance_renderer.rs # Batch rendering pipeline
+│   │       │   │   ├── resource_pool.rs     # Memory pools
+│   │       │   │   └── mod.rs              # Public interface
+│   │       │   ├── game_object.rs   # Static object system
+│   │       │   ├── shared_resources.rs     # Common rendering resources
+│   │       │   └── material/        # Material management
 │   │       ├── foundation/          # Math, transforms, utilities
 │   │       ├── assets/              # Asset loading & management
 │   │       ├── audio/               # Audio system (planned)
@@ -50,6 +60,9 @@ rusteroids/
 │   ├── shaders/                     # GLSL shaders
 │   └── textures/                    # Image assets
 └── docs/                           # Documentation
+    ├── ARCHITECTURE.md              # This document
+    ├── TODO.md                      # Implementation roadmap
+    └── TROUBLESHOOTING.md           # Known issues and solutions
 ```
 
 ## Architecture Details
@@ -78,66 +91,261 @@ pub trait System {
 #### Implemented Components
 - **TransformComponent**: Position, rotation, scale in world space
 - **LightComponent**: Light properties (directional, point, spot)
-- **RenderableComponent**: Mesh and material references (planned)
+- **DynamicRenderComponent**: Handle to dynamic object in pool system
+- **RenderableComponent**: Mesh and material references for static objects
 
 #### Working Systems
 - **LightingSystem**: Processes light entities, sends data to renderer
+- **DynamicRenderSystem**: Updates dynamic objects and manages lifecycle
 - **CoordinateValidation**: Ensures coordinate system consistency
 
-### Rendering Architecture 
+### Dual-Path Rendering Architecture
 
-#### ✅ **Working Systems**
+#### Static Object Rendering (GameObject System)
 
-**Vulkan Backend**:
+**Purpose**: Permanent scene objects with persistent GPU resources
+
 ```rust
-pub struct Renderer {
-    backend: Box<dyn RenderBackend>,
-    material_manager: MaterialManager,
-    current_camera: Option<Camera>,
-    current_lighting: Option<LightingEnvironment>,
+pub struct GameObject {
+    // Transform properties
+    pub position: Vec3,
+    pub rotation: Vec3,
+    pub scale: Vec3,
+    
+    // Persistent GPU resources (one per frame-in-flight)
+    pub uniform_buffers: Vec<Buffer>,
+    pub uniform_mapped: Vec<*mut u8>,
+    pub descriptor_sets: Vec<vk::DescriptorSet>,
+    
+    // Material for this object
+    pub material: Material,
 }
 ```
 
-**Pipeline Management**:
-- StandardPBR, Unlit, TransparentPBR, TransparentUnlit pipelines
-- Automatic shader compilation (GLSL → SPIR-V)
-- Material-based pipeline selection
+**Characteristics**:
+- ✅ Permanent GPU resource allocation at creation
+- ✅ Individual uniform buffers and descriptor sets per object
+- ✅ Suitable for static scene geometry, UI elements, persistent entities
+- ✅ Command recording pattern for batch rendering
 
-**UBO Architecture**:
-- **Set 0**: Per-frame data (camera matrices, lighting)
-- **Set 1**: Per-material data (material properties, textures)
-
-#### ⚠️ **Critical Issue: Multiple Objects Rendering**
-
-**Problem**: Immediate mode rendering pattern prevents efficient multiple object rendering.
-
-**Current Broken Pattern**:
+**API Usage**:
 ```rust
-// Each call submits frame immediately - prevents batching
-pub fn draw_mesh_3d(&mut self, mesh: &Mesh, transform: &Mat4, material: &Material) -> Result<()> {
-    self.backend.update_mesh(&mesh.vertices, &mesh.indices)?;  // Upload every call
-    self.backend.set_model_matrix(transform_array);
-    self.backend.draw_frame()?;  // ⚠️ SUBMITS IMMEDIATELY
-    Ok(())
+// Create static objects (buildings, terrain, UI)
+let static_object = graphics_engine.create_static_object(position, rotation, scale, material)?;
+
+// Render multiple static objects efficiently
+graphics_engine.begin_frame()?;
+graphics_engine.bind_shared_resources(&shared_resources)?;
+for object in &static_objects {
+    graphics_engine.draw_object(object, frame_index)?;
+}
+graphics_engine.end_frame(&mut window)?;
+```
+
+#### Dynamic Object Rendering (Pool System)
+
+**Purpose**: Temporary objects with bounded lifetime and pooled resources
+
+```rust
+pub struct DynamicObjectManager {
+    // Pre-allocated object pools
+    object_pool: ObjectPool<DynamicRenderData>,
+    transform_pool: Pool<TransformComponent>,
+    material_pool: Pool<MaterialInstance>,
+    
+    // Active dynamic objects this frame
+    active_objects: Vec<DynamicObjectHandle>,
+    
+    // Shared GPU resources
+    shared_vertex_buffer: Buffer,
+    shared_uniform_buffer: Buffer,
+    shared_descriptor_sets: Vec<vk::DescriptorSet>,
+    
+    // Instance data for GPU upload
+    instance_buffer: Buffer,
+    max_instances: usize, // Pre-allocated limit (e.g., 100)
 }
 ```
 
-**Required Fix**: Command recording pattern per Vulkan tutorial:
+**Data Structures**:
 ```rust
-// Proper Vulkan multiple objects pattern
-pub fn begin_frame(&mut self) -> Result<()> {
-    // Start command buffer recording
+#[repr(C)]
+pub struct DynamicInstanceData {
+    model_matrix: Mat4,
+    normal_matrix: Mat3,
+    material_index: u32,
+    _padding: [f32; 3],
 }
 
-pub fn draw_object(&mut self, object: &GameObject) -> Result<()> {
-    // Record draw command (no submission)
-    self.command_buffer.bind_descriptor_set(&object.descriptor_set);
-    self.command_buffer.draw_indexed(mesh.index_count);
+pub struct DynamicRenderObject {
+    // Logical properties
+    entity_id: Option<Entity>,
+    transform: TransformComponent,
+    material_instance: MaterialInstance,
+    
+    // Render state
+    pool_handle: PoolHandle,
+    instance_index: u32,
+    is_active: bool,
+    
+    // Lifecycle
+    spawn_time: Instant,
+    lifetime: f32,
 }
 
-pub fn end_frame(&mut self, window: &mut Window) -> Result<()> {
-    // Submit all commands at once
+pub struct MaterialInstance {
+    base_material: MaterialId,
+    instance_properties: MaterialProperties,
+    descriptor_set_offset: u32,
 }
+```
+
+**Characteristics**:
+- ✅ Pre-allocated resource pools (no runtime allocation)
+- ✅ Handle-based access with generation counters
+- ✅ Automatic lifecycle management with timeout cleanup
+- ✅ Batch rendering with instanced draws
+- ✅ Suitable for particles, projectiles, temporary effects, dynamic spawning
+
+**API Usage**:
+```rust
+// Spawn dynamic objects (particles, projectiles, temporary entities)
+let handle = graphics_engine.spawn_dynamic_object(
+    position, rotation, scale, 
+    material_properties,
+    lifetime_seconds
+)?;
+
+// Automatic batch rendering workflow
+graphics_engine.begin_dynamic_frame()?;
+// Objects spawn/update/despawn automatically
+graphics_engine.record_dynamic_draws()?;
+graphics_engine.end_dynamic_frame()?;
+```
+
+### Memory Management Strategy
+
+#### Static Objects (GameObject System)
+```rust
+// Memory allocation pattern
+GameObject::new() → create_resources() → permanent GPU allocation
+    ↓
+Per-object uniform buffers × frames_in_flight
+Per-object descriptor sets × frames_in_flight
+Persistent until explicit destruction
+```
+
+#### Dynamic Objects (Pool System)
+```rust
+// Memory allocation pattern
+Startup: Pre-allocate pools for max_objects (e.g., 100)
+    ↓
+Runtime: Handle-based allocation from pools
+    ↓
+Cleanup: Automatic return to pool on lifetime expiration
+```
+
+**Pool Configuration**:
+```rust
+pub struct PoolConfiguration {
+    max_dynamic_objects: usize = 100,    // Growth capacity beyond typical usage
+    max_materials: usize = 20,           # Material variety for visual diversity
+    frames_in_flight: usize = 2,         # Standard double buffering
+    
+    // Calculated buffer sizes
+    instance_buffer_size: usize = max_dynamic_objects * size_of::<DynamicInstanceData>(),
+    uniform_buffer_size: usize = max_dynamic_objects * MAX_UNIFORM_SIZE,
+}
+```
+
+#### Resource Lifecycle Management
+```rust
+pub enum ResourceState {
+    Available,      // In pool, ready for allocation
+    Active,         // Assigned to dynamic object
+    PendingCleanup, // Marked for return to pool next frame
+}
+
+pub struct ResourceHandle {
+    pool_id: PoolId,
+    index: u32,
+    generation: u32,  // Prevents use-after-free
+}
+```
+
+### Vulkan Backend Implementation
+
+#### Descriptor Set Layouts
+```rust
+// Set 0: Per-frame data (shared by all objects)
+layout(set = 0, binding = 0) uniform CameraUBO {
+    mat4 view_matrix;
+    mat4 projection_matrix;
+    vec4 camera_position;
+    // ...
+} camera;
+
+layout(set = 0, binding = 1) uniform LightingUBO {
+    vec4 ambient_color;
+    vec4 directional_light_direction;
+    vec4 directional_light_color;
+    // ...
+} lighting;
+
+// Set 1: Per-object data (different for static vs dynamic)
+// Static: Individual descriptor sets per GameObject
+// Dynamic: Instance buffer with dynamic offsets
+```
+
+#### Command Buffer Recording Patterns
+
+**Static Objects**:
+```rust
+fn record_static_objects() -> VulkanResult<()> {
+    // Bind per-frame descriptor set (camera + lighting)
+    cmd_bind_descriptor_sets(set_0_frame_data);
+    
+    // For each static object
+    for object in static_objects {
+        // Bind per-object descriptor set
+        cmd_bind_descriptor_sets(object.descriptor_set);
+        // Record draw command
+        cmd_draw_indexed(object.index_count);
+    }
+}
+```
+
+**Dynamic Objects**:
+```rust
+fn record_dynamic_objects() -> VulkanResult<()> {
+    // Bind per-frame descriptor set (camera + lighting)
+    cmd_bind_descriptor_sets(set_0_frame_data);
+    
+    // Upload instance data to GPU
+    update_instance_buffer(active_dynamic_objects);
+    
+    // Single instanced draw call for all objects
+    cmd_draw_indexed_indirect(instance_count);
+}
+```
+
+### Performance Characteristics
+
+#### Target Metrics
+- **Static Objects**: 60+ FPS with 100+ persistent objects
+- **Dynamic Objects**: 60+ FPS with 50+ temporary objects  
+- **Memory Usage**: Bounded by pool sizes, no runtime allocation
+- **GPU Memory**: Efficient batching, minimal descriptor set allocations
+
+#### Scalability Analysis
+```rust
+// Static Objects: O(n) where n = number of objects
+// - Memory: n × uniform_buffer_size × frames_in_flight
+// - Performance: n × descriptor_set_bind + n × draw_call
+
+// Dynamic Objects: O(1) regardless of active object count (up to pool limit)
+// - Memory: pool_size × uniform_buffer_size (pre-allocated)
+// - Performance: 1 × instance_data_upload + 1 × instanced_draw_call
 ```
 
 ### Coordinate System
@@ -174,7 +382,7 @@ pub enum MaterialType {
 }
 ```
 
-#### Material Properties
+#### Static Material Properties
 ```rust
 #[repr(C, align(16))]
 pub struct StandardMaterialParams {
@@ -187,20 +395,122 @@ pub struct StandardMaterialParams {
 }
 ```
 
-### Performance Characteristics
+#### Dynamic Material Instances
+```rust
+pub struct MaterialInstance {
+    base_material: MaterialId,
+    instance_properties: MaterialProperties,
+    descriptor_set_offset: u32,
+}
 
-#### Current Benchmarks
-- **Single Object**: 60+ FPS with 18,960 vertex teapot
-- **Multiple Objects**: ~10 FPS due to architectural issues  
-- **Memory**: Efficient RAII-based resource management
-- **Validation**: Clean Vulkan validation (zero errors)
+pub struct MaterialProperties {
+    base_color: Vec3,
+    metallic: f32,
+    roughness: f32,
+    emission: Vec3,
+    // Runtime-modifiable properties for dynamic objects
+}
+```
 
-#### Resource Management
-- **RAII Pattern**: Automatic cleanup via Drop implementations
-- **Single Ownership**: Clear ownership hierarchy
-- **Buffer Management**: Efficient GPU memory allocation
+## Integration Patterns
 
-## Build System
+### Static + Dynamic Rendering Workflow
+```rust
+fn render_frame() -> Result<()> {
+    // Begin frame setup
+    graphics_engine.begin_frame()?;
+    
+    // Set per-frame data (camera, lighting)
+    graphics_engine.set_camera(&camera)?;
+    graphics_engine.set_lighting(&lighting_environment)?;
+    
+    // Render static objects (buildings, terrain, UI)
+    graphics_engine.render_static_objects(&static_scene)?;
+    
+    // Update and render dynamic objects (particles, projectiles)
+    graphics_engine.update_dynamic_objects(delta_time)?;
+    graphics_engine.render_dynamic_objects()?;
+    
+    // Submit commands and present
+    graphics_engine.end_frame(&mut window)?;
+}
+```
+
+### ECS Integration
+```rust
+// Components
+#[derive(Component)]
+pub struct StaticRenderComponent {
+    game_object: GameObject,
+    material_override: Option<Material>,
+}
+
+#[derive(Component)]
+pub struct DynamicRenderComponent {
+    object_handle: DynamicObjectHandle,
+    material_override: Option<MaterialInstance>,
+    render_flags: RenderFlags,
+}
+
+// Systems
+pub struct StaticRenderSystem { /* ... */ }
+pub struct DynamicRenderSystem { 
+    object_manager: DynamicObjectManager,
+    instance_renderer: InstanceRenderer,
+}
+
+impl System for DynamicRenderSystem {
+    fn update(&mut self, world: &mut World, delta_time: f32) {
+        // Process entities with DynamicRenderComponent
+        // Update object manager with component data
+        // Handle spawning/despawning based on component lifecycle
+    }
+}
+```
+
+### Error Handling and Safety
+
+#### Resource Exhaustion Handling
+```rust
+pub enum DynamicRenderError {
+    PoolExhausted { pool_type: PoolType, requested: usize, available: usize },
+    InvalidHandle { handle: DynamicObjectHandle, reason: String },
+    VulkanError(VulkanError),
+}
+
+impl DynamicObjectManager {
+    pub fn spawn_object(&mut self, params: SpawnParams) -> Result<DynamicObjectHandle, DynamicRenderError> {
+        // Check pool availability
+        if self.object_pool.available_count() == 0 {
+            return Err(DynamicRenderError::PoolExhausted {
+                pool_type: PoolType::Object,
+                requested: 1,
+                available: 0,
+            });
+        }
+        
+        // Safe allocation with error handling
+        let handle = self.object_pool.allocate()?;
+        // ...
+    }
+}
+```
+
+#### Vulkan Validation Integration
+```rust
+// Debug builds enable comprehensive validation
+#[cfg(debug_assertions)]
+const ENABLE_VALIDATION_LAYERS: bool = true;
+
+// Validation layer configuration for dynamic objects
+fn setup_dynamic_object_validation() {
+    // Track descriptor set allocations/deallocations
+    // Monitor buffer usage patterns
+    // Validate resource lifecycle management
+}
+```
+
+## Build System & Development
 
 ### Shader Compilation
 ```rust
@@ -208,6 +518,7 @@ pub struct StandardMaterialParams {
 fn compile_shaders() {
     // Input: resources/shaders/*.{vert,frag}
     // Output: target/shaders/*.spv
+    // Compile variants for static vs dynamic rendering
 }
 ```
 
@@ -220,32 +531,111 @@ fn compile_shaders() {
 
 **Policy**: Minimal external dependencies, prefer custom implementations for control and ECS compatibility.
 
+### Testing Strategy
+```rust
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_dynamic_object_lifecycle() {
+        // Test spawn → update → despawn cycle
+        // Verify pool state consistency
+        // Check resource cleanup
+    }
+    
+    #[test]
+    fn test_resource_pool_exhaustion() {
+        // Test graceful handling of pool limits
+        // Verify error reporting
+        // Check recovery behavior
+    }
+    
+    #[test]
+    fn test_mixed_static_dynamic_rendering() {
+        // Test simultaneous static + dynamic objects
+        // Verify performance characteristics
+        // Check visual correctness
+    }
+}
+```
+
+## Performance Analysis
+
+### Current Benchmarks
+- **Single Static Object**: 60+ FPS with 18,960 vertex teapot
+- **Multiple Static Objects**: Target 60+ FPS with optimized command recording
+- **Dynamic Objects**: Target 60+ FPS with 50+ simultaneous objects
+- **Memory**: Bounded allocation, predictable usage patterns
+
+### Memory Usage Projections
+```rust
+// Static Objects (conservative estimate)
+const STATIC_OBJECTS: usize = 100;
+const STATIC_MEMORY_PER_OBJECT: usize = 1024; // 1KB uniform buffer
+const STATIC_TOTAL_MEMORY: usize = STATIC_OBJECTS * STATIC_MEMORY_PER_OBJECT * FRAMES_IN_FLIGHT;
+
+// Dynamic Objects (pool-based)
+const DYNAMIC_POOL_SIZE: usize = 100;
+const DYNAMIC_MEMORY_PER_SLOT: usize = 256; // 256B instance data
+const DYNAMIC_TOTAL_MEMORY: usize = DYNAMIC_POOL_SIZE * DYNAMIC_MEMORY_PER_SLOT;
+
+// Total GPU memory: ~200KB for object rendering (excluding mesh data)
+```
+
+### Performance Optimization Strategies
+
+#### CPU-Side Optimizations
+1. **Pool Allocation**: O(1) allocation/deallocation using free lists
+2. **Handle Validation**: Generation counters prevent use-after-free without runtime overhead
+3. **Batch Updates**: Single memory copy for all active instance data per frame
+
+#### GPU-Side Optimizations  
+1. **Instanced Rendering**: Single draw call for multiple dynamic objects
+2. **Descriptor Set Reuse**: Minimize descriptor set allocations and bindings
+3. **Memory Locality**: Contiguous instance data for efficient GPU cache usage
+
 ## Development Standards
 
 ### Performance Requirements
-- **60+ FPS** minimum with current scene complexity
-- **Clean Vulkan validation** in development builds
-- **Memory efficiency** - no leaks, proper resource cleanup
+- **60+ FPS** minimum with mixed static/dynamic scenes
+- **Clean Vulkan validation** in development builds  
+- **Memory efficiency** - bounded allocation, no leaks, proper resource cleanup
+- **Predictable performance** - no frame time spikes from dynamic allocation
 
-### Code Quality
-- **Memory Safety**: Leverage Rust's ownership system
-- **Error Handling**: Comprehensive Result types
-- **Documentation**: Public APIs fully documented
-- **Testing**: Unit tests for core systems
+### Code Quality Standards
+- **Memory Safety**: Leverage Rust's ownership system for automatic resource management
+- **Error Handling**: Comprehensive Result types with detailed error information
+- **Documentation**: Public APIs fully documented with usage examples
+- **Testing**: Unit tests for core systems, integration tests for rendering pipelines
 
-## Future Architecture Plans
+### Architecture Enforcement
+- **API Boundaries**: Clear separation between static and dynamic object interfaces
+- **Resource Management**: RAII patterns with automatic cleanup
+- **Performance Validation**: Benchmarks to detect performance regressions
 
-### Short Term (Immediate)
-1. **Fix Multiple Objects Rendering**: Implement command recording pattern
-2. **Per-Object Uniform Buffers**: Enable different transforms per object
-3. **Performance Optimization**: Achieve 60+ FPS with 10+ objects
+## Future Architecture Evolution
 
-### Medium Term
-1. **Asset Pipeline**: Comprehensive asset loading system
-2. **Scene Management**: High-level scene graph abstraction
-3. **Threading**: Multi-threaded system execution
+### Short Term (Immediate Implementation)
+1. **Dynamic Object Manager**: Core pool-based allocation system
+2. **Instance Renderer**: Batch rendering pipeline for dynamic objects  
+3. **Material Instance System**: Runtime-modifiable material properties
+4. **Static Object Optimization**: Command recording for multiple static objects
 
-### Long Term
-1. **Multiple Backends**: DirectX 12, Metal support
-2. **Advanced Rendering**: PBR lighting, shadows, post-processing
-3. **Game Framework**: Complete game development toolkit
+### Medium Term (Next Quarter)
+1. **Advanced ECS Integration**: Dynamic render components and systems
+2. **Cross-Platform Validation**: Windows/Linux compatibility testing
+3. **Performance Profiling Tools**: Runtime metrics and debugging visualization
+4. **Asset Pipeline Integration**: Seamless static/dynamic asset loading
+
+### Long Term (Future Versions)
+1. **Advanced Instancing**: GPU-driven rendering with indirect draws
+2. **LOD System Integration**: Level-of-detail for both static and dynamic objects
+3. **Multi-threaded Rendering**: Parallel command buffer recording
+4. **Advanced Memory Management**: GPU memory pools and virtual allocation
+
+## Conclusion
+
+The Rusteroids engine architecture provides a robust foundation for high-performance game rendering through its dual-path approach. The static GameObject system handles permanent scene elements efficiently, while the dynamic object system enables memory-safe temporary object rendering with predictable performance characteristics.
+
+This architecture follows established game engine patterns from "Game Engine Architecture" while leveraging Rust's safety guarantees to prevent common rendering issues like resource leaks and use-after-free errors. The clear separation of concerns ensures that both static and dynamic rendering pathways can be optimized independently while sharing common infrastructure.
+
+The implementation roadmap provides a clear path from the current single-object rendering to a production-ready system capable of handling complex mixed static/dynamic scenes at 60+ FPS with bounded memory usage.

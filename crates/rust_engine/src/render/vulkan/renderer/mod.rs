@@ -44,6 +44,9 @@ pub struct VulkanRenderer {
     
     // State for multiple object command recording
     command_recording_state: Option<CommandRecordingState>,
+    
+    // Dynamic object instanced rendering system
+    instance_renderer: Option<crate::render::dynamic::InstanceRenderer>,
 }
 
 /// State for recording multiple objects in a single command buffer
@@ -102,6 +105,7 @@ impl VulkanRenderer {
             current_frame: 0,
             max_frames_in_flight: config.max_frames_in_flight,
             command_recording_state: None,
+            instance_renderer: None, // Will be initialized when dynamic system is enabled
         })
     }
     
@@ -130,14 +134,14 @@ impl VulkanRenderer {
     
     /// Draw a frame (coordinates all managers)
     pub fn draw_frame(&mut self) -> VulkanResult<()> {
-        // Acquire next image
+        // Wait for previous frame BEFORE reusing its semaphore
+        self.sync_manager.wait_for_frame_completion(&self.context, self.current_frame)?;
+        
+        // Now it's safe to acquire next image using this frame's semaphore
         let (image_index, acquire_semaphore_handle) = {
             let (idx, sem) = self.sync_manager.acquire_next_image(&self.context, self.current_frame)?;
             (idx, sem.handle())
         };
-        
-        // Wait for previous frame
-        self.sync_manager.wait_for_frame_completion(&self.context, self.current_frame)?;
         
         // CRITICAL: Update UBO manager's current frame before recording commands
         self.ubo_manager.set_current_frame(self.current_frame);
@@ -310,16 +314,16 @@ impl crate::render::RenderBackend for VulkanRenderer {
             ));
         }
         
-        // Acquire next image
+        // Wait for previous frame BEFORE reusing its semaphore
+        self.sync_manager.wait_for_frame_completion(&self.context, self.current_frame)
+            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+        
+        // Now it's safe to acquire next image using this frame's semaphore
         let (image_index, acquire_semaphore_handle) = {
             let (idx, sem) = self.sync_manager.acquire_next_image(&self.context, self.current_frame)
                 .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
             (idx, sem.handle())
         };
-        
-        // Wait for previous frame
-        self.sync_manager.wait_for_frame_completion(&self.context, self.current_frame)
-            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
         
         // Update UBO manager's current frame
         self.ubo_manager.set_current_frame(self.current_frame);
@@ -335,11 +339,17 @@ impl crate::render::RenderBackend for VulkanRenderer {
             self.current_frame,
         ).map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
         
+        // Get the actual command buffer from the command recorder
+        let command_buffer = self.command_recorder.get_active_command_buffer()
+            .ok_or_else(|| crate::render::RenderError::BackendError(
+                "Failed to get active command buffer after starting recording".to_string()
+            ))?;
+        
         // NOTE: Shared resources will be bound separately via bind_shared_resources() call
         
-        // Store the recording state
+        // Store the recording state with the actual command buffer
         self.command_recording_state = Some(CommandRecordingState {
-            command_buffer: vk::CommandBuffer::null(), // Will be set when finished
+            command_buffer,
             frame_index: self.current_frame,
             image_index,
             acquire_semaphore_handle,
@@ -408,6 +418,7 @@ impl crate::render::RenderBackend for VulkanRenderer {
         let frame_index = recording_state.frame_index;
         
         // Submit command buffer to GPU and present the frame
+        log::debug!("Submitting command buffer: {:?}, image: {}, frame: {}", command_buffer, image_index, frame_index);
         self.sync_manager.submit_and_present(
             &self.context,
             command_buffer,
@@ -415,6 +426,7 @@ impl crate::render::RenderBackend for VulkanRenderer {
             image_index,
             frame_index,
         ).map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+        log::debug!("Command buffer submitted successfully");
         
        // log::info!("Successfully recorded and submitted {} draw calls in single command buffer: {:?}", 
        //           "multiple", command_buffer);
@@ -423,6 +435,24 @@ impl crate::render::RenderBackend for VulkanRenderer {
         self.current_frame = (self.current_frame + 1) % self.max_frames_in_flight;
         
         Ok(())
+    }
+    
+    fn initialize_dynamic_rendering(&mut self, max_objects: usize) -> crate::render::BackendResult<()> {
+        self.initialize_instance_renderer(max_objects)
+            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))
+    }
+    
+    fn initialize_instance_renderer(&mut self, max_instances: usize) -> crate::render::BackendResult<()> {
+        self.initialize_instance_renderer(max_instances)
+            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))
+    }
+    
+    fn record_dynamic_draws(&mut self, 
+                           dynamic_objects: &std::collections::HashMap<crate::render::dynamic::DynamicObjectHandle, crate::render::dynamic::DynamicRenderData>,
+                           shared_resources: &crate::render::SharedRenderingResources) 
+                           -> crate::render::BackendResult<()> {
+        self.record_dynamic_objects(dynamic_objects, shared_resources)
+            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))
     }
 }
 
@@ -475,5 +505,72 @@ impl VulkanRenderer {
     /// Get the frame descriptor set layout
     pub fn get_frame_descriptor_set_layout(&self) -> vk::DescriptorSetLayout {
         self.ubo_manager.frame_descriptor_set_layout()
+    }
+    
+    /// Get the render pass handle
+    pub fn get_render_pass(&self) -> vk::RenderPass {
+        self.render_pass.handle()
+    }
+    
+    /// Initialize instanced rendering system for dynamic objects
+    ///
+    /// Creates and initializes the InstanceRenderer for efficient batch rendering
+    /// of dynamic objects using Vulkan instanced rendering (vkCmdDrawInstanced).
+    ///
+    /// # Arguments
+    /// * `max_instances` - Maximum number of instances that can be rendered in a single draw call
+    ///
+    /// # Returns  
+    /// Result indicating successful initialization or Vulkan error
+    pub fn initialize_instance_renderer(&mut self, max_instances: usize) -> VulkanResult<()> {
+        log::info!("Initializing instance renderer with {} max instances", max_instances);
+        
+        let instance_renderer = crate::render::dynamic::InstanceRenderer::new(&self.context, max_instances)?;
+        self.instance_renderer = Some(instance_renderer);
+        
+        log::debug!("Instance renderer initialized successfully");
+        Ok(())
+    }
+    
+    /// Record dynamic object draws during active command recording
+    ///
+    /// This method integrates with the current Vulkan command recording workflow
+    /// to render dynamic objects using efficient instanced rendering. It must be
+    /// called during active command recording (after begin_render_pass).
+    ///
+    /// # Arguments  
+    /// * `dynamic_objects` - HashMap of active dynamic objects to render
+    /// * `shared_resources` - Shared rendering resources (mesh, textures, etc.)
+    ///
+    /// # Returns
+    /// Result indicating successful command recording or Vulkan error
+    pub fn record_dynamic_objects(
+        &mut self, 
+        dynamic_objects: &std::collections::HashMap<crate::render::dynamic::DynamicObjectHandle, crate::render::dynamic::DynamicRenderData>,
+        shared_resources: &crate::render::shared_resources::SharedRenderingResources
+    ) -> VulkanResult<()> {
+        
+        if let (Some(ref mut instance_renderer), Some(ref state)) = 
+            (&mut self.instance_renderer, &self.command_recording_state) {
+            
+            // Set active command buffer directly (don't call begin_frame during recording)
+            instance_renderer.set_active_command_buffer(state.command_buffer, self.current_frame);
+            
+            // Upload instance data from active dynamic objects
+            instance_renderer.upload_instance_data(dynamic_objects)?;
+            
+            // Get frame descriptor set for this frame
+            let frame_descriptor_set = self.resource_manager.frame_descriptor_sets()[self.current_frame];
+            
+            // Record instanced draw commands
+            instance_renderer.record_instanced_draw(shared_resources, &self.context, frame_descriptor_set)?;
+            
+            log::trace!("Recorded dynamic draws for {} objects", dynamic_objects.len());
+            Ok(())
+        } else {
+            Err(VulkanError::InvalidOperation {
+                reason: "Instance renderer not initialized or no active command recording".to_string()
+            })
+        }
     }
 }

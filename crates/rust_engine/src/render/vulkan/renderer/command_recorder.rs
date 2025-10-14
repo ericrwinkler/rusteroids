@@ -108,6 +108,11 @@ impl CommandRecorder {
         log::trace!("CommandRecorder: Set material color in push constants to: {:?}", color);
     }
     
+    /// Get the currently active command buffer, if any
+    pub fn get_active_command_buffer(&self) -> Option<vk::CommandBuffer> {
+        self.active_recording.as_ref().map(|recording| recording.command_buffer)
+    }
+    
     /// Record a complete frame
     pub fn record_frame(
         &mut self,

@@ -18,8 +18,6 @@
 
 use crate::render::render_queue::{RenderQueue, RenderCommand};
 use crate::render::material::MaterialId;
-use crate::render::{Renderer, Mesh, Material};
-use nalgebra::Matrix4;
 
 /// Result type for batch rendering operations
 pub type BatchResult<T> = Result<T, BatchError>;
@@ -258,9 +256,9 @@ impl BatchRenderer {
         true
     }
     
-    /// Execute batches using the current renderer
+    /// Execute batches using the current graphics engine
     /// This method submits all render commands through individual draw_mesh_3d calls
-    pub fn execute_with_renderer(&mut self, queue: &RenderQueue, renderer: &mut crate::render::Renderer) -> BatchResult<()> {
+    pub fn execute_with_renderer(&mut self, queue: &RenderQueue, graphics_engine: &mut crate::render::GraphicsEngine) -> BatchResult<()> {
         let start_time = std::time::Instant::now();
         
         // Process the queue into batches
@@ -274,12 +272,12 @@ impl BatchRenderer {
         
         // First render opaque objects (front to back)
         for command in queue.opaque_commands() {
-            self.submit_single_command(command, renderer)?;
+            self.submit_single_command(command, graphics_engine)?;
         }
         
         // Then render transparent objects (back to front)
         for command in queue.transparent_commands() {
-            self.submit_single_command(command, renderer)?;
+            self.submit_single_command(command, graphics_engine)?;
         }
         
         let submission_time = submission_start.elapsed();
@@ -292,9 +290,9 @@ impl BatchRenderer {
         Ok(())
     }
     
-    /// Submit a single render command to the renderer
+    /// Submit a single render command to the graphics engine
     /// This is a temporary bridge until we have true batch rendering
-    fn submit_single_command(&self, _command: &RenderCommand, _renderer: &mut crate::render::Renderer) -> BatchResult<()> {
+    fn submit_single_command(&self, _command: &RenderCommand, _graphics_engine: &mut crate::render::GraphicsEngine) -> BatchResult<()> {
         // TODO: Implement proper command submission once we have mesh/material access
         // For now, this is handled in the main render loop directly
         

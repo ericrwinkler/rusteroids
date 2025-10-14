@@ -11,7 +11,7 @@ use rust_engine::render::{
     Material,
     StandardMaterialParams,
     lighting::{LightingEnvironment, Light, MultiLightEnvironment},
-    Renderer,
+    GraphicsEngine,
     VulkanRendererConfig,
     WindowHandle,
 };
@@ -21,7 +21,7 @@ use std::time::Instant;
 
 pub struct IntegratedApp {
     window: WindowHandle,
-    renderer: Renderer,
+    graphics_engine: GraphicsEngine,
     camera: Camera,
     
     // Engine ECS (Phase 2 - Proper Architecture)
@@ -58,9 +58,9 @@ impl IntegratedApp {
                 "target/shaders/multi_light_vert.spv".to_string(),
                 "target/shaders/multi_light_frag.spv".to_string()
             );
-        let renderer = Renderer::new_from_window(&mut window, &renderer_config)
-            .expect("Failed to create renderer");
-        log::info!("Vulkan renderer created successfully");
+        let graphics_engine = GraphicsEngine::new_from_window(&mut window, &renderer_config)
+            .expect("Failed to create graphics engine");
+        log::info!("Graphics engine created successfully");
         
         // Create camera using standard Y-up view space (guide-compliant)
         log::info!("Creating camera...");
@@ -168,7 +168,7 @@ impl IntegratedApp {
         
         Self {
             window,
-            renderer,
+            graphics_engine,
             camera,
             
             // Engine ECS
@@ -278,10 +278,10 @@ impl IntegratedApp {
             if framebuffer_resized {
                 log::info!("Framebuffer resized detected, recreating swapchain...");
                 // Recreate swapchain for the new window size
-                self.renderer.recreate_swapchain(&mut self.window);
+                self.graphics_engine.recreate_swapchain(&mut self.window);
                 
                 // After swapchain recreation, ensure the camera aspect ratio matches the new extent
-                let (width, height) = self.renderer.get_swapchain_extent();
+                let (width, height) = self.graphics_engine.get_swapchain_extent();
                 if width > 0 && height > 0 {
                     self.camera.set_aspect_ratio(width as f32 / height as f32);
                     log::info!("Updated camera aspect ratio to {} ({}x{})", width as f32 / height as f32, width, height);
@@ -382,15 +382,15 @@ impl IntegratedApp {
     
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Begin frame
-        self.renderer.begin_frame();
+        self.graphics_engine.begin_frame();
         
         // Set camera for the frame
-        self.renderer.set_camera(&self.camera);
+        self.graphics_engine.set_camera(&self.camera);
         
         // Build multi-light environment from entity system (Phase 2)
         // Clone the environment to avoid borrow checker issues
         let multi_light_env = self.build_multi_light_environment_from_entities().clone();
-        self.renderer.set_multi_light_environment(&multi_light_env);
+        self.graphics_engine.set_multi_light_environment(&multi_light_env);
         
         // Render teapot if loaded
         if let Some(ref teapot_mesh) = self.teapot_mesh {
@@ -405,7 +405,7 @@ impl IntegratedApp {
             let current_material = &self.teapot_materials[self.current_material_index];
             
             // Submit teapot for rendering with current material
-            self.renderer.draw_mesh_3d(
+            self.graphics_engine.draw_mesh_3d(
                 teapot_mesh,
                 &model_matrix,
                 current_material
@@ -415,7 +415,7 @@ impl IntegratedApp {
         }
         
         // End frame and present
-        self.renderer.end_frame(&mut self.window)?;
+        self.graphics_engine.end_frame(&mut self.window)?;
         
         Ok(())
     }

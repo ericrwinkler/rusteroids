@@ -6,8 +6,8 @@
 
 use crate::ecs::{World, Entity};
 use crate::ecs::components::{RenderableComponent, MovementComponent, LifecycleComponent};
-use crate::ecs::systems::RenderingSystem;
-use crate::render::{Renderer, material::MaterialId, mesh::Mesh};
+use crate::ecs::systems::RenderableCollector;
+use crate::render::{GraphicsEngine, material::MaterialId, mesh::Mesh};
 use nalgebra::Vector3;
 use std::time::{Duration, Instant};
 
@@ -80,8 +80,8 @@ pub struct SceneManager {
     /// ECS world containing all entities and components
     world: World,
     
-    /// Rendering system for batch submission
-    rendering_system: RenderingSystem,
+    /// Renderable collector for batch submission
+    renderable_collector: RenderableCollector,
     
     /// Scene configuration
     config: SceneConfig,
@@ -109,7 +109,7 @@ impl SceneManager {
     pub fn with_config(config: SceneConfig) -> Self {
         Self {
             world: World::new(),
-            rendering_system: RenderingSystem::new(),
+            renderable_collector: RenderableCollector::new(),
             config,
             stats: SceneStats::default(),
             last_frame_time: Instant::now(),
@@ -166,7 +166,7 @@ impl SceneManager {
     }
     
     /// Update the scene for one frame
-    pub fn update(&mut self, delta_time: f32, renderer: &mut Renderer) {
+    pub fn update(&mut self, delta_time: f32, graphics_engine: &mut GraphicsEngine) {
         let _frame_start = Instant::now(); // Prefix with underscore to avoid unused warning
         
         // Update ECS systems
@@ -177,7 +177,7 @@ impl SceneManager {
         
         // Render the scene
         let render_start = Instant::now();
-        self.rendering_system.update(&self.world, renderer);
+        self.renderable_collector.update(&self.world, graphics_engine);
         let render_time = render_start.elapsed();
         
         // Update performance statistics
@@ -290,7 +290,7 @@ impl SceneManager {
     
     /// Get rendering system statistics
     pub fn rendering_stats(&self) -> &crate::render::batch_renderer::BatchStats {
-        self.rendering_system.get_stats()
+        self.renderable_collector.get_stats()
     }
 }
 

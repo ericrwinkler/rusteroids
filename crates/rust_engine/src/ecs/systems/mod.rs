@@ -2,8 +2,8 @@
 
 pub mod lighting;
 pub mod coordinate_validation_simple;
-pub mod rendering_system;
+pub mod renderable_collector;
 
 pub use lighting::LightingSystem;
 pub use coordinate_validation_simple::CoordinateSystemValidator;
-pub use rendering_system::RenderingSystem;
+pub use renderable_collector::RenderableCollector;

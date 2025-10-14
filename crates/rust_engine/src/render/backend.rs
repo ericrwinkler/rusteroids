@@ -65,6 +65,48 @@ pub trait RenderBackend {
     
     /// End recording and submit all commands
     fn end_render_pass_and_submit(&mut self) -> BackendResult<()>;
+    
+    /// Initialize dynamic object rendering system
+    ///
+    /// Sets up the instanced rendering infrastructure for efficient batch rendering
+    /// of dynamic objects. This must be called before using any dynamic rendering features.
+    ///
+    /// # Arguments
+    /// * `max_objects` - Maximum number of dynamic objects that can be rendered simultaneously
+    ///
+    /// # Returns
+    /// Result indicating successful initialization
+    fn initialize_dynamic_rendering(&mut self, max_objects: usize) -> BackendResult<()>;
+    
+    /// Initialize instanced rendering system for efficient batch rendering
+    ///
+    /// Sets up the instance renderer for efficient batch rendering of multiple objects
+    /// with the same mesh using instanced rendering. This provides significant
+    /// performance improvements over individual draw calls.
+    ///
+    /// # Arguments
+    /// * `max_instances` - Maximum number of instances that can be rendered in a single batch
+    ///
+    /// # Returns
+    /// Result indicating successful initialization
+    fn initialize_instance_renderer(&mut self, max_instances: usize) -> BackendResult<()>;
+    
+    /// Record dynamic object draws using instanced rendering
+    ///
+    /// Records all active dynamic objects into the command buffer using efficient
+    /// instanced rendering (vkCmdDrawInstanced). This significantly reduces command
+    /// buffer overhead compared to individual draw calls.
+    ///
+    /// # Arguments
+    /// * `dynamic_objects` - HashMap of active dynamic objects to render
+    /// * `shared_resources` - Shared rendering resources (mesh, textures, materials)
+    ///
+    /// # Returns
+    /// Result indicating successful command recording
+    fn record_dynamic_draws(&mut self, 
+                           dynamic_objects: &std::collections::HashMap<crate::render::dynamic::DynamicObjectHandle, crate::render::dynamic::DynamicRenderData>,
+                           shared_resources: &crate::render::SharedRenderingResources) 
+                           -> BackendResult<()>;
 }
 
 /// Window backend access trait

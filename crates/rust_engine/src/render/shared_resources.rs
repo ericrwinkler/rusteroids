@@ -16,7 +16,10 @@ pub struct SharedRenderingResources {
     /// Shared index buffer for indexed drawing
     pub index_buffer: Buffer,
     
-    /// Graphics pipeline for rendering
+    /// Graphics pipeline object (keeps the VkPipeline alive)
+    pub graphics_pipeline: Option<crate::render::vulkan::shader::GraphicsPipeline>,
+    
+    /// Graphics pipeline handle for rendering
     pub pipeline: vk::Pipeline,
     
     /// Pipeline layout for binding descriptor sets
@@ -47,10 +50,43 @@ impl SharedRenderingResources {
         index_count: u32,
         vertex_count: u32,
     ) -> Self {
+        // Debug log the pipeline handle being stored
+        log::info!("SharedRenderingResources storing pipeline: {:?}", pipeline);
+        
         Self {
             vertex_buffer,
             index_buffer,
+            graphics_pipeline: None, // For legacy paths that don't provide GraphicsPipeline object
             pipeline,
+            pipeline_layout,
+            material_descriptor_set_layout,
+            frame_descriptor_set_layout,
+            index_count,
+            vertex_count,
+        }
+    }
+    
+    /// Create new shared rendering resources with a GraphicsPipeline object to keep it alive
+    pub fn new_with_graphics_pipeline(
+        vertex_buffer: Buffer,
+        index_buffer: Buffer,
+        graphics_pipeline: crate::render::vulkan::shader::GraphicsPipeline,
+        pipeline_layout: vk::PipelineLayout,
+        material_descriptor_set_layout: vk::DescriptorSetLayout,
+        frame_descriptor_set_layout: vk::DescriptorSetLayout,
+        index_count: u32,
+        vertex_count: u32,
+    ) -> Self {
+        let pipeline_handle = graphics_pipeline.handle();
+        
+        // Debug log the pipeline handle being stored
+        log::debug!("SharedRenderingResources storing pipeline object with handle: {:?}", pipeline_handle);
+        
+        Self {
+            vertex_buffer,
+            index_buffer,
+            graphics_pipeline: Some(graphics_pipeline),
+            pipeline: pipeline_handle,
             pipeline_layout,
             material_descriptor_set_layout,
             frame_descriptor_set_layout,

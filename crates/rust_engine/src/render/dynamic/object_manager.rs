@@ -46,12 +46,16 @@ pub const DEFAULT_MAX_DYNAMIC_OBJECTS: usize = 100;
 pub enum DynamicObjectError {
     /// Object pool has no available slots
     PoolExhausted {
+        /// Number of objects requested
         requested: usize,
+        /// Number of objects available in pool
         available: usize,
     },
     /// Handle is invalid (wrong generation or index)
     InvalidHandle {
+        /// The invalid handle that was provided
         handle: DynamicObjectHandle,
+        /// Detailed reason why the handle is invalid
         reason: String,
     },
     /// Vulkan operation failed
@@ -153,7 +157,9 @@ pub enum ResourceState {
 pub struct DynamicRenderData {
     /// Transform information
     pub position: Vec3,
+    /// Rotation angles in radians (Euler angles)
     pub rotation: Vec3,
+    /// Scale factors for each axis
     pub scale: Vec3,
     
     /// Material for rendering
@@ -161,10 +167,12 @@ pub struct DynamicRenderData {
     
     /// Lifecycle information
     pub spawn_time: Instant,
+    /// Time in seconds this object should remain alive
     pub lifetime: f32,
     
     /// Pool management
     pub generation: u32,
+    /// Current allocation and rendering state
     pub state: ResourceState,
 }
 
@@ -365,7 +373,7 @@ impl DynamicObjectManager {
     }
     
     /// Initialize GPU resources
-    pub fn initialize_resources(&mut self, context: &VulkanContext) -> VulkanResult<()> {
+    pub fn initialize_resources(&mut self, _context: &VulkanContext) -> VulkanResult<()> {
         log::debug!("Initializing DynamicObjectManager GPU resources");
         
         // For now, we'll initialize with empty buffers

@@ -195,14 +195,8 @@ impl PipelineManager {
             .logic_op_enable(false)
             .attachments(&color_blend_attachments);
             
-        // Pipeline layout with push constants
-        let push_constant_range = vk::PushConstantRange {
-            stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-            offset: 0,
-            size: 128, // Model matrix (64) + normal matrix (48) + material color (16) = 128 bytes
-        };
-        
-        let push_constant_ranges = [push_constant_range];
+        // Pipeline layout without push constants (using instanced vertex attributes)
+        let push_constant_ranges: &[vk::PushConstantRange] = &[];
         let layout_info = vk::PipelineLayoutCreateInfo::builder()
             .set_layouts(descriptor_set_layouts)
             .push_constant_ranges(&push_constant_ranges);
@@ -239,14 +233,13 @@ impl PipelineManager {
         Ok(GraphicsPipeline::from_raw(device, pipeline, layout))
     }
 
-    /// Create vertex input info for all pipelines
+    /// Create vertex input info for all pipelines (unified instanced rendering)
     fn create_vertex_input_info() -> vk::PipelineVertexInputStateCreateInfo {
-        let (binding_desc, attr_desc) = VulkanVertexLayout::get_input_state();
-        let binding_descriptions = [binding_desc];
+        let (binding_descriptions, attr_descriptions) = VulkanVertexLayout::get_instanced_input_state();
         
         vk::PipelineVertexInputStateCreateInfo::builder()
             .vertex_binding_descriptions(&binding_descriptions)
-            .vertex_attribute_descriptions(&attr_desc)
+            .vertex_attribute_descriptions(&attr_descriptions)
             .build()
     }
 

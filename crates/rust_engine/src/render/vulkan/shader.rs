@@ -325,7 +325,7 @@ impl GraphicsPipeline {
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
             .cull_mode(vk::CullModeFlags::BACK)  // Enable back-face culling
-            .front_face(vk::FrontFace::CLOCKWISE)  // OBJ files converted to clockwise winding
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)  // OBJ files use CCW winding (Johannes Unterguggenberger standard)
             .depth_bias_enable(false);
             
         // Multisampling

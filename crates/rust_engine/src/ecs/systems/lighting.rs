@@ -118,7 +118,7 @@ impl LightingSystem {
                                 light_comp.color.z,
                                 light_comp.intensity,
                             ],
-                            attenuation: [1.0, 0.09, 0.032, 0.0], // Standard attenuation
+                            attenuation: [1.0, 0.22, 0.20, 0.0], // Balanced attenuation for longer-range vibrant lights
                         };
                         point_count += 1;
                     }

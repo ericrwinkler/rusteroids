@@ -9,8 +9,11 @@ use crate::render::vulkan::*;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct PushConstants {
+    /// Model transformation matrix (4×4 column-major)
     pub model_matrix: [[f32; 4]; 4],    // 64 bytes - model transformation
+    /// Normal transformation matrix (3×4 padded to 4×4 for alignment)
     pub normal_matrix: [[f32; 4]; 3],   // 48 bytes - normal transformation (3×4 padded)
+    /// Base material color with alpha channel
     pub material_color: [f32; 4],       // 16 bytes - material base color
 }
 
@@ -249,10 +252,11 @@ impl CommandRecorder {
         context: &VulkanContext,
         render_pass: &RenderPass,
         swapchain_manager: &super::SwapchainManager,
-        resource_manager: &super::ResourceManager,
-        pipeline_manager: &crate::render::PipelineManager,
+        _resource_manager: &super::ResourceManager,
+        _pipeline_manager: &crate::render::PipelineManager,
         image_index: u32,
         frame_index: usize,
+        clear_color: [f32; 4],
     ) -> VulkanResult<()> {
         // Free previous command buffer for this frame
         if let Some(prev_command_buffer) = self.pending_command_buffers[frame_index].take() {
@@ -282,7 +286,7 @@ impl CommandRecorder {
         let clear_values = [
             vk::ClearValue {
                 color: vk::ClearColorValue {
-                    float32: [0.2, 0.3, 0.8, 1.0], // Nice blue background
+                    float32: clear_color, // Use clear color from config
                 },
             },
             vk::ClearValue {
@@ -487,7 +491,6 @@ pub struct MultipleObjectSession<'a> {
     resource_manager: &'a super::ResourceManager,
     pipeline_manager: &'a crate::render::PipelineManager,
     frame_index: usize,
-    pending_command_buffers: &'a mut Vec<Option<vk::CommandBuffer>>,
 }
 
 impl<'a> MultipleObjectSession<'a> {

@@ -401,7 +401,7 @@ impl DefaultDynamicSpawner {
     ///
     /// # Arguments
     /// * `callback` - Function to call for each active object
-    pub fn for_each_active_object<F>(&self, mut callback: F) 
+    pub fn for_each_active_object<F>(&self, callback: F) 
     where 
         F: FnMut(DynamicObjectHandle, &crate::render::dynamic::DynamicRenderData),
     {

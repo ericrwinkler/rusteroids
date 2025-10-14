@@ -19,6 +19,8 @@ pub struct VulkanRendererConfig {
     pub max_frames_in_flight: usize,
     /// Whether to enable Vulkan validation layers
     pub enable_validation: Option<bool>,
+    /// Background clear color [R, G, B, A] (0.0-1.0 range)
+    pub clear_color: [f32; 4],
 }
 
 impl VulkanRendererConfig {
@@ -30,6 +32,7 @@ impl VulkanRendererConfig {
             shaders: ShaderConfig::default(),
             max_frames_in_flight: 2,
             enable_validation: None, // Auto-detect based on debug build
+            clear_color: [0.005, 0.005, 0.005, 1.0], // Dark gray background
         }
     }
     
@@ -54,6 +57,12 @@ impl VulkanRendererConfig {
     /// Set maximum frames in flight
     pub fn with_max_frames_in_flight(mut self, max_frames: usize) -> Self {
         self.max_frames_in_flight = max_frames.max(1).min(8); // Clamp to reasonable range
+        self
+    }
+    
+    /// Set background clear color [R, G, B, A] (0.0-1.0 range)
+    pub fn with_clear_color(mut self, color: [f32; 4]) -> Self {
+        self.clear_color = color;
         self
     }
     

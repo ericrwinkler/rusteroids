@@ -122,15 +122,15 @@ impl UboManager {
         
         // Create per-frame lighting UBO buffers
         let lighting_ubo_data = MultiLightingUBO {
-            ambient_color: [0.2, 0.2, 0.2, 1.0],
+            ambient_color: [0.2, 0.2, 0.2, 0.2], // Match old ambient intensity (0.2, not 1.0)
             directional_light_count: 1,
             point_light_count: 0,
             spot_light_count: 0,
             _padding: 0,
             directional_lights: [
                 DirectionalLightData {
-                    direction: [-0.5, -1.0, -0.3, 0.8],
-                    color: [1.0, 0.95, 0.9, 1.0],
+                    direction: [-0.5, -1.0, -0.3, 1.0], // Normalize intensity to 1.0 for consistency
+                    color: [0.8, 0.76, 0.72, 1.0], // Tone down the bright warm color
                 },
                 DirectionalLightData {
                     direction: [0.0; 4],
@@ -461,7 +461,7 @@ impl UboManager {
     /// This will be deprecated once all callers use update_multi_light_environment
     pub fn update_lighting(&mut self, direction: [f32; 3], intensity: f32, color: [f32; 3], ambient_intensity: f32) {
         let lighting_ubo_data = MultiLightingUBO {
-            ambient_color: [ambient_intensity * 0.2, ambient_intensity * 0.2, ambient_intensity * 0.2, 1.0],
+            ambient_color: [ambient_intensity * 0.2, ambient_intensity * 0.2, ambient_intensity * 0.2, ambient_intensity], // Use ambient_intensity as alpha
             directional_light_count: 1,
             point_light_count: 0,
             spot_light_count: 0,
@@ -469,7 +469,7 @@ impl UboManager {
             directional_lights: [
                 DirectionalLightData {
                     direction: [direction[0], direction[1], direction[2], intensity],
-                    color: [color[0], color[1], color[2], 1.0],
+                    color: [color[0] * intensity, color[1] * intensity, color[2] * intensity, 1.0], // Pre-apply intensity to color
                 },
                 DirectionalLightData {
                     direction: [0.0; 4],

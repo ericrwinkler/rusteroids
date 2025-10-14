@@ -15,12 +15,16 @@ use std::ptr;
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy)]
 pub struct ObjectUBO {
+    /// Model transformation matrix (4×4 column-major)
     pub model_matrix: [[f32; 4]; 4],
+    /// Normal transformation matrix for lighting calculations (3×3)
     pub normal_matrix: [[f32; 3]; 3],  // For lighting calculations
+    /// Padding to ensure proper 16-byte alignment
     pub _padding: [f32; 3],            // Ensure proper alignment
 }
 
 impl ObjectUBO {
+    /// Create a new ObjectUBO from a model matrix
     pub fn new(model_matrix: Mat4) -> Self {
         let normal_matrix = Self::calculate_normal_matrix(&model_matrix);
         Self {
@@ -48,18 +52,25 @@ impl ObjectUBO {
 /// GameObject represents a single renderable object with its own transform and material
 pub struct GameObject {
     // Transform properties
+    /// Position in world space
     pub position: Vec3,
+    /// Rotation as Euler angles in radians
     pub rotation: Vec3,  // Euler angles in radians
+    /// Scale factors for each axis
     pub scale: Vec3,
 
     // Per-object GPU resources (one per frame-in-flight)
+    /// Uniform buffers for object data (one per frame-in-flight)
     pub uniform_buffers: Vec<Buffer>,
+    /// Mapped memory pointers for uniform buffers
     pub uniform_mapped: Vec<*mut u8>,
 
     // Per-object descriptor sets (one per frame-in-flight)
+    /// Vulkan descriptor sets for binding resources (one per frame-in-flight)
     pub descriptor_sets: Vec<vk::DescriptorSet>,
 
     // Material for this object
+    /// Material properties and textures for rendering
     pub material: Material,
 }
 

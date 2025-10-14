@@ -431,7 +431,7 @@ impl GraphicsEngine {
     
     /// Create SharedRenderingResources for efficient multi-object rendering
     /// This handles the complex Vulkan resource creation for shared geometry
-    pub fn create_shared_rendering_resources(&self, mesh: &Mesh, materials: &[Material]) -> Result<shared_resources::SharedRenderingResources, Box<dyn std::error::Error>> {
+    pub fn create_shared_rendering_resources(&self, mesh: &Mesh, _materials: &[Material]) -> Result<shared_resources::SharedRenderingResources, Box<dyn std::error::Error>> {
         // Access VulkanContext through backend downcasting
         if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
             use ash::vk;
@@ -499,10 +499,8 @@ impl GraphicsEngine {
         if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
             use ash::vk;
             
-            log::info!("Creating InstancRenderingResources with {} vertices and {} indices", 
-                      mesh.vertices.len(), mesh.indices.len());
-            
-            // Get required components from VulkanRenderer
+            log::info!("Creating InstancedRenderingResources with {} vertices and {} indices", 
+                mesh.vertices.len(), mesh.indices.len());            // Get required components from VulkanRenderer
             let context = vulkan_backend.get_context();
             let frame_descriptor_set_layout = vulkan_backend.get_frame_descriptor_set_layout();
             let material_descriptor_set_layout = vulkan_backend.get_object_descriptor_set_layout();
@@ -534,13 +532,16 @@ impl GraphicsEngine {
             index_buffer.write_data(&mesh.indices)?;
             
             // Create INSTANCED pipeline (different from regular)
-            let (pipeline, pipeline_layout) = self.create_instanced_pipeline(context, frame_descriptor_set_layout, material_descriptor_set_layout)?;
+            let (graphics_pipeline, pipeline_layout) = self.create_instanced_pipeline(context, frame_descriptor_set_layout, material_descriptor_set_layout)?;
+            
+            // Debug log the pipeline handle
+            log::info!("Created instanced pipeline: {:?}", graphics_pipeline.handle());
             
             // Build SharedRenderingResources with instanced pipeline
-            let shared_resources = shared_resources::SharedRenderingResources::new(
+            let shared_resources = shared_resources::SharedRenderingResources::new_with_graphics_pipeline(
                 vertex_buffer,
                 index_buffer,
-                pipeline,
+                graphics_pipeline,
                 pipeline_layout,
                 material_descriptor_set_layout,
                 frame_descriptor_set_layout,
@@ -548,7 +549,7 @@ impl GraphicsEngine {
                 mesh.vertices.len() as u32,
             );
             
-            log::info!("InstancRenderingResources created successfully");
+            log::info!("InstancedRenderingResources created successfully");
             Ok(shared_resources)
         } else {
             Err("Renderer is not using Vulkan backend".into())
@@ -556,7 +557,7 @@ impl GraphicsEngine {
     }
     
     /// Create instanced pipeline for dynamic object rendering
-    fn create_instanced_pipeline(&self, context: &crate::render::vulkan::VulkanContext, frame_layout: ash::vk::DescriptorSetLayout, material_layout: ash::vk::DescriptorSetLayout) -> Result<(ash::vk::Pipeline, ash::vk::PipelineLayout), Box<dyn std::error::Error>> {
+    fn create_instanced_pipeline(&self, context: &crate::render::vulkan::VulkanContext, frame_layout: ash::vk::DescriptorSetLayout, material_layout: ash::vk::DescriptorSetLayout) -> Result<(crate::render::vulkan::shader::GraphicsPipeline, ash::vk::PipelineLayout), Box<dyn std::error::Error>> {
         use crate::render::vulkan::{VulkanVertexLayout, shader::ShaderModule};
         use ash::vk;
         
@@ -578,28 +579,14 @@ impl GraphicsEngine {
             .vertex_attribute_descriptions(&attribute_descriptions)
             .build();
         
-        // Create pipeline layout with descriptor sets and push constants
+        // Create descriptor set layout array for pipeline creation
         let descriptor_set_layouts = [frame_layout, material_layout];
-        let push_constant_range = vk::PushConstantRange {
-            stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-            offset: 0,
-            size: 128, // Same as regular pipeline: model matrix + normal matrix + material color
-        };
-        
-        let push_constant_ranges = [push_constant_range];
-        let layout_info = vk::PipelineLayoutCreateInfo::builder()
-            .set_layouts(&descriptor_set_layouts)
-            .push_constant_ranges(&push_constant_ranges);
-            
-        let pipeline_layout = unsafe {
-            context.raw_device().create_pipeline_layout(&layout_info, None)?
-        };
         
         // Get render pass from VulkanRenderer (need to access it through backend)
         if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
             let render_pass = vulkan_backend.get_render_pass();
             
-            // Create instanced graphics pipeline
+            // Create instanced graphics pipeline (it will create its own pipeline layout internally)
             let pipeline = crate::render::vulkan::shader::GraphicsPipeline::new_with_descriptor_layouts(
                 context.raw_device(),
                 render_pass,
@@ -609,7 +596,16 @@ impl GraphicsEngine {
                 &descriptor_set_layouts,
             )?;
             
-            Ok((pipeline.handle(), pipeline_layout))
+            let pipeline_handle = pipeline.handle();
+            
+            if pipeline_handle == vk::Pipeline::null() {
+                return Err("Pipeline creation failed - returned null handle".into());
+            }
+            
+            // Get the pipeline layout that was actually used to create the pipeline
+            let pipeline_layout = pipeline.layout();
+            
+            Ok((pipeline, pipeline_layout))
         } else {
             Err("Backend is not Vulkan".into())
         }
@@ -766,6 +762,44 @@ impl GraphicsEngine {
         
         spawner.despawn_dynamic_object(handle)?;
         log::debug!("Despawned dynamic object with handle generation {}", handle.generation);
+        Ok(())
+    }
+
+    /// Update the transform of a dynamic object
+    ///
+    /// Updates the position, rotation, and scale of an existing dynamic object.
+    /// This allows objects to move, rotate, and scale during their lifetime.
+    ///
+    /// # Arguments
+    /// * `handle` - Handle to the dynamic object to update
+    /// * `position` - New world position
+    /// * `rotation` - New rotation in radians (Euler angles)
+    /// * `scale` - New scale factors
+    ///
+    /// # Errors
+    /// Returns `SpawnerError` if:
+    /// - Dynamic system not initialized
+    /// - Handle is invalid or object has been despawned
+    /// - Transform update fails
+    pub fn update_dynamic_object_transform(
+        &mut self,
+        handle: DynamicObjectHandle,
+        position: Vec3,
+        rotation: Vec3,
+        scale: Vec3,
+    ) -> Result<(), SpawnerError> {
+        let spawner = self.dynamic_spawner.as_mut()
+            .ok_or(SpawnerError::InvalidParameters {
+                reason: "Dynamic system not initialized".to_string()
+            })?;
+
+        spawner.object_manager_mut()
+            .update_object_transform(handle, position, rotation, scale)
+            .map_err(|e| SpawnerError::InvalidParameters {
+                reason: format!("Failed to update object transform: {}", e)
+            })?;
+
+        log::trace!("Updated dynamic object transform: handle={}, pos={:?}", handle.generation, position);
         Ok(())
     }
 

@@ -25,15 +25,15 @@
 //! // Upload instance data
 //! renderer.upload_instance_data(&active_objects)?;
 //! 
-//! // Record draw calls
-//! renderer.record_instanced_draw(&shared_resources)?;
+//! // Record draw calls  
+//! renderer.record_instanced_draw(&shared_resources, context, frame_descriptor_set, material_descriptor_set)?;
 //! 
 //! // End frame
 //! renderer.end_frame()?;
 //! ```
 
 use crate::render::vulkan::{VulkanContext, VulkanResult, VulkanError, buffer::Buffer};
-use crate::render::vulkan::renderer::command_recorder::PushConstants;
+// Note: PushConstants no longer used - true instancing uses vertex attributes
 use crate::render::SharedRenderingResources;
 use crate::render::dynamic::object_manager::{DynamicRenderData, DynamicObjectHandle};
 use crate::foundation::math::Mat4;
@@ -406,6 +406,7 @@ impl InstanceRenderer {
         shared_resources: &SharedRenderingResources,
         context: &VulkanContext,
         frame_descriptor_set: vk::DescriptorSet,
+        material_descriptor_set: vk::DescriptorSet,
     ) -> VulkanResult<()> {
         let command_buffer = self.active_command_buffer
             .ok_or_else(|| VulkanError::InvalidOperation {
@@ -447,6 +448,14 @@ impl InstanceRenderer {
         
         unsafe {
             log::trace!("Binding graphics pipeline...");
+            
+            // Check if pipeline is null and return error instead of crashing
+            if shared_resources.pipeline == vk::Pipeline::null() {
+                return Err(VulkanError::InvalidOperation {
+                    reason: "Pipeline handle is null - SharedRenderingResources was created with invalid pipeline".to_string()
+                });
+            }
+            
             // CRITICAL: Bind graphics pipeline before any draw commands
             device.cmd_bind_pipeline(
                 command_buffer,
@@ -472,14 +481,14 @@ impl InstanceRenderer {
                 vk::IndexType::UINT32,
             );
             
-            // Bind descriptor sets for frame data (camera, lighting)
+            // Bind both descriptor sets in a single call (set 0: frame data, set 1: material data)
             log::trace!("Binding descriptor sets...");
             device.cmd_bind_descriptor_sets(
                 command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
                 shared_resources.pipeline_layout,
-                0, // Set 0: frame data (camera + lighting)
-                &[frame_descriptor_set],
+                0, // Starting from set 0
+                &[frame_descriptor_set, material_descriptor_set], // Both sets in order
                 &[],
             );
             
@@ -504,49 +513,41 @@ impl InstanceRenderer {
                 .build();
             device.cmd_set_scissor(command_buffer, 0, &[scissor]);
             
-            // Record individual draw calls for each object
+            // TRUE VULKAN INSTANCING: Instance data already uploaded in upload_batches_to_gpu()
             let mut total_objects = 0;
-            log::trace!("Recording individual draw calls for {} batches", self.batches.len());
             
+            log::trace!("Recording true instanced draws for {} batches", self.batches.len());
+            
+            // Bind both vertex buffer and instance buffer with frame offset
+            let instance_size = std::mem::size_of::<InstanceData>();
+            let frame_offset = (self.current_frame * self.max_instances * instance_size) as vk::DeviceSize;
+            let vertex_buffers = [shared_resources.vertex_buffer.handle(), self.instance_buffer.handle()];
+            let offsets = [0, frame_offset]; // Use frame offset for instance buffer to prevent race conditions
+            device.cmd_bind_vertex_buffers(command_buffer, 0, &vertex_buffers, &offsets);
+            
+            // Record one instanced draw call per batch
+            let mut current_instance_offset = 0u32;
             for (batch_idx, batch) in self.batches.iter().enumerate() {
-                log::trace!("Processing batch {} with {} instances", batch_idx, batch.instance_count());
-                
-                // Draw each instance individually with its own push constants
-                for (instance_idx, instance) in batch.instances.iter().enumerate() {
-                    log::trace!("Drawing object {}/{} in batch {}", instance_idx + 1, batch.instances.len(), batch_idx);
-                    
-                    // Set push constants for this specific object
-                    let push_constants = PushConstants {
-                        model_matrix: instance.model_matrix,
-                        normal_matrix: [
-                            [instance.normal_matrix[0][0], instance.normal_matrix[0][1], instance.normal_matrix[0][2], 0.0],
-                            [instance.normal_matrix[1][0], instance.normal_matrix[1][1], instance.normal_matrix[1][2], 0.0],
-                            [instance.normal_matrix[2][0], instance.normal_matrix[2][1], instance.normal_matrix[2][2], 0.0],
-                        ],
-                        material_color: instance.material_color,
-                    };
-                    
-                    device.cmd_push_constants(
-                        command_buffer,
-                        shared_resources.pipeline_layout,
-                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                        0,
-                        bytemuck::cast_slice(&[push_constants]),
-                    );
-                    
-                    // Draw this individual object
-                    device.cmd_draw_indexed(
-                        command_buffer,
-                        shared_resources.index_count,
-                        1,  // instance count = 1 (individual draw call)
-                        0,  // first index
-                        0,  // vertex offset
-                        0,  // first instance
-                    );
-                    
-                    self.stats.draw_calls += 1;
-                    total_objects += 1;
+                let instance_count = batch.instance_count();
+                if instance_count == 0 {
+                    continue;
                 }
+                
+                log::trace!("Recording instanced draw for batch {} with {} instances", batch_idx, instance_count);
+                
+                // One draw call for all instances in this batch
+                device.cmd_draw_indexed(
+                    command_buffer,
+                    shared_resources.index_count,
+                    instance_count,           // TRUE INSTANCING: All instances in one call
+                    0,                        // first index
+                    0,                        // vertex offset  
+                    current_instance_offset,  // first instance offset in buffer
+                );
+                
+                self.stats.draw_calls += 1;
+                total_objects += instance_count;
+                current_instance_offset += instance_count;
             }
             
             log::trace!("Completed {} individual draw calls for {} objects total", self.stats.draw_calls, total_objects);
@@ -565,6 +566,9 @@ impl InstanceRenderer {
                    self.stats.instances_rendered,
                    self.stats.draw_calls,
                    self.stats.batches_processed);
+        
+        // Update frame counter for next frame (assuming max 2 frames in flight)
+        self.current_frame = (self.current_frame + 1) % 2;
         
         Ok(())
     }

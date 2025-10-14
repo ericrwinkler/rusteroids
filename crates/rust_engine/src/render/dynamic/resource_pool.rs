@@ -142,11 +142,6 @@ impl BufferPoolEntry {
         self.buffer.handle()
     }
     
-    /// Get the buffer size
-    fn size(&self) -> u64 {
-        self.buffer.size()
-    }
-    
     /// Write data to the buffer
     unsafe fn write_data(&mut self, data: &[u8], offset: usize) -> VulkanResult<()> {
         if offset + data.len() > self.buffer.size() as usize {
@@ -182,8 +177,6 @@ struct MaterialInstancePoolEntry {
     base_material: Material,
     /// Runtime material properties override
     material_properties: MaterialProperties,
-    /// Associated descriptor set offset
-    descriptor_set_offset: u32,
     /// Current generation counter
     generation: u32,
     /// Whether this entry is currently allocated
@@ -225,8 +218,6 @@ pub struct BufferPool {
     free_lists: Vec<VecDeque<u32>>,
     /// Pool size per frame
     pool_size: usize,
-    /// Size of each uniform buffer
-    buffer_size: u64,
 }
 
 impl BufferPool {
@@ -258,7 +249,6 @@ impl BufferPool {
             entries,
             free_lists,
             pool_size,
-            buffer_size,
         })
     }
     
@@ -468,7 +458,6 @@ impl MaterialInstancePool {
                     alpha: 1.0,
                 }),
                 material_properties: MaterialProperties::default(),
-                descriptor_set_offset: 0,
                 generation: 0,
                 allocated: false,
             });
@@ -584,7 +573,9 @@ pub struct PoolStats {
     pub material_instances_allocated: usize,
     /// Peak usage counts
     pub peak_buffers: usize,
+    /// Maximum number of descriptor sets allocated simultaneously
     pub peak_descriptor_sets: usize,
+    /// Maximum number of material instances allocated simultaneously
     pub peak_material_instances: usize,
 }
 

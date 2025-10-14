@@ -42,6 +42,9 @@ pub struct VulkanRenderer {
     current_frame: usize,
     max_frames_in_flight: usize,
     
+    // Rendering configuration
+    clear_color: [f32; 4],
+    
     // State for multiple object command recording
     command_recording_state: Option<CommandRecordingState>,
     
@@ -69,8 +72,8 @@ impl VulkanRenderer {
             context.swapchain().format().format,
         )?;
         
-        // Create pipeline manager
-        let mut pipeline_manager = crate::render::PipelineManager::new();
+        // LEGACY: Create pipeline manager (disabled for unified instanced rendering)
+        let pipeline_manager = crate::render::PipelineManager::new();
         
         // Create specialized managers
         let mut resource_manager = ResourceManager::new(&context, config.max_frames_in_flight)?;
@@ -82,12 +85,12 @@ impl VulkanRenderer {
         // Initialize command recorder
         command_recorder.initialize(config.max_frames_in_flight);
         
-        // Initialize pipelines with UBO layouts FIRST
-        pipeline_manager.initialize_standard_pipelines(
-            &context,
-            render_pass.handle(),
-            &[ubo_manager.frame_descriptor_set_layout(), ubo_manager.material_descriptor_set_layout()],
-        )?;
+        // LEGACY PIPELINE SYSTEM DISABLED - Using unified instanced rendering only
+        // pipeline_manager.initialize_standard_pipelines(
+        //     &context,
+        //     render_pass.handle(),
+        //     &[ubo_manager.frame_descriptor_set_layout(), ubo_manager.material_descriptor_set_layout()],
+        // )?;
         
         // Then initialize UBO descriptor sets
         ubo_manager.initialize_descriptor_sets(&context, &mut resource_manager)?;
@@ -104,6 +107,7 @@ impl VulkanRenderer {
             swapchain_manager,
             current_frame: 0,
             max_frames_in_flight: config.max_frames_in_flight,
+            clear_color: config.clear_color,
             command_recording_state: None,
             instance_renderer: None, // Will be initialized when dynamic system is enabled
         })
@@ -146,14 +150,8 @@ impl VulkanRenderer {
         // CRITICAL: Update UBO manager's current frame before recording commands
         self.ubo_manager.set_current_frame(self.current_frame);
         
-        // Record commands
-        let command_buffer = self.command_recorder.record_frame(
-            &self.context,
-            &self.render_pass,
-            &self.swapchain_manager,
-            &self.resource_manager,
-            &self.ubo_manager,
-            &self.pipeline_manager,
+        // Record basic command buffer with render pass for instanced rendering
+        let command_buffer = self.record_minimal_command_buffer(
             image_index,
             self.current_frame,
         )?;
@@ -233,23 +231,10 @@ impl crate::render::RenderBackend for VulkanRenderer {
         self.ubo_manager.update_camera(view_matrix, projection_matrix, view_projection_matrix, camera_position);
     }
     
-    fn bind_shared_resources(&mut self, shared: &crate::render::SharedRenderingResources) -> crate::render::BackendResult<()> {
-        log::trace!("Binding shared resources in Vulkan backend");
-        
-        // Check if we have an active recording
-        if self.command_recording_state.is_none() {
-            return Err(crate::render::RenderError::BackendError(
-                "No active command recording. Call begin_render_pass() first.".to_string()
-            ));
-        }
-        
-        // Get the frame descriptor set for the current frame
-        let frame_descriptor_set = self.resource_manager.frame_descriptor_sets()[self.current_frame];
-        
-        // Bind shared resources using the command recorder, including context for viewport/scissor setup
-        self.command_recorder.bind_shared_resources(shared, &self.context, frame_descriptor_set)
-            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
-        
+    fn bind_shared_resources(&mut self, _shared: &crate::render::SharedRenderingResources) -> crate::render::BackendResult<()> {
+        // LEGACY SYSTEM DISABLED: Instance renderer handles all resource binding internally
+        // No-op method - the instance renderer manages its own pipelines and resources
+        log::trace!("Legacy bind_shared_resources disabled - using instanced rendering");
         Ok(())
     }
     
@@ -337,6 +322,7 @@ impl crate::render::RenderBackend for VulkanRenderer {
             &self.pipeline_manager,
             image_index,
             self.current_frame,
+            self.clear_color,
         ).map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
         
         // Get the actual command buffer from the command recorder
@@ -512,6 +498,41 @@ impl VulkanRenderer {
         self.render_pass.handle()
     }
     
+    /// Record a minimal command buffer for instanced rendering only
+    ///
+    /// Creates an empty command buffer that does nothing but clear the screen.
+    /// The instance renderer handles all actual rendering internally.
+    ///
+    /// # Arguments
+    /// * `image_index` - Swapchain image index
+    /// * `frame_index` - Current frame index
+    ///
+    /// # Returns
+    /// Empty command buffer ready for submission
+    fn record_minimal_command_buffer(
+        &mut self,
+        image_index: u32,
+        frame_index: usize,
+    ) -> VulkanResult<vk::CommandBuffer> {
+        // Create minimal command buffer using legacy recorder but without binding any pipelines
+        self.command_recorder.free_command_buffer(frame_index);
+        
+        self.command_recorder.begin_multiple_object_recording(
+            &self.context,
+            &self.render_pass,
+            &self.swapchain_manager,
+            &self.resource_manager,
+            &self.pipeline_manager,
+            image_index,
+            frame_index,
+            self.clear_color,
+        )?;
+
+        // Finish immediately - this just creates a command buffer with render pass but no draws
+        let command_buffer = self.command_recorder.finish_multiple_object_recording()?;
+        Ok(command_buffer)
+    }
+    
     /// Initialize instanced rendering system for dynamic objects
     ///
     /// Creates and initializes the InstanceRenderer for efficient batch rendering
@@ -562,8 +583,11 @@ impl VulkanRenderer {
             // Get frame descriptor set for this frame
             let frame_descriptor_set = self.resource_manager.frame_descriptor_sets()[self.current_frame];
             
+            // Get material descriptor set (use first one as default for all objects)
+            let material_descriptor_set = self.resource_manager.material_descriptor_sets()[0];
+            
             // Record instanced draw commands
-            instance_renderer.record_instanced_draw(shared_resources, &self.context, frame_descriptor_set)?;
+            instance_renderer.record_instanced_draw(shared_resources, &self.context, frame_descriptor_set, material_descriptor_set)?;
             
             log::trace!("Recorded dynamic draws for {} objects", dynamic_objects.len());
             Ok(())

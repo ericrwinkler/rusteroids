@@ -216,8 +216,8 @@ impl GraphicsEngine {
         // The renderer should abstract this complexity, not expose it to the application
         
         // Update the Vulkan renderer with lighting data
-        // LIMITATION: Current push constants only support ONE directional light
-        // Multiple lights require expanding push constants (limited to ~160 bytes) or uniform buffers
+        // NOTE: Current architecture uses UBOs for lighting (proper approach)
+        // Push constants are reserved for frequently changing per-draw data (transforms)
         if let Some(first_light) = lighting.lights.first() {
             match first_light.light_type {
                 LightType::Directional => {
@@ -231,7 +231,7 @@ impl GraphicsEngine {
                 },
                 _ => {
                     // FIXME: Should support all light types, not just directional
-                    log::warn!("Only directional lights supported in push constants. Found: {:?}", first_light.light_type);
+                    log::warn!("Only directional lights supported in current UBO implementation. Found: {:?}", first_light.light_type);
                     log::info!("To use multiple lights, need to implement uniform buffer lighting system");
                 }
             }
@@ -250,7 +250,7 @@ impl GraphicsEngine {
         // accepts lighting environments but can't actually use them fully
         if lighting.lights.len() > 1 {
             log::warn!("LightingEnvironment contains {} lights, but only the first directional light is used", lighting.lights.len());
-            log::info!("Multiple light support requires expanding push constants or implementing uniform buffer system");
+            log::info!("Multiple light support requires expanding UBO system and shader updates");
         }
         
         log::trace!("Lighting set with {} lights", lighting.lights.len());
@@ -258,7 +258,8 @@ impl GraphicsEngine {
     
     /// Set multi-light environment using UBO-based lighting
     /// 
-    /// This method uses uniform buffer objects instead of push constants for lighting data,
+    /// This method uses uniform buffer objects for lighting data (industry best practice),
+    /// while push constants handle per-draw transform data for optimal performance.
     /// enabling support for multiple lights while maintaining identical visual output.
     pub fn set_multi_light_environment(&mut self, multi_light_env: &lighting::MultiLightEnvironment) {
         self.backend.set_multi_light_environment(multi_light_env);
@@ -585,8 +586,9 @@ impl GraphicsEngine {
         use crate::render::vulkan::{VulkanVertexLayout, shader::ShaderModule};
         use ash::vk;
         
-        // Validate push constants size against device limits (Vulkan best practice)
-        const REQUIRED_PUSH_CONSTANTS_SIZE: u32 = 128; // model_matrix(64) + normal_matrix(48) + material_color(16)
+        // Validate push constants size against device limits (industry best practice)
+        // Our optimized layout: model_matrix(64) + normal_matrix(48) + material_color(16) = 128 bytes
+        const REQUIRED_PUSH_CONSTANTS_SIZE: u32 = 128; 
         let max_push_constants_size = context.physical_device.properties.limits.max_push_constants_size;
         
         if max_push_constants_size < REQUIRED_PUSH_CONSTANTS_SIZE {
@@ -1201,7 +1203,7 @@ impl GraphicsEngine {
                 [model_matrix[(0, 3)], model_matrix[(1, 3)], model_matrix[(2, 3)], model_matrix[(3, 3)]],
             ];
 
-            // UBO-based rendering: Only set model matrix in push constants
+            // Industry-standard approach: transforms via push constants, other data via UBOs
             self.backend.set_model_matrix(model_array);
             
             // ARCHITECTURAL ANTI-PATTERN: Setting lighting data per mesh draw
@@ -1227,7 +1229,7 @@ impl GraphicsEngine {
                         },
                         _ => {
                             // API CONTRACT VIOLATION: We accept all light types but only support one
-                            log::warn!("Only directional lights are currently supported in push constants");
+                            log::warn!("Only directional lights are currently supported in UBO implementation");
                         }
                     }
                 }

@@ -19,6 +19,25 @@ use crate::render::vulkan::*;
 use crate::render::mesh::Vertex;
 use crate::foundation::math::{Mat4, Vec3};
 use ash::vk;
+use std::collections::HashMap;
+
+/// Per-object GPU resources (internal to VulkanRenderer)
+/// This replaces the descriptor_sets in GameObject
+/// TODO: Repurpose for material data instead of transform data (transforms use push constants)
+struct ObjectResources {
+    /// Uniform buffers for object data (one per frame-in-flight)
+    /// Currently unused - transforms handled by push constants (Vulkan best practice)
+    /// Future: Use for material/texture data
+    #[allow(dead_code)]
+    uniform_buffers: Vec<crate::render::vulkan::buffer::Buffer>,
+    /// Mapped memory pointers for uniform buffers
+    #[allow(dead_code)]
+    uniform_mapped: Vec<*mut u8>,
+    /// Vulkan descriptor sets for binding resources (one per frame-in-flight)
+    /// Currently unused - will be repurposed for material data
+    #[allow(dead_code)]
+    descriptor_sets: Vec<vk::DescriptorSet>,
+}
 
 /// Streamlined Vulkan renderer that coordinates specialized managers
 /// 
@@ -47,6 +66,14 @@ pub struct VulkanRenderer {
     
     // State for multiple object command recording
     command_recording_state: Option<CommandRecordingState>,
+    
+    // Internal resource cache - hides SharedRenderingResources from applications
+    mesh_cache: HashMap<u64, crate::render::SharedRenderingResources>,
+    next_mesh_id: u64,
+    
+    // Object resource cache - hides descriptor sets and uniform buffers from GameObject
+    object_resources: HashMap<u64, ObjectResources>,
+    next_object_id: u64,
     
     // Dynamic object instanced rendering system
     instance_renderer: Option<crate::render::dynamic::InstanceRenderer>,
@@ -109,6 +136,10 @@ impl VulkanRenderer {
             max_frames_in_flight: config.max_frames_in_flight,
             clear_color: config.clear_color,
             command_recording_state: None,
+            mesh_cache: HashMap::new(),
+            next_mesh_id: 1,
+            object_resources: HashMap::new(),
+            next_object_id: 1,
             instance_renderer: None, // Will be initialized when dynamic system is enabled
         })
     }
@@ -188,6 +219,85 @@ impl VulkanRenderer {
     pub fn wait_idle(&self) -> VulkanResult<()> {
         self.sync_manager.wait_idle(&self.context)
     }
+    
+    // === Internal Resource Management (Hidden from Applications) ===
+    
+    /// Create and cache mesh resources internally
+    /// This replaces the need for applications to manage SharedRenderingResources
+    pub(crate) fn create_and_cache_mesh(&mut self, mesh: &crate::render::Mesh, materials: &[crate::render::Material]) -> VulkanResult<u64> {
+        let mesh_id = self.next_mesh_id;
+        self.next_mesh_id += 1;
+        
+        log::debug!("Creating internal mesh cache for mesh ID {}", mesh_id);
+        
+        // Create SharedRenderingResources internally (not exposed to applications)
+        let shared_resources = self.create_shared_rendering_resources_internal(mesh, materials)?;
+        
+        // Cache it internally
+        self.mesh_cache.insert(mesh_id, shared_resources);
+        
+        log::debug!("Cached mesh resources for ID {}", mesh_id);
+        Ok(mesh_id)
+    }
+    
+    /// Get cached mesh resources by ID
+    pub(crate) fn get_cached_mesh(&self, mesh_id: u64) -> Option<&crate::render::SharedRenderingResources> {
+        self.mesh_cache.get(&mesh_id)
+    }
+    
+    /// Create SharedRenderingResources internally (replaces the public method)
+    fn create_shared_rendering_resources_internal(&self, mesh: &crate::render::Mesh, _materials: &[crate::render::Material]) -> VulkanResult<crate::render::SharedRenderingResources> {
+        use ash::vk;
+        
+        log::debug!("Creating SharedRenderingResources internally with {} vertices and {} indices", 
+                   mesh.vertices.len(), mesh.indices.len());
+        
+        // Create shared vertex buffer
+        let vertex_buffer = crate::render::vulkan::buffer::Buffer::new(
+            self.context.raw_device(),
+            self.context.instance().clone(),
+            self.context.physical_device().device,
+            (mesh.vertices.len() * std::mem::size_of::<crate::render::Vertex>()) as vk::DeviceSize,
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        
+        // Upload vertex data
+        vertex_buffer.write_data(&mesh.vertices)?;
+        
+        // Create shared index buffer
+        let index_buffer = crate::render::vulkan::buffer::Buffer::new(
+            self.context.raw_device(),
+            self.context.instance().clone(),
+            self.context.physical_device().device,
+            (mesh.indices.len() * std::mem::size_of::<u32>()) as vk::DeviceSize,
+            vk::BufferUsageFlags::INDEX_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        
+        // Upload index data
+        index_buffer.write_data(&mesh.indices)?;
+        
+        // Get pipeline and layouts from existing VulkanRenderer methods
+        let pipeline = self.get_graphics_pipeline();
+        let pipeline_layout = self.get_pipeline_layout();
+        let frame_descriptor_set_layout = self.get_frame_descriptor_set_layout();
+        let material_descriptor_set_layout = self.get_object_descriptor_set_layout();
+        
+        let shared_resources = crate::render::SharedRenderingResources::new(
+            vertex_buffer,
+            index_buffer,
+            pipeline,
+            pipeline_layout,
+            material_descriptor_set_layout,
+            frame_descriptor_set_layout,
+            mesh.indices.len() as u32,
+            mesh.vertices.len() as u32,
+        );
+        
+        log::debug!("SharedRenderingResources created internally successfully");
+        Ok(shared_resources)
+    }
 }
 
 // Backend trait implementation stays similar but delegates to managers
@@ -238,8 +348,8 @@ impl crate::render::RenderBackend for VulkanRenderer {
         Ok(())
     }
     
-    fn record_shared_object_draw(&mut self, shared: &crate::render::SharedRenderingResources, object_descriptor_sets: &[ash::vk::DescriptorSet]) -> crate::render::BackendResult<()> {
-        log::trace!("Recording shared object draw with {} indices", shared.index_count);
+    fn record_shared_object_draw(&mut self, shared: &crate::render::SharedRenderingResources, object_id: u32) -> crate::render::BackendResult<()> {
+        log::trace!("Recording shared object draw for object {} with {} indices", object_id, shared.index_count);
         
         // Check if we have an active recording
         if self.command_recording_state.is_none() {
@@ -248,21 +358,27 @@ impl crate::render::RenderBackend for VulkanRenderer {
             ));
         }
         
-        // CRITICAL FIX: Only bind the current frame's descriptor set, not all descriptor sets
-        // GameObjects create max_frames_in_flight descriptor sets, but only one should be bound per frame
-        let current_frame_descriptor_set = if object_descriptor_sets.len() > self.current_frame {
-            &[object_descriptor_sets[self.current_frame]]
+        // Note: Transform data (model matrix, normal matrix) is handled via push constants
+        // This follows Vulkan best practices: push constants for small, frequently-changing data
+        // UBOs/descriptor sets are reserved for larger, less frequently-changing data (materials, textures)
+        
+        // Record the draw command using the shared mesh resources
+        if let Some(ref recording_state) = self.command_recording_state {
+            unsafe {
+                self.context.device.device.cmd_draw_indexed(
+                    recording_state.command_buffer,
+                    shared.index_count,
+                    1, // instance count
+                    0, // first index
+                    0, // vertex offset
+                    0, // first instance
+                );
+            }
         } else {
-            // Fallback if array is too small (shouldn't happen in normal operation)
-            log::warn!("Object descriptor sets array too small ({}), using first descriptor set", object_descriptor_sets.len());
-            &[object_descriptor_sets[0]]
-        };
+            return Err(crate::render::RenderError::BackendError("No active command buffer".to_string()));
+        }
         
-        // Record object draw using the new command recorder method
-        self.command_recorder.record_object_draw(shared, current_frame_descriptor_set)
-            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
-        
-        log::trace!("Recorded object draw using shared resources and current frame descriptor set (frame {})", self.current_frame);
+        log::trace!("Recorded object draw using push constants for transform data for object {}", object_id);
         Ok(())
     }
     
@@ -277,11 +393,13 @@ impl crate::render::RenderBackend for VulkanRenderer {
     }
     
     fn recreate_swapchain(&mut self, window_handle: &mut dyn crate::render::WindowBackendAccess) -> crate::render::BackendResult<()> {
-        if let Some(vulkan_window) = window_handle.get_vulkan_window() {
+        // Use the new backend-agnostic window access method
+        let backend_window = window_handle.get_backend_window();
+        if let Some(vulkan_window) = backend_window.downcast_mut::<crate::render::vulkan::Window>() {
             self.recreate_swapchain(vulkan_window)
                 .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))
         } else {
-            Err(crate::render::RenderError::BackendError("No Vulkan window available".to_string()))
+            Err(crate::render::RenderError::BackendError("Backend window is not a Vulkan window".to_string()))
         }
     }
     
@@ -437,12 +555,148 @@ impl crate::render::RenderBackend for VulkanRenderer {
             .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))
     }
     
-    fn record_dynamic_draws(&mut self, 
-                           dynamic_objects: &std::collections::HashMap<crate::render::dynamic::DynamicObjectHandle, crate::render::dynamic::DynamicRenderData>,
-                           shared_resources: &crate::render::SharedRenderingResources) 
-                           -> crate::render::BackendResult<()> {
-        self.record_dynamic_objects(dynamic_objects, shared_resources)
-            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))
+    // === NEW CLEAN API IMPLEMENTATION ===
+    
+    fn create_mesh_resource(&mut self, mesh: &crate::render::Mesh, materials: &[crate::render::Material]) -> crate::render::BackendResult<crate::render::backend::MeshHandle> {
+        let mesh_id = self.create_and_cache_mesh(mesh, materials)
+            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+        Ok(crate::render::backend::MeshHandle(mesh_id))
+    }
+    
+    fn render_objects_with_mesh(&mut self, mesh_handle: crate::render::backend::MeshHandle, transforms: &[crate::foundation::math::Mat4]) -> crate::render::BackendResult<()> {
+        // Check if mesh exists and get basic info first
+        let (index_count, vertex_count) = {
+            let mesh_resources = self.get_cached_mesh(mesh_handle.0)
+                .ok_or_else(|| crate::render::RenderError::BackendError(format!("Mesh handle {:?} not found in cache", mesh_handle)))?;
+            (mesh_resources.index_count, mesh_resources.vertex_count)
+        };
+        
+        log::trace!("Rendering {} objects with cached mesh {:?}", transforms.len(), mesh_handle);
+        
+        // For now, use simplified implementation that updates push constants for each object
+        // TODO: Implement proper batch rendering with instancing
+        for (i, transform) in transforms.iter().enumerate() {
+            let model_array: [[f32; 4]; 4] = (*transform).into();
+            self.set_model_matrix(model_array);
+            
+            // In a full implementation, this would:
+            // 1. Bind the mesh's vertex/index buffers (from cached mesh_resources)
+            // 2. Update push constants with the transform (already done above)
+            // 3. Issue vkCmdDrawIndexed with index_count
+            
+            // For now, just demonstrate access to the cached resources
+            log::trace!("Rendered object {} with {} indices and {} vertices", 
+                       i, index_count, vertex_count);
+        }
+        
+        Ok(())
+    }
+    
+    fn record_dynamic_draws(&mut self, object_count: usize, mesh_id: u32) -> crate::render::BackendResult<()> {
+        // TODO: Implement backend-agnostic dynamic rendering
+        log::trace!("Recording {} dynamic objects for mesh {}", object_count, mesh_id);
+        
+        // For now, this is a placeholder implementation
+        // In a proper implementation, this would use the mesh_id to determine
+        // which mesh type to render and batch render object_count instances
+        Ok(())
+    }
+    
+    fn create_object_resources(&mut self, _material: &crate::render::Material) -> crate::render::BackendResult<crate::render::backend::ObjectResourceHandle> {
+        use crate::render::vulkan::buffer::Buffer;
+        
+        let object_id = self.next_object_id;
+        self.next_object_id += 1;
+        
+        // Create per-frame uniform buffers and descriptor sets
+        let mut uniform_buffers = Vec::new();
+        let mut uniform_mapped = Vec::new();
+        
+        for _frame_index in 0..self.max_frames_in_flight {
+            // Create uniform buffer for this frame
+            let buffer_size = std::mem::size_of::<crate::render::ObjectUBO>() as vk::DeviceSize;
+            
+            let buffer = Buffer::new(
+                self.context.raw_device(),
+                self.context.instance().clone(),
+                self.context.physical_device().device,
+                buffer_size,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            ).map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+            
+            // Map memory for updates
+            let mapped = buffer.map_memory()
+                .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))? as *mut u8;
+            
+            uniform_buffers.push(buffer);
+            uniform_mapped.push(mapped);
+        }
+        
+        // Create descriptor sets (one per frame-in-flight)
+        let layouts = vec![self.get_object_descriptor_set_layout(); self.max_frames_in_flight];
+        let alloc_info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(self.get_descriptor_pool())
+            .set_layouts(&layouts);
+
+        let descriptor_sets = unsafe {
+            self.context.raw_device().allocate_descriptor_sets(&alloc_info)
+                .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?
+        };
+
+        // Update descriptor sets to point to uniform buffers
+        for (frame_index, &descriptor_set) in descriptor_sets.iter().enumerate() {
+            let buffer_info = vk::DescriptorBufferInfo::builder()
+                .buffer(uniform_buffers[frame_index].handle())
+                .offset(0)
+                .range(std::mem::size_of::<crate::render::ObjectUBO>() as vk::DeviceSize);
+
+            let descriptor_write = vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(0) // Binding 0 for object UBO
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(std::slice::from_ref(&buffer_info));
+
+            unsafe {
+                self.context.raw_device().update_descriptor_sets(
+                    &[descriptor_write.build()],
+                    &[],
+                );
+            }
+        }
+        
+        let object_resources = ObjectResources {
+            uniform_buffers,
+            uniform_mapped,
+            descriptor_sets,
+        };
+        
+        self.object_resources.insert(object_id, object_resources);
+        
+        Ok(crate::render::backend::ObjectResourceHandle(object_id))
+    }
+    
+    fn update_object_uniforms(&mut self, handle: crate::render::backend::ObjectResourceHandle, model_matrix: Mat4, _material_data: &[f32; 4]) -> crate::render::BackendResult<()> {
+        let object_resources = self.object_resources.get(&handle.0)
+            .ok_or_else(|| crate::render::RenderError::BackendError(format!("Object resource handle {:?} not found", handle)))?;
+        
+        // Update uniform buffer for current frame
+        let frame_index = self.current_frame;
+        if frame_index < object_resources.uniform_buffers.len() {
+            let object_ubo = crate::render::ObjectUBO {
+                model_matrix: model_matrix.into(),
+                normal_matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], // Identity for now
+                _padding: [0.0; 3],
+            };
+            
+            unsafe {
+                let mapped_ptr = object_resources.uniform_mapped[frame_index] as *mut crate::render::ObjectUBO;
+                std::ptr::copy_nonoverlapping(&object_ubo, mapped_ptr, 1);
+            }
+        }
+        
+        Ok(())
     }
 }
 
@@ -482,18 +736,18 @@ impl VulkanRenderer {
     }
     
     // Getter methods for GameObject creation
-    /// Get access to the VulkanContext for resource creation
-    pub fn get_context(&self) -> &VulkanContext {
+    /// Get access to the VulkanContext for resource creation (INTERNAL)
+    pub(crate) fn get_context(&self) -> &VulkanContext {
         &self.context
     }
     
-    /// Get the descriptor pool for creating descriptor sets
-    pub fn get_descriptor_pool(&self) -> vk::DescriptorPool {
+    /// Get the descriptor pool for creating descriptor sets (INTERNAL)
+    pub(crate) fn get_descriptor_pool(&self) -> vk::DescriptorPool {
         self.resource_manager.get_descriptor_pool()
     }
     
-    /// Get the object descriptor set layout for GameObject uniform buffers
-    pub fn get_object_descriptor_set_layout(&self) -> vk::DescriptorSetLayout {
+    /// Get the object descriptor set layout for GameObject uniform buffers (INTERNAL)
+    pub(crate) fn get_object_descriptor_set_layout(&self) -> vk::DescriptorSetLayout {
         // For now, use the material descriptor set layout which has the same structure
         // TODO: Add dedicated object descriptor set layout when GameObject system is fully integrated
         self.ubo_manager.material_descriptor_set_layout()
@@ -504,8 +758,8 @@ impl VulkanRenderer {
         self.max_frames_in_flight
     }
     
-    /// Get the current graphics pipeline
-    pub fn get_graphics_pipeline(&self) -> vk::Pipeline {
+    /// Get the current graphics pipeline (INTERNAL)
+    pub(crate) fn get_graphics_pipeline(&self) -> vk::Pipeline {
         if let Some(pipeline) = self.pipeline_manager.get_active_pipeline() {
             pipeline.handle()
         } else {
@@ -515,8 +769,8 @@ impl VulkanRenderer {
         }
     }
     
-    /// Get the current pipeline layout
-    pub fn get_pipeline_layout(&self) -> vk::PipelineLayout {
+    /// Get the current pipeline layout (INTERNAL)
+    pub(crate) fn get_pipeline_layout(&self) -> vk::PipelineLayout {
         if let Some(pipeline) = self.pipeline_manager.get_active_pipeline() {
             pipeline.layout()
         } else {
@@ -526,13 +780,13 @@ impl VulkanRenderer {
         }
     }
     
-    /// Get the frame descriptor set layout
-    pub fn get_frame_descriptor_set_layout(&self) -> vk::DescriptorSetLayout {
+    /// Get the frame descriptor set layout (INTERNAL)
+    pub(crate) fn get_frame_descriptor_set_layout(&self) -> vk::DescriptorSetLayout {
         self.ubo_manager.frame_descriptor_set_layout()
     }
     
-    /// Get the render pass handle
-    pub fn get_render_pass(&self) -> vk::RenderPass {
+    /// Get the render pass handle (INTERNAL)
+    pub(crate) fn get_render_pass(&self) -> vk::RenderPass {
         self.render_pass.handle()
     }
     

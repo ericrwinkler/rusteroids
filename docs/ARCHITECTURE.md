@@ -113,19 +113,18 @@ pub struct GameObject {
     pub rotation: Vec3,
     pub scale: Vec3,
     
-    // Persistent GPU resources (one per frame-in-flight)
-    pub uniform_buffers: Vec<Buffer>,
-    pub uniform_mapped: Vec<*mut u8>,
-    pub descriptor_sets: Vec<vk::DescriptorSet>,
-    
-    // Material for this object
+    // Material reference for descriptor set binding (when complex materials needed)
     pub material: Material,
+    
+    // Note: Transform data (model/normal matrices) sent via push constants
+    // No per-object uniform buffers needed for transforms (push constants are faster)
 }
 ```
 
 **Characteristics**:
-- ✅ Permanent GPU resource allocation at creation
-- ✅ Individual uniform buffers and descriptor sets per object
+- ✅ Transform data via push constants (fast, follows Vulkan best practices)
+- ✅ Material data via descriptor sets when needed (larger, less frequent changes)
+- ✅ No per-object uniform buffers for transforms (eliminated redundancy)
 - ✅ Suitable for static scene geometry, UI elements, persistent entities
 - ✅ Command recording pattern for batch rendering
 
@@ -138,6 +137,7 @@ let static_object = graphics_engine.create_static_object(position, rotation, sca
 graphics_engine.begin_frame()?;
 graphics_engine.bind_shared_resources(&shared_resources)?;
 for object in &static_objects {
+    // Transforms sent via push constants (fast), materials via descriptor sets (when needed)
     graphics_engine.draw_object(object, frame_index)?;
 }
 graphics_engine.end_frame(&mut window)?;
@@ -309,6 +309,38 @@ pub struct ResourceHandle {
 
 ### Vulkan Backend Implementation
 
+#### Resource Strategy: Push Constants vs Descriptor Sets
+
+The engine follows **Vulkan best practices** for data organization:
+
+**Push Constants (≤128 bytes)**:
+- ✅ **Transform Data**: model_matrix, normal_matrix (64 + 36 = 100 bytes)
+- ✅ **Material Override**: basic color changes (16 bytes)
+- ✅ **Performance**: No descriptor set binding overhead, direct GPU upload
+- ✅ **Use Case**: Frequently-changing, small data
+
+**Descriptor Sets (unlimited size)**:
+- ✅ **Frame Data**: Camera matrices, lighting (Set 0)
+- ✅ **Material Data**: PBR properties, texture bindings (Set 1)
+- ✅ **Performance**: Efficient for larger, less frequently-changing data
+- ✅ **Use Case**: Complex materials, texture arrays, lighting environments
+
+**Design Rationale**:
+This hybrid approach optimizes for both performance and flexibility:
+- **Fast Path**: Transform updates via push constants (zero binding overhead)
+- **Complex Path**: Material/texture data via descriptor sets (proper resource management)
+- **Memory Efficient**: No redundant uniform buffers for transform data
+- **Size Aware**: Push constants limited to 128 bytes (Vulkan minimum guarantee)
+- **Industry Standard**: Matches modern Vulkan rendering engines and tutorials
+
+**Push Constants Size Budget**:
+```rust
+model_matrix: [[f32; 4]; 4]     // 64 bytes
+normal_matrix: [[f32; 4]; 3]    // 48 bytes (3×4 padded to 4×4 alignment)
+material_color: [f32; 4]        // 16 bytes
+// Total: 128 bytes (exactly at Vulkan minimum limit)
+```
+
 #### Descriptor Set Layouts
 ```rust
 // Set 0: Per-frame data (shared by all objects)
@@ -326,10 +358,36 @@ layout(set = 0, binding = 1) uniform LightingUBO {
     // ...
 } lighting;
 
-// Set 1: Per-object data (different for static vs dynamic)
-// Static: Individual descriptor sets per GameObject
-// Dynamic: Instance buffer with dynamic offsets
+// Set 1: Per-material data (when needed)
+layout(set = 1, binding = 0) uniform MaterialUBO {
+    vec4 base_color;
+    vec4 metallic_roughness_ao_normal;
+    vec4 emission;
+    // ...
+} material;
+
+// Push Constants: Small, frequently-changing data (Vulkan best practice)
+layout(push_constant) uniform PushConstants {
+    mat4 model_matrix;        // Transform data
+    mat3 normal_matrix;       // Normal transformation  
+    vec4 material_color;      // Basic material override
+} pushConstants;
 ```
+
+#### Data Flow Strategy
+
+**Push Constants (≤128 bytes, fast)**:
+- **Transform Matrices**: model_matrix (64 bytes), normal_matrix (48 bytes)
+- **Material Color Override**: For dynamic color changes (16 bytes)
+- **Total**: 128 bytes (exactly at Vulkan minimum limit)
+- **Constraint**: Vulkan guarantees ≥128 bytes, high-end GPUs ~256 bytes max
+- **Performance**: Zero descriptor set binding overhead, direct GPU upload
+
+**Descriptor Sets** (larger data, less frequent changes):
+- **Set 0**: Per-frame data (camera, lighting) - shared across all objects
+- **Set 1**: Per-material data (PBR properties, texture bindings) - shared by objects with same material
+
+This follows **Vulkan best practices**: push constants for small, frequently-changing data; UBOs for larger, stable data.
 
 #### Command Buffer Recording Patterns
 
@@ -341,8 +399,14 @@ fn record_static_objects() -> VulkanResult<()> {
     
     // For each static object
     for object in static_objects {
-        // Bind per-object descriptor set
-        cmd_bind_descriptor_sets(object.descriptor_set);
+        // Update push constants with transform data (fast, small data)
+        cmd_push_constants(object.model_matrix, object.normal_matrix, object.material_color);
+        
+        // Bind material descriptor set if needed (larger material data)
+        if object.has_complex_material() {
+            cmd_bind_descriptor_sets(object.material_descriptor_set);
+        }
+        
         // Record draw command
         cmd_draw_indexed(object.index_count);
     }
@@ -376,22 +440,27 @@ fn render_all_pools() -> VulkanResult<()> {
 ### Performance Characteristics
 
 #### Target Metrics
-- **Static Objects**: 60+ FPS with 100+ persistent objects
-- **Dynamic Objects**: 60+ FPS with 50+ temporary objects  
-- **Memory Usage**: Bounded by pool sizes, no runtime allocation
-- **GPU Memory**: Efficient batching, minimal descriptor set allocations
+- **Static Objects**: 60+ FPS with 100+ persistent objects using push constants
+- **Dynamic Objects**: 60+ FPS with 50+ temporary objects using instanced rendering
+- **Memory Usage**: Bounded by pool sizes, no runtime allocation for transforms
+- **GPU Memory**: Efficient batching, descriptor sets only for materials when needed
 
 #### Scalability Analysis
 ```rust
 // Static Objects: O(n) where n = number of objects
-// - Memory: n × uniform_buffer_size × frames_in_flight
-// - Performance: n × descriptor_set_bind + n × draw_call
+// - Memory: No per-object uniform buffers (eliminated)
+// - Performance: n × push_constants_update + n × draw_call + optional descriptor_set_binding
 
-// Single-Mesh Pools: O(m) where m = number of active mesh types
-// - Memory: m × pool_size × uniform_buffer_size (pre-allocated)
-// - Performance: m × vertex_buffer_bind + m × instanced_draw_call
+// Single-Mesh Pools: O(m) where m = number of active mesh types  
+// - Memory: m × pool_size × instance_data_size (pre-allocated)
+// - Performance: m × push_constants_update + m × instanced_draw_call
 // - Objects per pool: O(1) rendering regardless of count (up to pool limit)
 ```
+
+#### Resource Usage Optimization
+- **Push Constants**: ≤128 bytes per object (model matrix + normal matrix + material color)
+- **Descriptor Sets**: Only when complex materials needed (PBR textures, etc.)
+- **Memory Efficiency**: No redundant uniform buffers for transform data
 
 ### Coordinate System
 

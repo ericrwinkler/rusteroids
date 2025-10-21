@@ -22,8 +22,7 @@
 //!     position: Vec3::new(0.0, 5.0, 0.0),
 //!     rotation: Vec3::zeros(),
 //!     scale: Vec3::new(1.0, 1.0, 1.0),
-//!     material: MaterialProperties::default(),
-//!     lifetime: 5.0, // 5 seconds
+//!     material: MaterialProperties::default()
 //! })?;
 //! 
 //! // Object automatically despawns after lifetime expires

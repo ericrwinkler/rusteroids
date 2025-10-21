@@ -23,40 +23,57 @@
 //! - **Backend Coupling**: Some application-specific logic leaks through the abstraction
 //! - **Push Constant Limitations**: Complex rendering features constrained by 160-byte limit
 
-pub mod mesh;
-pub mod material;
-pub mod pipeline;
-pub mod lighting;
-pub mod coordinates;
-pub mod dynamic;
+// Public modules for application use
 pub mod config;
 pub mod window;
-pub mod vulkan;
 pub mod backend;
+
+// Modules needed by other engine components (ECS, etc.)
+pub mod mesh;
+pub mod material;
+pub mod lighting;
+pub mod coordinates;
+
+// Internal modules - prefer not to use directly in applications
+pub mod pipeline;
+pub mod dynamic;
+pub mod vulkan;
 pub mod render_queue;
 pub mod batch_renderer;
 pub mod game_object;
 pub mod shared_resources;
 
+// High-level APIs that applications should use
+pub use config::{VulkanRendererConfig, ShaderConfig};
+pub use window::WindowHandle;
+pub use backend::{RenderBackend, WindowBackendAccess, BackendResult, MeshHandle, MaterialHandle, ObjectResourceHandle};
+
+// Core rendering types that applications need
 pub use mesh::{Mesh, Vertex};
+pub use material::{Material, MaterialType, MaterialId, PipelineType, AlphaMode};
+pub use lighting::{Light, LightType, LightingEnvironment};
+pub use coordinates::{CoordinateSystem, CoordinateConverter};
+
+// DEPRECATED: These should be removed in favor of cleaner APIs
+// TODO: Remove these exports once applications migrate to new APIs
+// Current overlapping patterns that should be consolidated:
+// - MaterialManager + TextureManager: Should be unified into ResourceManager
+// - SharedRenderingResources: Should be internal to backend, not exposed
+// - BatchRenderer: Should be integrated into core renderer, not separate
 pub use material::{
-    Material, MaterialType, MaterialId, PipelineType, AlphaMode,
     StandardMaterialParams, UnlitMaterialParams,
     MaterialManager, TextureManager, MaterialTextures, TextureHandle, TextureType
 };
 pub use pipeline::{PipelineManager, PipelineConfig, CullMode};
-pub use lighting::{Light, LightType, LightingEnvironment};
-pub use coordinates::{CoordinateSystem, CoordinateConverter};
-pub use config::{VulkanRendererConfig, ShaderConfig};
-pub use backend::{RenderBackend, WindowBackendAccess, BackendResult};
-pub use window::WindowHandle;
 pub use render_queue::{RenderQueue, RenderCommand, CommandType, RenderCommandId};
 pub use game_object::{GameObject, ObjectUBO, cleanup_game_object};
+#[deprecated(since = "0.1.0", note = "SharedRenderingResources is now internal - use MeshHandle/MaterialHandle instead")]
 pub use shared_resources::{SharedRenderingResources, SharedRenderingResourcesBuilder};
 pub use batch_renderer::{BatchRenderer, RenderBatch, BatchError, BatchStats, BatchResult};
 
 use thiserror::Error;
-use crate::engine::{RendererConfig, WindowConfig}; // FIXME: Engine coupling - should be library-agnostic
+// REMOVED: Engine coupling for cleaner library abstraction
+// use crate::engine::{RendererConfig, WindowConfig}; 
 use crate::foundation::math::{Vec3, Mat4, Mat4Ext, utils};
 use crate::render::dynamic::{
     MeshPoolManager, MeshType, DynamicObjectHandle,
@@ -140,29 +157,6 @@ impl GraphicsEngine {
             frame_count: 0,
             pool_manager: None, // Will be initialized when first needed
         })
-    }
-    
-    /// Create a new renderer (legacy method for engine integration)
-    ///
-    /// FIXME: This method breaks library abstraction by coupling to engine-specific
-    /// RendererConfig and WindowConfig types. Should be removed once applications
-    /// migrate to the cleaner `new_from_window` approach.
-    ///
-    /// # Architectural Problems
-    /// - Depends on engine-specific configuration types
-    /// - Mixes window creation with renderer creation responsibilities
-    /// - Less flexible than window-handle approach
-    pub fn new(_config: &RendererConfig, window_config: &WindowConfig) -> Result<Self, RenderError> {
-        log::info!("Initializing Vulkan renderer: {}", window_config.title);
-        
-        // FIXME: Window creation should be application responsibility, not renderer
-        let mut window_handle = WindowHandle::new(
-            window_config.width,
-            window_config.height,
-            &window_config.title,
-        );
-
-        Ok(Self::new_from_window(&mut window_handle, &VulkanRendererConfig::default())?)
     }
     
     /// Begin a new frame
@@ -344,8 +338,33 @@ impl GraphicsEngine {
         Ok(())
     }
     
+    // === NEW CLEAN API - Use these methods instead ===
+    
+    /// Load a mesh and return an opaque handle for rendering
+    /// This replaces create_shared_rendering_resources with a cleaner abstraction
+    pub fn load_mesh(&mut self, mesh: &Mesh, materials: &[Material]) -> Result<backend::MeshHandle, Box<dyn std::error::Error>> {
+        let mesh_handle = self.backend.create_mesh_resource(mesh, materials)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        
+        log::info!("Loaded mesh with handle {:?}", mesh_handle);
+        Ok(mesh_handle)
+    }
+    
+    /// Render multiple objects with the same mesh using transforms
+    /// This replaces the complex bind_shared_geometry + record_object_draw pattern
+    pub fn render_objects(&mut self, mesh_handle: backend::MeshHandle, transforms: &[Mat4]) -> Result<(), Box<dyn std::error::Error>> {
+        self.backend.render_objects_with_mesh(mesh_handle, transforms)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        
+        log::trace!("Rendered {} objects with mesh handle {:?}", transforms.len(), mesh_handle);
+        Ok(())
+    }
+    
+    // === DEPRECATED API - Scheduled for removal ===
+    
     /// Bind shared resources for multiple objects (NEW API)
-    /// This eliminates the need to bind these resources for each object
+    /// DEPRECATED: Use load_mesh instead for cleaner abstraction
+    #[deprecated(note = "Use load_mesh for cleaner abstraction")]
     pub fn bind_shared_geometry(&mut self, shared: &SharedRenderingResources) -> Result<(), Box<dyn std::error::Error>> {
         // Bind the shared vertex and index buffers
         // Set the shared mesh data once for all objects
@@ -353,14 +372,16 @@ impl GraphicsEngine {
                    shared.vertex_count, shared.index_count);
         
         // Call the backend to bind shared resources
+        #[allow(deprecated)]
         self.backend.bind_shared_resources(shared)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         
         Ok(())
     }
     
-    /// Draw a single object using command recording (NEW API)
+    /// Draw a single object using command recording (DEPRECATED - use render_objects instead)
     /// Records draw command without immediate submission
+    #[deprecated(since = "0.1.0", note = "Use render_objects with MeshHandle for cleaner API")]
     pub fn record_object_draw(&mut self, object: &GameObject, shared_resources: &SharedRenderingResources) -> Result<(), Box<dyn std::error::Error>> {
         // Update per-object uniform data  
         let model_matrix = object.get_model_matrix();
@@ -372,11 +393,13 @@ impl GraphicsEngine {
         let material_color = object.material.get_base_color_array();
         self.backend.set_material_color(material_color);
         
-        // Get object's descriptor sets (these contain per-object uniform buffers)
-        let object_descriptor_sets = &object.descriptor_sets;
+        // TODO: Replace with proper object ID system 
+        // For now, use the object's memory address as a unique identifier
+        let object_id = object as *const _ as usize as u32;
         
-        // Record draw using shared resources and object-specific descriptor sets
-        self.backend.record_shared_object_draw(shared_resources, object_descriptor_sets)
+        // Record draw using shared resources and object ID
+        #[allow(deprecated)]
+        self.backend.record_shared_object_draw(shared_resources, object_id)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         
         Ok(())
@@ -395,39 +418,42 @@ impl GraphicsEngine {
         Ok(())
     }
     
-    /// Create a GameObject with proper GPU resource initialization
-    /// This handles the complex VulkanContext access and resource creation
-    pub fn create_game_object(&self, position: Vec3, rotation: Vec3, scale: Vec3, material: Material) -> Result<GameObject, Box<dyn std::error::Error>> {
-        let mut game_object = GameObject::new(position, rotation, scale, material);
+    /// Create a GameObject with proper GPU resource initialization (UPDATED CLEAN API)
+    /// This handles the backend resource creation using opaque handles
+    pub fn create_game_object(&mut self, position: Vec3, rotation: Vec3, scale: Vec3, material: Material) -> Result<GameObject, Box<dyn std::error::Error>> {
+        let mut game_object = GameObject::new(position, rotation, scale, material.clone());
         
-        // Access VulkanContext through backend downcasting
-        // IMPLEMENTATION NOTE: This temporarily breaks abstraction to access Vulkan resources
-        // TODO: Refactor to proper abstraction when GameObject system is fully integrated
-        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::renderer::VulkanRenderer>() {
-            // Access VulkanContext and descriptor resources through the backend
-            let context = vulkan_backend.get_context();
-            let descriptor_pool = vulkan_backend.get_descriptor_pool();
-            let descriptor_set_layout = vulkan_backend.get_object_descriptor_set_layout();
-            let max_frames_in_flight = vulkan_backend.get_max_frames_in_flight();
-            
-            // Initialize GPU resources for the GameObject
-            game_object.create_resources(
-                context,
-                &descriptor_pool,
-                &descriptor_set_layout,
-                max_frames_in_flight,
-            ).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-            
-            log::debug!("Created GameObject with GPU resources initialized");
-        } else {
-            return Err("Renderer is not using Vulkan backend".into());
-        }
+        // Use the new clean API to create object resources
+        let resource_handle = self.backend.create_object_resources(&material)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        
+        // Set the resource handle in the GameObject
+        game_object.set_resource_handle(resource_handle);
+        
+        log::debug!("Created GameObject with clean backend resource handle: {:?}", resource_handle);
         
         Ok(game_object)
     }
     
-    /// Create SharedRenderingResources for efficient multi-object rendering
+    /// Update GameObject uniforms using clean backend API
+    /// This updates the per-object uniform data (model matrix, material properties)
+    pub fn update_object_uniforms(&mut self, game_object: &GameObject) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(resource_handle) = game_object.get_resource_handle() {
+            let model_matrix = game_object.get_model_matrix();
+            let material_color = game_object.material.get_base_color_array();
+            
+            self.backend.update_object_uniforms(resource_handle, model_matrix, &material_color)
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        } else {
+            log::warn!("GameObject has no resource handle - cannot update uniforms");
+        }
+        
+        Ok(())
+    }
+    
+    /// Create SharedRenderingResources for efficient multi-object rendering (DEPRECATED)
     /// This handles the complex Vulkan resource creation for shared geometry
+    #[deprecated(since = "0.1.0", note = "Use load_mesh to get MeshHandle for cleaner API")]
     pub fn create_shared_rendering_resources(&self, mesh: &Mesh, _materials: &[Material]) -> Result<shared_resources::SharedRenderingResources, Box<dyn std::error::Error>> {
         // Access VulkanContext through backend downcasting
         if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
@@ -489,8 +515,9 @@ impl GraphicsEngine {
         }
     }
     
-    /// Create SharedRenderingResources for instanced dynamic object rendering
+    /// Create SharedRenderingResources for instanced dynamic object rendering (DEPRECATED)
     /// This creates resources with an instanced pipeline for efficient batch rendering
+    #[deprecated(since = "0.1.0", note = "Use load_mesh to get MeshHandle for cleaner API")]
     pub fn create_instanced_rendering_resources(&self, mesh: &Mesh, _materials: &[Material]) -> Result<shared_resources::SharedRenderingResources, Box<dyn std::error::Error>> {
         // Access VulkanContext through backend downcasting
         if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
@@ -557,6 +584,27 @@ impl GraphicsEngine {
     fn create_instanced_pipeline(&self, context: &crate::render::vulkan::VulkanContext, frame_layout: ash::vk::DescriptorSetLayout, material_layout: ash::vk::DescriptorSetLayout) -> Result<(crate::render::vulkan::shader::GraphicsPipeline, ash::vk::PipelineLayout), Box<dyn std::error::Error>> {
         use crate::render::vulkan::{VulkanVertexLayout, shader::ShaderModule};
         use ash::vk;
+        
+        // Validate push constants size against device limits (Vulkan best practice)
+        const REQUIRED_PUSH_CONSTANTS_SIZE: u32 = 128; // model_matrix(64) + normal_matrix(48) + material_color(16)
+        let max_push_constants_size = context.physical_device.properties.limits.max_push_constants_size;
+        
+        if max_push_constants_size < REQUIRED_PUSH_CONSTANTS_SIZE {
+            return Err(format!(
+                "Device push constants limit ({} bytes) is less than required ({} bytes). This violates Vulkan minimum spec!",
+                max_push_constants_size, REQUIRED_PUSH_CONSTANTS_SIZE
+            ).into());
+        } else if max_push_constants_size == REQUIRED_PUSH_CONSTANTS_SIZE {
+            log::warn!(
+                "Device push constants limit ({} bytes) exactly matches our usage ({} bytes). Consider reducing push constants size for better compatibility.",
+                max_push_constants_size, REQUIRED_PUSH_CONSTANTS_SIZE
+            );
+        } else {
+            log::info!(
+                "Push constants validation passed: device limit {} bytes, using {} bytes ({} bytes headroom)",
+                max_push_constants_size, REQUIRED_PUSH_CONSTANTS_SIZE, max_push_constants_size - REQUIRED_PUSH_CONSTANTS_SIZE
+            );
+        }
         
         // Load the same shaders (they'll adapt to instanced input via vertex attributes)
         let vertex_shader = ShaderModule::from_file(
@@ -696,6 +744,7 @@ impl GraphicsEngine {
         log::info!("Creating mesh pool for {:?} with capacity {}", mesh_type, max_objects);
         
         // Create SharedRenderingResources for this mesh using instanced rendering
+        #[allow(deprecated)]
         let shared_resources = self.create_instanced_rendering_resources(mesh, materials)?;
         
         // Create the pool in the MeshPoolManager

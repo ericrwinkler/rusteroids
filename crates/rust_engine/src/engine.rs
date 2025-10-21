@@ -23,6 +23,9 @@ pub struct Engine {
     /// Graphics engine
     pub graphics_engine: GraphicsEngine,
     
+    /// Window handle
+    pub window: crate::render::WindowHandle,
+    
     /// Input handling system
     pub input: InputManager,
     
@@ -46,8 +49,16 @@ impl Engine {
         let world = World::new();
         let assets = AssetManager::new(&config.assets)
             .map_err(|e| EngineError::InitializationFailed(format!("Asset manager: {}", e)))?;
-        let graphics_engine = GraphicsEngine::new(&config.renderer, &config.window)
+        
+        // Create window and graphics engine using the cleaner API
+        let mut window = crate::render::WindowHandle::new(
+            config.window.width,
+            config.window.height,
+            &config.window.title,
+        );
+        let graphics_engine = GraphicsEngine::new_from_window(&mut window, &crate::render::VulkanRendererConfig::default())
             .map_err(|e| EngineError::InitializationFailed(format!("Graphics engine: {}", e)))?;
+        
         let input = InputManager::new();
         let timer = Timer::new();
         
@@ -55,6 +66,7 @@ impl Engine {
             world,
             assets,
             graphics_engine,
+            window,
             input,
             timer,
             config,

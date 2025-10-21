@@ -353,10 +353,11 @@ impl GraphicsPipeline {
             .attachments(&color_blend_attachments);
             
         // Pipeline layout with push constants for model matrix + material color + lighting (UBO-based)
+        // Note: 128 bytes is the Vulkan minimum, device validation happens at pipeline creation time
         let push_constant_range = vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
             offset: 0,
-            size: 128, // sizeof(mat4) + sizeof(vec4) + sizeof(vec4) + sizeof(vec4) = 64 + 16 + 16 + 32 = 128 bytes (camera data moved to UBO)
+            size: 128, // sizeof(mat4) + sizeof(mat3_padded) + sizeof(vec4) = 64 + 48 + 16 = 128 bytes
         };
         
         let push_constant_ranges = [push_constant_range];

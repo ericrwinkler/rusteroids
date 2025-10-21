@@ -9,6 +9,18 @@ use crate::foundation::math::{Mat4, Vec3};
 /// Result type for backend operations
 pub type BackendResult<T> = Result<T, RenderError>;
 
+/// Handle to a mesh resource stored in the backend
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MeshHandle(pub u64);
+
+/// Handle to a material resource stored in the backend  
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MaterialHandle(pub u64);
+
+/// Handle to per-object GPU resources (descriptor sets, uniform buffers, etc.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ObjectResourceHandle(pub u64);
+
 /// Main rendering backend trait
 ///
 /// This trait abstracts over different rendering backends (currently Vulkan)
@@ -38,11 +50,34 @@ pub trait RenderBackend {
     /// Update camera UBO data (for UBO-based rendering)
     fn update_camera_ubo(&mut self, view_matrix: Mat4, projection_matrix: Mat4, view_projection_matrix: Mat4, camera_position: Vec3);
     
+    // === NEW CLEAN API - Use these methods ===
+    
+    /// Create a mesh resource and return an opaque handle
+    /// This replaces the need for applications to manage SharedRenderingResources
+    fn create_mesh_resource(&mut self, mesh: &crate::render::Mesh, materials: &[crate::render::Material]) -> BackendResult<MeshHandle>;
+    
+    /// Render objects using cached mesh resources
+    /// Applications only need to provide the mesh handle and transform data
+    fn render_objects_with_mesh(&mut self, mesh_handle: MeshHandle, transforms: &[Mat4]) -> BackendResult<()>;
+    
+    /// Create per-object GPU resources (descriptor sets, uniform buffers, etc.)
+    /// Returns an opaque handle for the object's GPU resources
+    fn create_object_resources(&mut self, material: &crate::render::Material) -> BackendResult<ObjectResourceHandle>;
+    
+    /// Update per-object uniform data using the object resource handle
+    fn update_object_uniforms(&mut self, handle: ObjectResourceHandle, model_matrix: Mat4, material_data: &[f32; 4]) -> BackendResult<()>;
+    
+    // === DEPRECATED API - These expose implementation details ===
+    
     /// Bind shared rendering resources for multiple object rendering
+    /// DEPRECATED: Use create_mesh_resource instead
+    #[deprecated(note = "Use create_mesh_resource for cleaner abstraction")]
     fn bind_shared_resources(&mut self, shared: &crate::render::SharedRenderingResources) -> BackendResult<()>;
     
-    /// Record draw call for an object using shared resources (new multiple object pattern)
-    fn record_shared_object_draw(&mut self, shared: &crate::render::SharedRenderingResources, object_descriptor_sets: &[ash::vk::DescriptorSet]) -> BackendResult<()>;
+    /// Record draw call for an object using shared resources
+    /// DEPRECATED: Use render_objects_with_mesh for cleaner abstraction
+    #[deprecated(note = "Use render_objects_with_mesh for cleaner abstraction")]
+    fn record_shared_object_draw(&mut self, shared: &crate::render::SharedRenderingResources, object_id: u32) -> BackendResult<()>;
     
     /// Draw a frame
     fn draw_frame(&mut self) -> BackendResult<()>;
@@ -95,29 +130,27 @@ pub trait RenderBackend {
     /// Result indicating successful initialization
     fn initialize_instance_renderer(&mut self, max_instances: usize) -> BackendResult<()>;
     
-    /// Record dynamic object draws using instanced rendering
+    /// Record dynamic object draws using backend-agnostic interface
     ///
     /// Records all active dynamic objects into the command buffer using efficient
-    /// instanced rendering (vkCmdDrawInstanced). This significantly reduces command
-    /// buffer overhead compared to individual draw calls.
+    /// rendering techniques appropriate for the backend. This abstracts away
+    /// backend-specific details like Vulkan instanced rendering.
     ///
     /// # Arguments
-    /// * `dynamic_objects` - HashMap of active dynamic objects to render
-    /// * `shared_resources` - Shared rendering resources (mesh, textures, materials)
+    /// * `object_count` - Number of dynamic objects to render
+    /// * `mesh_id` - Identifier for the mesh type to render
     ///
     /// # Returns
     /// Result indicating successful command recording
-    fn record_dynamic_draws(&mut self, 
-                           dynamic_objects: &std::collections::HashMap<crate::render::dynamic::DynamicObjectHandle, crate::render::dynamic::DynamicRenderData>,
-                           shared_resources: &crate::render::SharedRenderingResources) 
-                           -> BackendResult<()>;
+    fn record_dynamic_draws(&mut self, object_count: usize, mesh_id: u32) -> BackendResult<()>;
 }
 
 /// Window backend access trait
 ///
 /// This trait allows the renderer to access backend-specific window handles
-/// for operations like swapchain recreation.
+/// for operations like swapchain recreation while maintaining abstraction.
 pub trait WindowBackendAccess {
-    /// Get a mutable reference to the Vulkan window if available
-    fn get_vulkan_window(&mut self) -> Option<&mut crate::render::vulkan::Window>;
+    /// Get access to backend-specific window data for operations like swapchain recreation
+    /// Returns a generic trait object that can be downcast by the specific backend
+    fn get_backend_window(&mut self) -> &mut dyn std::any::Any;
 }

@@ -60,14 +60,14 @@ pub struct GameObject {
     pub scale: Vec3,
 
     // Per-object GPU resources (one per frame-in-flight)
-    /// Uniform buffers for object data (one per frame-in-flight)
+    /// Uniform buffers for object data (one per frame-in-flight) - DEPRECATED
     pub uniform_buffers: Vec<Buffer>,
-    /// Mapped memory pointers for uniform buffers
+    /// Mapped memory pointers for uniform buffers - DEPRECATED
     pub uniform_mapped: Vec<*mut u8>,
 
-    // Per-object descriptor sets (one per frame-in-flight)
-    /// Vulkan descriptor sets for binding resources (one per frame-in-flight)
-    pub descriptor_sets: Vec<vk::DescriptorSet>,
+    // Per-object GPU resource handle (clean abstraction)
+    /// Opaque handle to backend-managed GPU resources (descriptor sets, uniform buffers, etc.)
+    pub resource_handle: Option<crate::render::backend::ObjectResourceHandle>,
 
     // Material for this object
     /// Material properties and textures for rendering
@@ -84,7 +84,7 @@ impl GameObject {
             material,
             uniform_buffers: Vec::new(),
             uniform_mapped: Vec::new(),
-            descriptor_sets: Vec::new(),
+            resource_handle: None,
         }
     }
 
@@ -160,9 +160,20 @@ impl GameObject {
         Ok(())
     }
 
-    /// Get the descriptor set for the specified frame
-    pub fn get_descriptor_set(&self, frame_index: usize) -> Option<vk::DescriptorSet> {
-        self.descriptor_sets.get(frame_index).copied()
+    /// Get the object resource handle for backend operations
+    pub fn get_resource_handle(&self) -> Option<crate::render::backend::ObjectResourceHandle> {
+        self.resource_handle
+    }
+    
+    /// Set the object resource handle (used by backend during resource creation)
+    pub fn set_resource_handle(&mut self, handle: crate::render::backend::ObjectResourceHandle) {
+        self.resource_handle = Some(handle);
+    }
+
+    /// DEPRECATED: Get the descriptor set for the specified frame
+    #[deprecated(since = "0.1.0", note = "Use get_resource_handle() for backend-agnostic resource access")]
+    pub fn get_descriptor_set(&self, _frame_index: usize) -> Option<vk::DescriptorSet> {
+        None // No longer exposing Vulkan descriptor sets
     }
 
     /// Create descriptor sets for this object
@@ -202,7 +213,9 @@ impl GameObject {
             }
         }
 
-        self.descriptor_sets = descriptor_sets;
+        // DEPRECATED: descriptor sets are now managed by the backend via ObjectResourceHandle
+        // This method is kept for compatibility but does nothing
+        log::warn!("create_descriptor_sets is deprecated - resources are now managed by backend");
         Ok(())
     }
 }
@@ -228,5 +241,5 @@ pub fn cleanup_game_object(game_object: &mut GameObject) {
     // Clear vectors (buffers will be dropped automatically)
     game_object.uniform_buffers.clear();
     game_object.uniform_mapped.clear();
-    game_object.descriptor_sets.clear();
+    // DEPRECATED: descriptor_sets field removed - resources now managed by backend via handle
 }

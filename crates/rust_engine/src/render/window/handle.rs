@@ -243,9 +243,8 @@ impl WindowHandle {
 ///
 /// Provides access to backend-specific window operations needed by the renderer.
 impl crate::render::WindowBackendAccess for WindowHandle {
-    fn get_vulkan_window(&mut self) -> Option<&mut crate::render::vulkan::Window> {
-        // Try to downcast to VulkanWindow directly
-        let any_backend = self.backend.as_any_mut();
-        any_backend.downcast_mut::<crate::render::vulkan::Window>()
+    fn get_backend_window(&mut self) -> &mut dyn std::any::Any {
+        // Return the backend window as a trait object for downcasting
+        self.backend.as_any_mut()
     }
 }

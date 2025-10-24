@@ -391,7 +391,7 @@ impl MeshPoolManager {
         let mut pools_rendered = 0;
         
         // Cast to VulkanRenderer to access the dedicated renderer method
-        if let Some(vulkan_renderer) = backend.as_any_mut().downcast_mut::<crate::render::vulkan::renderer::VulkanRenderer>() {
+        if let Some(vulkan_renderer) = backend.as_any_mut().downcast_mut::<crate::render::vulkan::VulkanRenderer>() {
             // Render each active pool separately using dedicated renderers
             for (mesh_type, (pool, shared_resources, instance_renderer_opt)) in &mut self.pools {
                 if pool.active_count() > 0 {

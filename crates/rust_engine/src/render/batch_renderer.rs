@@ -72,7 +72,7 @@ impl RenderBatch {
     
     /// Add a command to this batch
     pub fn add_command(&mut self, command: RenderCommand) -> BatchResult<()> {
-        // Validate material compatibility
+    // Validate material compatibility
         if let Some(batch_material) = self.material_id {
             if command.material_id != batch_material {
                 return Err(BatchError::InvalidMaterial(command.material_id));
@@ -211,7 +211,7 @@ impl BatchRenderer {
     
     /// Add a command to an appropriate batch
     fn add_command_to_batch(&mut self, command: RenderCommand) -> BatchResult<()> {
-        // Find an existing compatible batch
+    // Find an existing compatible batch
         let mut batch_index = None;
         
         for (i, batch) in self.current_batches.iter().enumerate() {
@@ -252,7 +252,7 @@ impl BatchRenderer {
             }
         }
         
-        // If no specific batching strategy, any command is compatible
+    // If no specific batching strategy, any command is compatible
         true
     }
     

@@ -487,7 +487,7 @@ impl CommandRecorder {
 /// Session for recording multiple objects with shared geometry
 /// This follows the Vulkan Multiple Objects tutorial pattern exactly
 pub struct MultipleObjectSession<'a> {
-    render_pass_recorder: crate::render::vulkan::commands::ActiveRenderPass<'a>,
+    render_pass_recorder: crate::render::vulkan::core::commands::ActiveRenderPass<'a>,
     resource_manager: &'a super::ResourceManager,
     pipeline_manager: &'a crate::render::PipelineManager,
     frame_index: usize,

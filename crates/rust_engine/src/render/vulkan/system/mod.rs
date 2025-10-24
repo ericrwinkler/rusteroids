@@ -16,6 +16,7 @@ pub use sync_manager::SyncManager;
 pub use swapchain_manager::SwapchainManager;
 
 use crate::render::vulkan::*;
+use crate::render::vulkan::buffer::Buffer;
 use crate::render::mesh::Vertex;
 use crate::foundation::math::{Mat4, Vec3};
 use ash::vk;
@@ -29,7 +30,7 @@ struct ObjectResources {
     /// Currently unused - transforms handled by push constants (Vulkan best practice)
     /// Future: Use for material/texture data
     #[allow(dead_code)]
-    uniform_buffers: Vec<crate::render::vulkan::buffer::Buffer>,
+    uniform_buffers: Vec<Buffer>,
     /// Mapped memory pointers for uniform buffers
     #[allow(dead_code)]
     uniform_mapped: Vec<*mut u8>,
@@ -99,7 +100,7 @@ impl VulkanRenderer {
             context.swapchain().format().format,
         )?;
         
-        // LEGACY: Create pipeline manager (disabled for unified instanced rendering)
+    // FIXME: LEGACY: Create pipeline manager (disabled for unified instanced rendering)
         let pipeline_manager = crate::render::PipelineManager::new();
         
         // Create specialized managers
@@ -112,7 +113,7 @@ impl VulkanRenderer {
         // Initialize command recorder
         command_recorder.initialize(config.max_frames_in_flight);
         
-        // LEGACY PIPELINE SYSTEM DISABLED - Using unified instanced rendering only
+    // FIXME: LEGACY PIPELINE SYSTEM DISABLED - Using unified instanced rendering only
         // pipeline_manager.initialize_standard_pipelines(
         //     &context,
         //     render_pass.handle(),
@@ -253,7 +254,7 @@ impl VulkanRenderer {
                    mesh.vertices.len(), mesh.indices.len());
         
         // Create shared vertex buffer
-        let vertex_buffer = crate::render::vulkan::buffer::Buffer::new(
+        let vertex_buffer = Buffer::new(
             self.context.raw_device(),
             self.context.instance().clone(),
             self.context.physical_device().device,
@@ -266,7 +267,7 @@ impl VulkanRenderer {
         vertex_buffer.write_data(&mesh.vertices)?;
         
         // Create shared index buffer
-        let index_buffer = crate::render::vulkan::buffer::Buffer::new(
+        let index_buffer = Buffer::new(
             self.context.raw_device(),
             self.context.instance().clone(),
             self.context.physical_device().device,
@@ -342,9 +343,9 @@ impl crate::render::RenderBackend for VulkanRenderer {
     }
     
     fn bind_shared_resources(&mut self, _shared: &crate::render::SharedRenderingResources) -> crate::render::BackendResult<()> {
-        // LEGACY SYSTEM DISABLED: Instance renderer handles all resource binding internally
-        // No-op method - the instance renderer manages its own pipelines and resources
-        log::trace!("Legacy bind_shared_resources disabled - using instanced rendering");
+    // FIXME: LEGACY SYSTEM DISABLED: Instance renderer handles all resource binding internally
+    // No-op method - the instance renderer manages its own pipelines and resources
+    log::trace!("Legacy bind_shared_resources disabled - using instanced rendering");
         Ok(())
     }
     
@@ -603,8 +604,6 @@ impl crate::render::RenderBackend for VulkanRenderer {
     }
     
     fn create_object_resources(&mut self, _material: &crate::render::Material) -> crate::render::BackendResult<crate::render::backend::ObjectResourceHandle> {
-        use crate::render::vulkan::buffer::Buffer;
-        
         let object_id = self.next_object_id;
         self.next_object_id += 1;
         
@@ -806,7 +805,7 @@ impl VulkanRenderer {
         image_index: u32,
         frame_index: usize,
     ) -> VulkanResult<vk::CommandBuffer> {
-        // Create minimal command buffer using legacy recorder but without binding any pipelines
+    // FIXME: Create minimal command buffer using legacy recorder but without binding any pipelines
         self.command_recorder.free_command_buffer(frame_index);
         
         self.command_recorder.begin_multiple_object_recording(

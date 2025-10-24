@@ -82,7 +82,7 @@
 //! - Window creation parameter validation
 //! - Support for different window types (main, dialog, utility)
 //! 
-//! ## Design Goals for Refactored Version:
+//! ## Design Goals:
 //! 
 //! 1. **Complete Backend Abstraction**: Zero exposure of Vulkan or other backend types
 //! 2. **Rich Window Management**: Full set of window operations for modern applications  
@@ -218,7 +218,7 @@ impl WindowHandle {
     /// **INTERNAL USE ONLY**: This method is used by the renderer to access
     /// backend-specific rendering data. Applications should never call this method.
     /// 
-    /// This replaces the old vulkan_window() accessor methods with a safer,
+    /// This replaces the vulkan_window() accessor methods with a safer,
     /// type-erased approach that doesn't expose backend implementation details
     /// to the public API.
     #[allow(dead_code)] // Part of window backend API design

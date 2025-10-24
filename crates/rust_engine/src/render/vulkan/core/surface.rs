@@ -6,8 +6,9 @@ use ash::{vk, extensions::khr};
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use crate::render::vulkan::{VulkanContext, VulkanResult, VulkanError};
 
-/// Vulkan surface wrapper
+/// Vulkan surface wrapper for presentation
 pub struct Surface {
+    /// Vulkan instance for surface operations
     instance: ash::Instance,
     surface_loader: khr::Surface,
     surface: vk::SurfaceKHR,
@@ -86,6 +87,11 @@ impl Surface {
                 .get_physical_device_surface_support(physical_device, queue_family_index, self.surface)
                 .map_err(|e| VulkanError::InitializationFailed(format!("Failed to check surface support: {:?}", e)))
         }
+    }
+    
+    /// Get the Vulkan instance associated with this surface
+    pub fn instance(&self) -> &ash::Instance {
+        &self.instance
     }
 }
 

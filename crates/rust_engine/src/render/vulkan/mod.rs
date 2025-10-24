@@ -3,33 +3,28 @@
 //! Low-level Vulkan implementation following the resource ownership
 //! and safety rules defined in DESIGN.md
 
-pub mod context;
-pub mod window;
-pub mod swapchain;
-pub mod render_pass;
-pub mod commands;
-pub mod framebuffer;
-pub mod sync;
-pub mod buffer;
-pub mod shader;
-pub mod renderer;
-/// Uniform buffer management for GPU shader constants
-pub mod uniform_buffer;
-pub mod descriptor_set;
-pub mod vertex_layout;
-pub mod texture;
+/// Core Vulkan wrappers and primitives
+pub mod core;
+/// High-level rendering system and orchestration
+pub mod system;
 
-pub use context::{VulkanContext, VulkanResult, VulkanError, PhysicalDeviceInfo, LogicalDevice, VulkanInstance};
-pub use window::{Window, WindowError};
-pub use swapchain::Swapchain;
-pub use render_pass::RenderPass;
-pub use commands::{CommandPool, CommandRecorder};
-pub use framebuffer::{Framebuffer, DepthBuffer};
-pub use sync::{Semaphore, Fence, FrameSync, MemoryBarrierBuilder};
-pub use buffer::{Buffer, VertexBuffer, IndexBuffer, StagingBuffer, UniformBuffer as OldUniformBuffer};
-pub use shader::{ShaderModule, GraphicsPipeline};
-pub use renderer::VulkanRenderer;
-pub use uniform_buffer::*;
-pub use descriptor_set::*;
-pub use vertex_layout::VulkanVertexLayout;
-pub use texture::Texture;
+// Re-export commonly used core types
+pub use core::{
+    context::{VulkanContext, VulkanResult, VulkanError, PhysicalDeviceInfo, LogicalDevice, VulkanInstance},
+    window::{Window, WindowError},
+    swapchain::Swapchain,
+    render_pass::RenderPass,
+    commands::{CommandPool, CommandRecorder},
+    framebuffer::{Framebuffer, DepthBuffer},
+    sync::{Semaphore, Fence, FrameSync, MemoryBarrierBuilder},
+    buffer::{self, Buffer, VertexBuffer, IndexBuffer, StagingBuffer, UniformBuffer as OldUniformBuffer},
+    shader::{self, ShaderModule, GraphicsPipeline},
+    uniform_buffer::{self, CameraUniformData},
+    descriptor_set::{self, DescriptorSetLayoutBuilder, DescriptorSetLayout, DescriptorPool},
+    vertex_layout::VulkanVertexLayout,
+    texture::Texture,
+    surface::Surface,
+};
+
+// Re-export system types
+pub use system::VulkanRenderer;

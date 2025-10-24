@@ -50,7 +50,7 @@ impl SwapchainManager {
     pub fn recreate_framebuffers(&mut self, context: &VulkanContext, render_pass: &RenderPass) -> VulkanResult<()> {
         log::debug!("Recreating framebuffers for new swapchain...");
         
-        // Clear old framebuffers and depth buffers
+    // Clear framebuffers and depth buffers
         self.framebuffers.clear();
         self.depth_buffers.clear();
         

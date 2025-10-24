@@ -10,7 +10,7 @@ use ash::extensions::khr::{Surface, Swapchain as SwapchainLoader};
 use ash::vk;
 use std::ffi::{CStr, CString};
 use thiserror::Error;
-use crate::render::vulkan::swapchain::Swapchain;
+use super::swapchain::Swapchain;
 
 /// Vulkan context errors
 /// Vulkan-specific error types

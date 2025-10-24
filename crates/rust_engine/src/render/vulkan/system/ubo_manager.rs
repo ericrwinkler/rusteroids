@@ -3,7 +3,9 @@
 //! Handles camera, lighting, and material uniform buffer objects.
 
 use ash::vk;
-use crate::render::vulkan::{VulkanContext, VulkanResult, VulkanError, Buffer, DescriptorSetLayoutBuilder, DescriptorSetLayout};
+use crate::render::vulkan::{VulkanContext, VulkanResult, VulkanError};
+use crate::render::vulkan::buffer::Buffer;
+use crate::render::vulkan::core::descriptor_set::{DescriptorSetLayoutBuilder, DescriptorSetLayout};
 use crate::render::vulkan::uniform_buffer::CameraUniformData;
 use crate::render::material::StandardMaterialUBO;
 use crate::foundation::math::{Mat4, Vec3, Vec2, Vec4};
@@ -457,7 +459,7 @@ impl UboManager {
         self.current_frame = (self.current_frame + 1) % self.max_frames_in_flight;
     }
     
-    /// Legacy update lighting method for backwards compatibility
+    /// FIXME: Legacy update lighting method for backwards compatibility
     /// This will be deprecated once all callers use update_multi_light_environment
     pub fn update_lighting(&mut self, direction: [f32; 3], intensity: f32, color: [f32; 3], ambient_intensity: f32) {
         let lighting_ubo_data = MultiLightingUBO {

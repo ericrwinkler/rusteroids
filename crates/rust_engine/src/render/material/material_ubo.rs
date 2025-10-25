@@ -55,6 +55,18 @@ impl StandardMaterialUBO {
         self.texture_flags[3] = if ao { 1 } else { 0 };
         self
     }
+    
+    /// Set emission texture flag (additional_params.x)
+    pub fn with_emission_texture(mut self, enabled: bool) -> Self {
+        self.additional_params[0] = if enabled { 1.0 } else { 0.0 };
+        self
+    }
+    
+    /// Set opacity texture flag (additional_params.y)
+    pub fn with_opacity_texture(mut self, enabled: bool) -> Self {
+        self.additional_params[1] = if enabled { 1.0 } else { 0.0 };
+        self
+    }
 }
 
 /// Unlit material uniform data for GPU
@@ -87,6 +99,12 @@ impl UnlitMaterialUBO {
     /// Set texture usage flags
     pub fn with_texture_flags(mut self, base_color: bool) -> Self {
         self.texture_flags[0] = if base_color { 1 } else { 0 };
+        self
+    }
+    
+    /// Set opacity texture flag (additional_params.y) - for consistency with StandardMaterialUBO
+    pub fn with_opacity_texture(mut self, enabled: bool) -> Self {
+        self.additional_params[1] = if enabled { 1.0 } else { 0.0 };
         self
     }
 }

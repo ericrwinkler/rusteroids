@@ -100,8 +100,8 @@ impl VulkanRenderer {
             context.swapchain().format().format,
         )?;
         
-    // FIXME: LEGACY: Create pipeline manager (disabled for unified instanced rendering)
-        let pipeline_manager = crate::render::PipelineManager::new();
+    // Create pipeline manager and initialize all 4 pipelines
+        let mut pipeline_manager = crate::render::PipelineManager::new();
         
         // Create specialized managers
         let mut resource_manager = ResourceManager::new(&context, config.max_frames_in_flight)?;
@@ -113,12 +113,12 @@ impl VulkanRenderer {
         // Initialize command recorder
         command_recorder.initialize(config.max_frames_in_flight);
         
-    // FIXME: LEGACY PIPELINE SYSTEM DISABLED - Using unified instanced rendering only
-        // pipeline_manager.initialize_standard_pipelines(
-        //     &context,
-        //     render_pass.handle(),
-        //     &[ubo_manager.frame_descriptor_set_layout(), ubo_manager.material_descriptor_set_layout()],
-        // )?;
+        // Initialize all 4 standard pipelines (StandardPBR, Unlit, TransparentPBR, TransparentUnlit)
+        pipeline_manager.initialize_standard_pipelines(
+            &context,
+            render_pass.handle(),
+            &[ubo_manager.frame_descriptor_set_layout(), ubo_manager.material_descriptor_set_layout()],
+        )?;
         
         // Then initialize UBO descriptor sets
         ubo_manager.initialize_descriptor_sets(&context, &mut resource_manager)?;
@@ -155,17 +155,6 @@ impl VulkanRenderer {
     /// Set model matrix (delegates to command recorder)
     pub fn set_model_matrix(&mut self, model: [[f32; 4]; 4]) {
         self.command_recorder.set_model_matrix(model);
-    }
-    
-    /// Set material (delegates to UBO manager and pipeline manager)
-    pub fn set_material(&mut self, material: &crate::render::Material) -> VulkanResult<()> {
-        // Update material UBO
-        self.ubo_manager.update_material(&material)?;
-        
-        // Set appropriate pipeline
-        self.pipeline_manager.set_active_pipeline(&material.material_type);
-        
-        Ok(())
     }
     
     /// Draw a frame (coordinates all managers)
@@ -704,34 +693,144 @@ impl VulkanRenderer {
     ///
     /// This method provides the Vulkan-specific parameters needed for dedicated InstanceRenderer
     /// per mesh pool, preventing state corruption between different mesh types.
+    /// 
+    /// MODULAR PIPELINE VERSION: Groups objects by required pipeline type and renders each group separately
     pub fn record_dynamic_draws_with_dedicated_renderer(&mut self,
                                                        instance_renderer: &mut crate::render::dynamic::InstanceRenderer,
                                                        dynamic_objects: &std::collections::HashMap<crate::render::dynamic::DynamicObjectHandle, crate::render::dynamic::DynamicRenderData>,
-                                                       shared_resources: &crate::render::SharedRenderingResources) 
+                                                       shared_resources: &crate::render::SharedRenderingResources,
+                                                       camera_position: crate::foundation::math::Vec3) 
                                                        -> crate::render::BackendResult<()> {
+        use std::collections::HashMap;
+        use crate::render::material::PipelineType;
+        
         if let Some(ref state) = self.command_recording_state {
-            // Use the provided dedicated InstanceRenderer instead of the shared one
+            // Group objects by their required pipeline type
+            let mut pipeline_groups: HashMap<PipelineType, Vec<(crate::render::dynamic::DynamicObjectHandle, &crate::render::dynamic::DynamicRenderData)>> = HashMap::new();
+            
+            for (handle, render_data) in dynamic_objects.iter() {
+                let pipeline_type = render_data.material.required_pipeline();
+                pipeline_groups.entry(pipeline_type)
+                    .or_insert_with(Vec::new)
+                    .push((*handle, render_data));
+            }
+            
+            log::debug!("Rendering {} objects grouped into {} pipeline types", dynamic_objects.len(), pipeline_groups.len());
+            
+            // Get frame and material descriptor sets
+            let frame_descriptor_set = self.resource_manager.frame_descriptor_sets()[self.current_frame];
+            let material_descriptor_set = self.resource_manager.material_descriptor_sets()[0];
+            
+            // Set command buffer once for all pipeline groups
             instance_renderer.set_active_command_buffer(state.command_buffer, self.current_frame);
             
-            // Upload instance data from active dynamic objects
+            // CRITICAL FIX: Upload ALL objects ONCE to contiguous buffer regions
+            // Then draw each pipeline group from its specific region
             instance_renderer.upload_instance_data(dynamic_objects)
                 .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
             
-            // Get frame descriptor set for this frame
-            let frame_descriptor_set = self.resource_manager.frame_descriptor_sets()[self.current_frame];
+            // Track which objects are at which indices in the uploaded buffer
+            let mut object_indices: HashMap<crate::render::dynamic::DynamicObjectHandle, u32> = HashMap::new();
+            let mut current_index = 0u32;
+            for (handle, _) in dynamic_objects.iter() {
+                object_indices.insert(*handle, current_index);
+                current_index += 1;
+            }
             
-            // Get material descriptor set (use first one as default for all objects)
-            let material_descriptor_set = self.resource_manager.material_descriptor_sets()[0];
+            // CRITICAL: Render in correct order for transparency
+            // 1. Render opaque objects front-to-back (performance - early Z rejection)
+            // 2. Then render transparent objects back-to-front (correctness - proper alpha blending)
             
-            // Record instanced draw commands
-            instance_renderer.record_instanced_draw(shared_resources, &self.context, frame_descriptor_set, material_descriptor_set)
-                .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+            let opaque_pipeline_types = [PipelineType::StandardPBR, PipelineType::Unlit];
+            let transparent_pipeline_types = [PipelineType::TransparentPBR, PipelineType::TransparentUnlit];
             
-            log::trace!("Recorded dynamic draws for {} objects with dedicated renderer", dynamic_objects.len());
+            // Render opaque objects front-to-back
+            for pipeline_type in &opaque_pipeline_types {
+                if let Some(mut objects) = pipeline_groups.remove(pipeline_type) {
+                    // Sort front-to-back: closest objects first for early-Z optimization
+                    objects.sort_by(|a, b| {
+                        let dist_a = (a.1.position - camera_position).norm_squared();
+                        let dist_b = (b.1.position - camera_position).norm_squared();
+                        dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    
+                    self.render_pipeline_group(
+                        instance_renderer,
+                        shared_resources,
+                        frame_descriptor_set,
+                        material_descriptor_set,
+                        *pipeline_type,
+                        &objects,
+                        &object_indices
+                    )?;
+                }
+            }
+            
+            // Render transparent objects back-to-front
+            for pipeline_type in &transparent_pipeline_types {
+                if let Some(mut objects) = pipeline_groups.remove(pipeline_type) {
+                    // Sort back-to-front: furthest objects first for correct alpha blending
+                    objects.sort_by(|a, b| {
+                        let dist_a = (a.1.position - camera_position).norm_squared();
+                        let dist_b = (b.1.position - camera_position).norm_squared();
+                        dist_b.partial_cmp(&dist_a).unwrap_or(std::cmp::Ordering::Equal) // Note: reversed comparison
+                    });
+                    
+                    self.render_pipeline_group(
+                        instance_renderer,
+                        shared_resources,
+                        frame_descriptor_set,
+                        material_descriptor_set,
+                        *pipeline_type,
+                        &objects,
+                        &object_indices
+                    )?;
+                }
+            }
+            
+            log::trace!("Recorded dynamic draws for {} total objects across {} pipelines", dynamic_objects.len(), pipeline_groups.len());
             Ok(())
         } else {
             Err(crate::render::RenderError::BackendError("No active command recording".to_string()))
         }
+    }
+    
+    /// Helper method to render a single pipeline group
+    fn render_pipeline_group(
+        &mut self,
+        instance_renderer: &mut crate::render::dynamic::InstanceRenderer,
+        shared_resources: &crate::render::SharedRenderingResources,
+        frame_descriptor_set: vk::DescriptorSet,
+        material_descriptor_set: vk::DescriptorSet,
+        pipeline_type: crate::render::material::PipelineType,
+        objects: &[(crate::render::dynamic::DynamicObjectHandle, &crate::render::dynamic::DynamicRenderData)],
+        object_indices: &std::collections::HashMap<crate::render::dynamic::DynamicObjectHandle, u32>
+    ) -> crate::render::BackendResult<()> {
+        // Get the pipeline for this material type
+        let pipeline = self.pipeline_manager.get_pipeline_by_type(pipeline_type)
+            .ok_or_else(|| crate::render::RenderError::BackendError(
+                format!("No pipeline found for type: {:?}", pipeline_type)
+            ))?;
+        
+        log::trace!("Rendering {} objects with pipeline {:?}", objects.len(), pipeline_type);
+        
+        // Collect instance indices for this pipeline group
+        let instance_indices: Vec<u32> = objects.iter()
+            .filter_map(|(handle, _)| object_indices.get(handle).copied())
+            .collect();
+        
+        // Record draw commands with the specific pipeline and instance range
+        instance_renderer.record_instanced_draw_with_explicit_pipeline_and_range(
+            shared_resources,
+            &self.context,
+            frame_descriptor_set,
+            material_descriptor_set,
+            pipeline.handle(),
+            pipeline.layout(),
+            &instance_indices
+        ).map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+        
+        Ok(())
     }
     
     // Getter methods for GameObject creation
@@ -757,7 +856,9 @@ impl VulkanRenderer {
         self.max_frames_in_flight
     }
     
-    /// Get the current graphics pipeline (INTERNAL)
+    // FIXME: LEGACY - Remove after modular pipeline system is complete
+    // This assumes a single active pipeline; new system selects pipeline per-material
+    /// Get the current graphics pipeline (INTERNAL) (LEGACY - will be removed)
     pub(crate) fn get_graphics_pipeline(&self) -> vk::Pipeline {
         if let Some(pipeline) = self.pipeline_manager.get_active_pipeline() {
             pipeline.handle()
@@ -768,7 +869,8 @@ impl VulkanRenderer {
         }
     }
     
-    /// Get the current pipeline layout (INTERNAL)
+    // FIXME: LEGACY - Remove after modular pipeline system is complete
+    /// Get the current pipeline layout (INTERNAL) (LEGACY - will be removed)
     pub(crate) fn get_pipeline_layout(&self) -> vk::PipelineLayout {
         if let Some(pipeline) = self.pipeline_manager.get_active_pipeline() {
             pipeline.layout()

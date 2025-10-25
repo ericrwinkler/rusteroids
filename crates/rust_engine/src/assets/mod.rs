@@ -1,8 +1,13 @@
 //! Asset management system
 
 pub mod obj_loader;
+pub mod image_loader;
 
 pub use obj_loader::ObjLoader;
+pub use image_loader::ImageData;
+
+#[cfg(test)]
+mod test_texture_loading;
 
 use thiserror::Error;
 use crate::engine::AssetConfig;

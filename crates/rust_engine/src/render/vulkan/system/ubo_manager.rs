@@ -3,13 +3,16 @@
 //! Handles camera, lighting, and material uniform buffer objects.
 
 use ash::vk;
-use crate::render::vulkan::{VulkanContext, VulkanResult, VulkanError};
+use crate::render::vulkan::{VulkanContext, VulkanResult};
 use crate::render::vulkan::buffer::Buffer;
 use crate::render::vulkan::core::descriptor_set::{DescriptorSetLayoutBuilder, DescriptorSetLayout};
 use crate::render::vulkan::uniform_buffer::CameraUniformData;
 use crate::render::material::StandardMaterialUBO;
 use crate::foundation::math::{Mat4, Vec3, Vec2, Vec4};
 use crate::render::lighting::MultiLightEnvironment;
+use crate::assets::ImageData;
+use crate::render::vulkan::core::Texture;
+use std::sync::Arc;
 
 /// Multi-light UBO structure that matches shader expectations
 /// This matches the MultiLightUBO in the multi_light_frag.frag shader
@@ -99,6 +102,8 @@ impl UboManager {
             .add_combined_image_sampler(2, vk::ShaderStageFlags::FRAGMENT) // Normal texture  
             .add_combined_image_sampler(3, vk::ShaderStageFlags::FRAGMENT) // Metallic-roughness texture
             .add_combined_image_sampler(4, vk::ShaderStageFlags::FRAGMENT) // AO texture
+            .add_combined_image_sampler(5, vk::ShaderStageFlags::FRAGMENT) // Emission texture
+            .add_combined_image_sampler(6, vk::ShaderStageFlags::FRAGMENT) // Opacity texture
             .build(&context.raw_device())?;
         
         // Create camera UBO buffer
@@ -186,17 +191,26 @@ impl UboManager {
         use crate::render::material::{StandardMaterialUBO, StandardMaterialParams};
         
         let default_material_params = StandardMaterialParams {
-            base_color: Vec3::new(0.8, 0.6, 0.4), // Warm brown color
+            base_color: Vec3::new(0.8, 0.6, 0.4), // Warm brown default
             alpha: 1.0,
             metallic: 0.1,
             roughness: 0.8,
             ambient_occlusion: 1.0,
             normal_scale: 1.0,
-            emission: Vec3::new(0.0, 0.0, 0.0),
-            emission_strength: 0.0,
+            emission: Vec3::new(1.0, 0.5, 0.0), // Orange emission
+            emission_strength: 1.5,
         };
         
-        let default_material_ubo = StandardMaterialUBO::from_params(&default_material_params);
+        let default_material_ubo = StandardMaterialUBO::from_params(&default_material_params)
+            .with_texture_flags(true, false, false, false) // Enable base_color texture
+            .with_emission_texture(true); // Enable emission texture
+        
+        log::info!("Default Material UBO - base_color: {:?}, emission: {:?}, texture_flags: {:?}, additional_params: {:?}",
+                   default_material_ubo.base_color,
+                   default_material_ubo.emission,
+                   default_material_ubo.texture_flags,
+                   default_material_ubo.additional_params);
+        
         let material_ubo_size = std::mem::size_of::<StandardMaterialUBO>() as vk::DeviceSize;
         
         let material_ubo_buffer = Buffer::new(
@@ -281,6 +295,82 @@ impl UboManager {
         // Update material descriptor sets
         let material_ubo_size = std::mem::size_of::<StandardMaterialUBO>() as vk::DeviceSize;
         
+        // Load base color texture (texture.png) BEFORE the descriptor set loop
+        let base_color_texture_idx = {
+            let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            path.pop(); // rust_engine
+            path.pop(); // crates
+            path.push("resources");
+            path.push("textures");
+            path.push("texture.png");
+
+            match ImageData::from_file(path.to_str().unwrap_or("resources/textures/texture.png")) {
+                Ok(img) => {
+                    log::info!("Found texture.png at {:?}, creating GPU texture", path);
+                    match Texture::from_image_data(
+                        Arc::new(context.raw_device().clone()),
+                        Arc::new(context.instance().clone()),
+                        context.physical_device().device,
+                        resource_manager.command_pool_handle(),
+                        context.graphics_queue(),
+                        &img,
+                    ) {
+                        Ok(tex) => {
+                            let idx = resource_manager.add_loaded_texture(tex);
+                            log::info!("Successfully loaded and stored texture.png as texture #{}", idx);
+                            Some(idx)
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to create base color texture from image data: {:?}, falling back to default", e);
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::info!("No texture.png found or failed to load: {:?}, using default white", e);
+                    None
+                }
+            }
+        };
+        
+        // Load emission texture BEFORE the descriptor set loop to avoid borrow conflicts
+        let emission_texture_idx = {
+            let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            path.pop(); // rust_engine
+            path.pop(); // crates
+            path.push("resources");
+            path.push("textures");
+            path.push("emission_map.png");
+
+            match ImageData::from_file(path.to_str().unwrap_or("resources/textures/emission_map.png")) {
+                Ok(img) => {
+                    log::info!("Found emission_map.png at {:?}, creating GPU texture", path);
+                    match Texture::from_image_data(
+                        Arc::new(context.raw_device().clone()),
+                        Arc::new(context.instance().clone()),
+                        context.physical_device().device,
+                        resource_manager.command_pool_handle(),
+                        context.graphics_queue(),
+                        &img,
+                    ) {
+                        Ok(tex) => {
+                            let idx = resource_manager.add_loaded_texture(tex);
+                            log::info!("Successfully loaded and stored emission_map.png as texture #{}", idx);
+                            Some(idx)
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to create emission texture from image data: {:?}, falling back to default", e);
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::info!("No emission_map.png found or failed to load: {:?}, using default white", e);
+                    None
+                }
+            }
+        };
+        
         for &descriptor_set in resource_manager.material_descriptor_sets().iter() {
             let material_buffer_info = vk::DescriptorBufferInfo::builder()
                 .buffer(self.material_ubo_buffer.handle())
@@ -288,12 +378,51 @@ impl UboManager {
                 .range(material_ubo_size)
                 .build();
             
-            // Create image info for default textures
-            let base_color_image_info = vk::DescriptorImageInfo::builder()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(resource_manager.default_white_texture().image_view())
-                .sampler(resource_manager.default_white_texture().sampler())
-                .build();
+            // Build emission image info from loaded texture or default
+            let emission_image_info = if let Some(idx) = emission_texture_idx {
+                if let Some(stored) = resource_manager.get_loaded_texture(idx) {
+                    vk::DescriptorImageInfo::builder()
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .image_view(stored.image_view())
+                        .sampler(stored.sampler())
+                        .build()
+                } else {
+                    vk::DescriptorImageInfo::builder()
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .image_view(resource_manager.default_white_texture().image_view())
+                        .sampler(resource_manager.default_white_texture().sampler())
+                        .build()
+                }
+            } else {
+                vk::DescriptorImageInfo::builder()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(resource_manager.default_white_texture().image_view())
+                    .sampler(resource_manager.default_white_texture().sampler())
+                    .build()
+            };
+
+            // Create image info for base color texture (use loaded texture.png or default)
+            let base_color_image_info = if let Some(idx) = base_color_texture_idx {
+                if let Some(stored) = resource_manager.get_loaded_texture(idx) {
+                    vk::DescriptorImageInfo::builder()
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .image_view(stored.image_view())
+                        .sampler(stored.sampler())
+                        .build()
+                } else {
+                    vk::DescriptorImageInfo::builder()
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .image_view(resource_manager.default_white_texture().image_view())
+                        .sampler(resource_manager.default_white_texture().sampler())
+                        .build()
+                }
+            } else {
+                vk::DescriptorImageInfo::builder()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(resource_manager.default_white_texture().image_view())
+                    .sampler(resource_manager.default_white_texture().sampler())
+                    .build()
+            };
                 
             let normal_image_info = vk::DescriptorImageInfo::builder()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -309,6 +438,15 @@ impl UboManager {
                 
             // AO texture uses the same as metallic-roughness for now
             let ao_image_info = vk::DescriptorImageInfo::builder()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(resource_manager.default_white_texture().image_view())
+                .sampler(resource_manager.default_white_texture().sampler())
+                .build();
+            
+            // (emission_image_info already computed above)
+            
+            // Opacity texture - default white (fully opaque)
+            let opacity_image_info = vk::DescriptorImageInfo::builder()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(resource_manager.default_white_texture().image_view())
                 .sampler(resource_manager.default_white_texture().sampler())
@@ -349,6 +487,20 @@ impl UboManager {
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(&[ao_image_info])
+                    .build(),
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(descriptor_set)
+                    .dst_binding(5)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&[emission_image_info])
+                    .build(),
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(descriptor_set)
+                    .dst_binding(6)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&[opacity_image_info])
                     .build(),
             ];
             
@@ -511,41 +663,6 @@ impl UboManager {
         }
     }
     
-    /// Update material UBO data
-    pub fn update_material(&mut self, material: &crate::render::Material) -> VulkanResult<()> {
-        use crate::render::material::{MaterialType, StandardMaterialUBO, UnlitMaterialUBO};
-        
-        let material_ubo_data = match &material.material_type {
-            MaterialType::StandardPBR(params) => {
-                let ubo = StandardMaterialUBO::from_params(params);
-                unsafe {
-                    std::slice::from_raw_parts(
-                        &ubo as *const _ as *const u8,
-                        std::mem::size_of::<StandardMaterialUBO>()
-                    )
-                }.to_vec()
-            },
-            MaterialType::Unlit(params) => {
-                let ubo = UnlitMaterialUBO::from_params(params);
-                let mut padded = vec![0u8; std::mem::size_of::<StandardMaterialUBO>()];
-                let ubo_bytes = unsafe {
-                    std::slice::from_raw_parts(
-                        &ubo as *const _ as *const u8,
-                        std::mem::size_of::<UnlitMaterialUBO>()
-                    )
-                };
-                padded[..ubo_bytes.len()].copy_from_slice(ubo_bytes);
-                padded
-            },
-            _ => {
-                return Err(VulkanError::InitializationFailed("Unsupported material type".to_string()));
-            }
-        };
-        
-        self.material_ubo_buffer.write_data(&material_ubo_data)?;
-        Ok(())
-    }
-    
     /// Update material color only (legacy interface)
     pub fn update_material_color(&mut self, color: [f32; 4]) -> VulkanResult<()> {
         // For now, create a simple material with the given color
@@ -562,7 +679,9 @@ impl UboManager {
             emission_strength: 0.0,
         };
         
-        let material_ubo = StandardMaterialUBO::from_params(&material_params);
+        let material_ubo = StandardMaterialUBO::from_params(&material_params)
+            .with_texture_flags(true, false, false, false) // Enable base_color texture
+            .with_emission_texture(true); // Enable emission texture sampling
         let material_bytes = unsafe {
             std::slice::from_raw_parts(
                 &material_ubo as *const _ as *const u8,

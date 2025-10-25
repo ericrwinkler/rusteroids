@@ -306,6 +306,9 @@ impl InstanceRenderer {
         &mut self,
         dynamic_objects: &HashMap<DynamicObjectHandle, DynamicRenderData>
     ) -> VulkanResult<()> {
+        // CRITICAL: Clear previous batches to avoid accumulation across pipeline groups
+        self.batches.clear();
+        
         // Validate object count doesn't exceed our allocated capacity
         if dynamic_objects.len() > self.max_instances {
             return Err(VulkanError::InitializationFailed(
@@ -449,6 +452,9 @@ impl InstanceRenderer {
         unsafe {
             log::trace!("Binding graphics pipeline...");
             
+            // FIXME: LEGACY - Remove after modular pipeline system is complete
+            // This binds the pipeline from SharedRenderingResources (single pipeline approach)
+            // New system will pass pipeline as explicit parameter based on material type
             // Check if pipeline is null and return error instead of crashing
             if shared_resources.pipeline == vk::Pipeline::null() {
                 return Err(VulkanError::InvalidOperation {
@@ -481,6 +487,9 @@ impl InstanceRenderer {
                 vk::IndexType::UINT32,
             );
             
+            // FIXME: LEGACY - Remove after modular pipeline system is complete
+            // This uses pipeline_layout from SharedRenderingResources
+            // New system will get pipeline_layout from the explicit pipeline parameter
             // Bind both descriptor sets in a single call (set 0: frame data, set 1: material data)
             log::trace!("Binding descriptor sets...");
             device.cmd_bind_descriptor_sets(
@@ -556,6 +565,279 @@ impl InstanceRenderer {
         }
         
         log::trace!("Recorded {} individual draw calls", self.stats.draw_calls);
+        Ok(())
+    }
+    
+    /// Record instanced draw with explicit pipeline for specific instance indices
+    /// 
+    /// This version allows drawing only a subset of uploaded instances by their indices.
+    /// Used for modular pipeline rendering where all objects are uploaded once, then
+    /// drawn in multiple passes with different pipelines.
+    pub fn record_instanced_draw_with_explicit_pipeline_and_range(
+        &mut self,
+        shared_resources: &SharedRenderingResources,
+        context: &VulkanContext,
+        frame_descriptor_set: vk::DescriptorSet,
+        material_descriptor_set: vk::DescriptorSet,
+        pipeline: vk::Pipeline,
+        pipeline_layout: vk::PipelineLayout,
+        instance_indices: &[u32],
+    ) -> VulkanResult<()> {
+        let command_buffer = self.active_command_buffer
+            .ok_or_else(|| VulkanError::InvalidOperation {
+                reason: "No active command buffer".to_string()
+            })?;
+        
+        if instance_indices.is_empty() {
+            log::trace!("No instances to render for this pipeline");
+            return Ok(());
+        }
+        
+        let device = context.raw_device();
+        
+        // Validate shared resources
+        if shared_resources.index_count == 0 {
+            return Err(VulkanError::InvalidOperation {
+                reason: "No indices to render".to_string()
+            });
+        }
+        
+        log::trace!("Recording draw for {} instances with explicit pipeline...", instance_indices.len());
+        
+        // Validate critical handles
+        let vertex_buffer_handle = shared_resources.vertex_buffer.handle();
+        
+        if vertex_buffer_handle == vk::Buffer::null() {
+            return Err(VulkanError::InvalidOperation {
+                reason: "Vertex buffer handle is null".to_string()
+            });
+        }
+        
+        if command_buffer == vk::CommandBuffer::null() {
+            return Err(VulkanError::InvalidOperation {
+                reason: "Command buffer is null".to_string()
+            });
+        }
+        
+        if pipeline == vk::Pipeline::null() {
+            return Err(VulkanError::InvalidOperation {
+                reason: "Pipeline handle is null".to_string()
+            });
+        }
+        
+        unsafe {
+            // Bind the explicit pipeline
+            device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline,
+            );
+            
+            // Bind descriptor sets
+            device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline_layout,
+                0,
+                &[frame_descriptor_set, material_descriptor_set],
+                &[],
+            );
+            
+            // Set viewport and scissor
+            let extent = context.swapchain().extent();
+            let viewport = vk::Viewport::builder()
+                .x(0.0)
+                .y(0.0)
+                .width(extent.width as f32)
+                .height(extent.height as f32)
+                .min_depth(0.0)
+                .max_depth(1.0)
+                .build();
+            
+            let scissor = vk::Rect2D::builder()
+                .offset(vk::Offset2D { x: 0, y: 0 })
+                .extent(extent)
+                .build();
+            
+            device.cmd_set_viewport(command_buffer, 0, &[viewport]);
+            device.cmd_set_scissor(command_buffer, 0, &[scissor]);
+            
+            // Bind vertex and instance buffers
+            let instance_size = std::mem::size_of::<InstanceData>();
+            let frame_offset = (self.current_frame * self.max_instances * instance_size) as vk::DeviceSize;
+            let vertex_buffers = [vertex_buffer_handle, self.instance_buffer.handle()];
+            let offsets = [0, frame_offset];
+            device.cmd_bind_vertex_buffers(command_buffer, 0, &vertex_buffers, &offsets);
+            
+            // Bind index buffer
+            device.cmd_bind_index_buffer(
+                command_buffer,
+                shared_resources.index_buffer.handle(),
+                0,
+                vk::IndexType::UINT32,
+            );
+            
+            // Draw the specified instances
+            // Since instances may not be contiguous in the buffer (different pipelines interleaved),
+            // we need to draw them individually or in contiguous chunks
+            // For simplicity, draw each instance separately for now
+            for &instance_index in instance_indices {
+                log::trace!("Drawing instance at index {}", instance_index);
+                
+                device.cmd_draw_indexed(
+                    command_buffer,
+                    shared_resources.index_count,
+                    1,  // instance count
+                    0,  // first index
+                    0,  // vertex offset
+                    instance_index,  // first instance
+                );
+                
+                self.stats.draw_calls += 1;
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Record multiple individual draw calls with an explicit pipeline (MODULAR PIPELINE VERSION)
+    /// 
+    /// This version accepts explicit pipeline and pipeline_layout parameters instead of
+    /// reading them from SharedRenderingResources. This allows switching pipelines based
+    /// on material requirements.
+    pub fn record_instanced_draw_with_explicit_pipeline(
+        &mut self,
+        shared_resources: &SharedRenderingResources,
+        context: &VulkanContext,
+        frame_descriptor_set: vk::DescriptorSet,
+        material_descriptor_set: vk::DescriptorSet,
+        pipeline: vk::Pipeline,
+        pipeline_layout: vk::PipelineLayout,
+    ) -> VulkanResult<()> {
+        let command_buffer = self.active_command_buffer
+            .ok_or_else(|| VulkanError::InvalidOperation {
+                reason: "No active command buffer".to_string()
+            })?;
+        
+        if self.batches.is_empty() {
+            log::trace!("No batches to render");
+            return Ok(());
+        }
+        
+        let device = context.raw_device();
+        
+        // Validate shared resources
+        if shared_resources.index_count == 0 {
+            return Err(VulkanError::InvalidOperation {
+                reason: "No indices to render".to_string()
+            });
+        }
+        
+        log::trace!("Recording draw calls with explicit pipeline...");
+        
+        // Validate critical handles before unsafe operations
+        let vertex_buffer_handle = shared_resources.vertex_buffer.handle();
+        
+        if vertex_buffer_handle == vk::Buffer::null() {
+            return Err(VulkanError::InvalidOperation {
+                reason: "Vertex buffer handle is null".to_string()
+            });
+        }
+        
+        if command_buffer == vk::CommandBuffer::null() {
+            return Err(VulkanError::InvalidOperation {
+                reason: "Command buffer is null".to_string()
+            });
+        }
+        
+        if pipeline == vk::Pipeline::null() {
+            return Err(VulkanError::InvalidOperation {
+                reason: "Pipeline handle is null".to_string()
+            });
+        }
+        
+        unsafe {
+            // Bind the explicit pipeline
+            device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline,
+            );
+            
+            // Bind descriptor sets using explicit pipeline layout
+            device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline_layout,
+                0,
+                &[frame_descriptor_set, material_descriptor_set],
+                &[],
+            );
+            
+            // Set dynamic viewport
+            let extent = context.swapchain().extent();
+            let viewport = vk::Viewport::builder()
+                .x(0.0)
+                .y(0.0)
+                .width(extent.width as f32)
+                .height(extent.height as f32)
+                .min_depth(0.0)
+                .max_depth(1.0)
+                .build();
+            
+            let scissor = vk::Rect2D::builder()
+                .offset(vk::Offset2D { x: 0, y: 0 })
+                .extent(extent)
+                .build();
+            
+            device.cmd_set_viewport(command_buffer, 0, &[viewport]);
+            device.cmd_set_scissor(command_buffer, 0, &[scissor]);
+            
+            // Bind BOTH vertex buffer (binding 0) and instance buffer (binding 1)
+            let instance_size = std::mem::size_of::<InstanceData>();
+            let frame_offset = (self.current_frame * self.max_instances * instance_size) as vk::DeviceSize;
+            let vertex_buffers = [vertex_buffer_handle, self.instance_buffer.handle()];
+            let offsets = [0, frame_offset];
+            device.cmd_bind_vertex_buffers(command_buffer, 0, &vertex_buffers, &offsets);
+            
+            // Bind index buffer
+            device.cmd_bind_index_buffer(
+                command_buffer,
+                shared_resources.index_buffer.handle(),
+                0,
+                vk::IndexType::UINT32,
+            );
+            
+            // Draw all batches
+            let mut current_instance_offset = 0;
+            let mut total_objects = 0;
+            
+            for (batch_idx, batch) in self.batches.iter().enumerate() {
+                let instance_count = batch.instance_count() as u32;
+                
+                if instance_count == 0 {
+                    continue;
+                }
+                
+                log::trace!("Recording instanced draw for batch {} with {} instances", batch_idx, instance_count);
+                
+                device.cmd_draw_indexed(
+                    command_buffer,
+                    shared_resources.index_count,
+                    instance_count,
+                    0,
+                    0,
+                    current_instance_offset,
+                );
+                
+                self.stats.draw_calls += 1;
+                total_objects += instance_count;
+                current_instance_offset += instance_count;
+            }
+            
+            log::trace!("Completed {} draw calls for {} objects with explicit pipeline", self.stats.draw_calls, total_objects);
+        }
+        
         Ok(())
     }
     

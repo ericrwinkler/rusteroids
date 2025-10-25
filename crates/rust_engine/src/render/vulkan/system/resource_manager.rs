@@ -24,6 +24,8 @@ pub struct ResourceManager {
     
     // Command pool for transfers
     command_pool: CommandPool,
+    /// Extra dynamically loaded textures kept alive here so descriptor sets can reference them
+    loaded_textures: Vec<Texture>,
 }
 
 impl ResourceManager {
@@ -99,7 +101,20 @@ impl ResourceManager {
             default_normal_texture,
             default_metallic_roughness_texture,
             command_pool,
+            loaded_textures: Vec::new(),
         })
+    }
+
+    /// Add a loaded texture to the resource manager to keep it alive and return its index
+    pub fn add_loaded_texture(&mut self, texture: Texture) -> usize {
+        let idx = self.loaded_textures.len();
+        self.loaded_textures.push(texture);
+        idx
+    }
+
+    /// Get a reference to a previously loaded texture
+    pub fn get_loaded_texture(&self, idx: usize) -> Option<&Texture> {
+        self.loaded_textures.get(idx)
     }
     
     /// Allocate descriptor sets for frame and material data
@@ -304,6 +319,11 @@ impl ResourceManager {
     /// Get the descriptor pool for creating additional descriptor sets
     pub fn get_descriptor_pool(&self) -> vk::DescriptorPool {
         self.descriptor_pool.handle()
+    }
+
+    /// Get the raw command pool handle for transfer operations
+    pub fn command_pool_handle(&self) -> vk::CommandPool {
+        self.command_pool.handle()
     }
     
     /// Get the default white texture (base color placeholder)

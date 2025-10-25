@@ -382,7 +382,8 @@ impl MeshPoolManager {
     /// but uses each pool's dedicated InstanceRenderer to prevent state corruption.
     pub fn render_all_pools_via_backend(
         &mut self, 
-        backend: &mut dyn crate::render::backend::RenderBackend
+        backend: &mut dyn crate::render::backend::RenderBackend,
+        camera_position: crate::foundation::math::Vec3
     ) -> Result<(), String> {
         log::debug!("Rendering all active pools via backend with dedicated renderers");
         
@@ -399,8 +400,8 @@ impl MeshPoolManager {
                         let active_objects = pool.get_active_objects_map();
                         log::debug!("Rendering {} objects of type {:?} with dedicated renderer", active_objects.len(), mesh_type);
                         
-                        // Use the VulkanRenderer's new dedicated method
-                        vulkan_renderer.record_dynamic_draws_with_dedicated_renderer(instance_renderer, &active_objects, shared_resources)
+                        // Use the VulkanRenderer's new dedicated method with camera position for sorting
+                        vulkan_renderer.record_dynamic_draws_with_dedicated_renderer(instance_renderer, &active_objects, shared_resources, camera_position)
                             .map_err(|e| format!("Failed to record draws with dedicated renderer for {:?}: {}", mesh_type, e))?;
                         
                         total_objects += active_objects.len();

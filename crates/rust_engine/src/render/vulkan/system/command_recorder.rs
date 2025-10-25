@@ -165,7 +165,8 @@ impl CommandRecorder {
                 &clear_values,
             )?;
             
-            // Bind pipeline
+            // FIXME: LEGACY - Remove after modular pipeline system is complete
+            // Bind pipeline (assumes single active pipeline for all objects)
             if let Some(active_pipeline) = pipeline_manager.get_active_pipeline() {
                 render_pass_recorder.cmd_bind_pipeline(vk::PipelineBindPoint::GRAPHICS, active_pipeline.handle());
             } else {
@@ -191,7 +192,8 @@ impl CommandRecorder {
             render_pass_recorder.set_viewport(&viewport);
             render_pass_recorder.set_scissor(&scissor);
             
-            // Bind descriptor sets
+            // FIXME: LEGACY - Remove after modular pipeline system is complete
+            // Bind descriptor sets (assumes single active pipeline)
             if let Some(active_pipeline) = pipeline_manager.get_active_pipeline() {
                 // Bind Set 0 (frame data: camera + lighting)
                 render_pass_recorder.cmd_bind_descriptor_sets(
@@ -509,6 +511,8 @@ impl<'a> MultipleObjectSession<'a> {
             material_color,
         };
         
+        // FIXME: LEGACY - Remove after modular pipeline system is complete
+        // This uses the single active pipeline for all objects
         if let Some(active_pipeline) = self.pipeline_manager.get_active_pipeline() {
             // Bind frame descriptor sets (Set 0: camera + lighting)
             self.render_pass_recorder.cmd_bind_descriptor_sets(

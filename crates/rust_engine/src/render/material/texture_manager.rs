@@ -1,10 +1,14 @@
 //! Texture Management for Material System
 //!
-//! This module will handle texture loading, GPU upload, and binding
-//! for the material system. Currently provides placeholder functionality.
+//! This module handles texture loading, GPU upload, and binding
+//! for the material system.
 
 use std::collections::HashMap;
-use crate::render::vulkan::VulkanResult;
+use std::sync::Arc;
+use ash::vk;
+use crate::render::vulkan::{VulkanResult, VulkanError};
+use crate::render::vulkan::core::Texture;
+use crate::assets::ImageData;
 
 /// Handle for a GPU texture resource
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -66,15 +70,22 @@ impl Default for TextureParams {
     }
 }
 
-/// Placeholder texture manager
+/// Texture manager that handles loading and GPU management
 /// 
-/// This will be expanded to handle actual texture loading and GPU management
-/// when we implement the full texture system.
+/// Stores Vulkan textures and provides texture handle mapping
 pub struct TextureManager {
-    /// Registered texture handles
-    textures: HashMap<TextureHandle, TextureInfo>,
+    /// Loaded Vulkan textures mapped by handle
+    textures: HashMap<TextureHandle, Arc<Texture>>,
+    /// Texture metadata
+    texture_info: HashMap<TextureHandle, TextureInfo>,
     /// Next available texture handle
     next_handle: u32,
+    /// Vulkan context for texture creation
+    device: Arc<ash::Device>,
+    instance: Arc<ash::Instance>,
+    physical_device: vk::PhysicalDevice,
+    command_pool: vk::CommandPool,
+    graphics_queue: vk::Queue,
 }
 
 /// Information about a loaded texture
@@ -91,23 +102,47 @@ pub struct TextureInfo {
 }
 
 impl TextureManager {
-    /// Create a new texture manager
-    pub fn new() -> Self {
+    /// Create a new texture manager with Vulkan context
+    pub fn new(
+        device: Arc<ash::Device>,
+        instance: Arc<ash::Instance>,
+        physical_device: vk::PhysicalDevice,
+        command_pool: vk::CommandPool,
+        graphics_queue: vk::Queue,
+    ) -> Self {
         Self {
             textures: HashMap::new(),
+            texture_info: HashMap::new(),
             next_handle: 1, // Start from 1, reserve 0 for "no texture"
+            device,
+            instance,
+            physical_device,
+            command_pool,
+            graphics_queue,
         }
     }
 
-    /// Load a texture from file (placeholder)
-    /// 
-    /// TODO: Implement actual texture loading with image crate
+    /// Load a texture from file
     pub fn load_texture_from_file(
         &mut self,
-        _file_path: &str,
+        file_path: &str,
         texture_type: TextureType,
         params: TextureParams,
     ) -> VulkanResult<TextureHandle> {
+        // Load image data from file
+        let image_data = ImageData::from_file(file_path)
+            .map_err(|e| VulkanError::InitializationFailed(format!("Failed to load image: {}", e)))?;
+
+        // Create Vulkan texture from image data
+        let texture = Texture::from_image_data(
+            self.device.clone(),
+            self.instance.clone(),
+            self.physical_device,
+            self.command_pool,
+            self.graphics_queue,
+            &image_data,
+        )?;
+
         let handle = TextureHandle(self.next_handle);
         self.next_handle += 1;
 
@@ -115,21 +150,35 @@ impl TextureManager {
             handle,
             texture_type,
             params,
-            name: None,
+            name: Some(file_path.to_string()),
         };
 
-        self.textures.insert(handle, texture_info);
+        self.textures.insert(handle, Arc::new(texture));
+        self.texture_info.insert(handle, texture_info);
 
-        log::debug!("Loaded texture {:?} of type {:?}", handle, texture_type);
+        log::debug!("Loaded texture {:?} from {} of type {:?}", handle, file_path, texture_type);
         Ok(handle)
     }
 
     /// Create a solid color texture (useful for testing)
     pub fn create_solid_color_texture(
         &mut self,
-        _color: [u8; 4], // RGBA
+        color: [u8; 4], // RGBA
         texture_type: TextureType,
     ) -> VulkanResult<TextureHandle> {
+        // Create 1x1 image data
+        let image_data = ImageData::solid_color(1, 1, color);
+
+        // Create Vulkan texture from image data
+        let texture = Texture::from_image_data(
+            self.device.clone(),
+            self.instance.clone(),
+            self.physical_device,
+            self.command_pool,
+            self.graphics_queue,
+            &image_data,
+        )?;
+
         let handle = TextureHandle(self.next_handle);
         self.next_handle += 1;
 
@@ -140,15 +189,21 @@ impl TextureManager {
             name: Some(format!("SolidColor_{:?}", texture_type)),
         };
 
-        self.textures.insert(handle, texture_info);
+        self.textures.insert(handle, Arc::new(texture));
+        self.texture_info.insert(handle, texture_info);
 
         log::debug!("Created solid color texture {:?} of type {:?}", handle, texture_type);
         Ok(handle)
     }
 
+    /// Get the Vulkan texture for a handle
+    pub fn get_texture(&self, handle: TextureHandle) -> Option<Arc<Texture>> {
+        self.textures.get(&handle).cloned()
+    }
+
     /// Get texture information
     pub fn get_texture_info(&self, handle: TextureHandle) -> Option<&TextureInfo> {
-        self.textures.get(&handle)
+        self.texture_info.get(&handle)
     }
 
     /// Get number of loaded textures
@@ -159,12 +214,6 @@ impl TextureManager {
     /// Get all texture handles
     pub fn get_all_texture_handles(&self) -> Vec<TextureHandle> {
         self.textures.keys().copied().collect()
-    }
-}
-
-impl Default for TextureManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -183,6 +232,8 @@ pub struct MaterialTextures {
     pub ambient_occlusion: Option<TextureHandle>,
     /// Emission texture
     pub emission: Option<TextureHandle>,
+    /// Opacity texture
+    pub opacity: Option<TextureHandle>,
 }
 
 impl MaterialTextures {
@@ -216,6 +267,7 @@ impl MaterialTextures {
             || self.metallic_roughness.is_some()
             || self.ambient_occlusion.is_some()
             || self.emission.is_some()
+            || self.opacity.is_some()
     }
 
     /// Get texture usage flags for UBO
@@ -227,18 +279,21 @@ impl MaterialTextures {
             if self.ambient_occlusion.is_some() { 1 } else { 0 },
         ]
     }
+
+    /// Check if emission texture is present
+    pub fn has_emission_texture(&self) -> bool {
+        self.emission.is_some()
+    }
+
+    /// Check if opacity texture is present
+    pub fn has_opacity_texture(&self) -> bool {
+        self.opacity.is_some()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_texture_manager_creation() {
-        let manager = TextureManager::new();
-        assert_eq!(manager.texture_count(), 0);
-        assert_eq!(manager.next_handle, 1);
-    }
 
     #[test]
     fn test_material_textures() {

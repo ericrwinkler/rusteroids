@@ -304,6 +304,43 @@ println!("Light count: {}", lights.len());
 println!("Light direction: {:?}", lights[0].direction);
 ```
 
+#### **Instanced Rendering: Materials Show Wrong Colors/Alpha**
+**Symptoms**:
+- All unlit objects show the same cream/tan color (0.8, 0.6, 0.4)
+- Transparent materials appear fully opaque
+- Per-object material colors are ignored
+
+**Root Cause**: Fragment shader reading from Material UBO instead of instance buffer
+```glsl
+// ❌ INCORRECT (reads default UBO, not per-instance data)
+void main() {
+    vec3 color = material.base_color.rgb;  // Wrong source!
+    float alpha = material.base_color.a;
+    fragColor = vec4(color, alpha);
+}
+
+// ✅ CORRECT (reads per-instance material data)
+void main() {
+    vec3 color = fragInstanceMaterialColor.rgb;  // Correct source!
+    float alpha = fragInstanceMaterialColor.a;
+    fragColor = vec4(color, alpha);
+}
+```
+
+**Explanation**:
+- For **instanced rendering**, material data is uploaded via the instance buffer (binding 1) as `InstanceData::material_color`
+- The Material UBO (Set 1, Binding 0) contains default/neutral values (e.g., tan color 0.8, 0.6, 0.4)
+- If shaders read from the UBO instead of `fragInstanceMaterialColor`, all objects get the default UBO color
+- Unlit shaders should use `fragInstanceMaterialColor` directly
+- PBR shaders should multiply `material.base_color * fragInstanceMaterialColor` for material params + per-instance tinting
+
+**Solution**: Update fragment shaders to read from `fragInstanceMaterialColor` for instanced rendering
+
+**Files to Check**:
+- `resources/shaders/unlit_frag.frag` - Should use `fragInstanceMaterialColor`
+- `resources/shaders/standard_pbr_frag.frag` - Should multiply UBO and instance colors
+- Recompile shaders: `cargo run --manifest-path tools/shader_compiler/Cargo.toml`
+
 ---
 
 ## 🛠️ **DEVELOPMENT TOOLS**

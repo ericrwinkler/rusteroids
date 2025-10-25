@@ -10,6 +10,7 @@ use rust_engine::render::{
     Mesh,
     Material,
     StandardMaterialParams,
+    UnlitMaterialParams,
     lighting::{LightingEnvironment, Light, MultiLightEnvironment},
     GraphicsEngine,
     VulkanRendererConfig,
@@ -76,53 +77,63 @@ impl IntegratedApp {
         camera.set_position(Vec3::new(4.0, 4.0, 8.0)); // Y-up: +Y = above, +Z = away from origin
         camera.look_at(Vec3::new(0.0, -1.0, 0.0), Vec3::new(0.0, 1.0, 0.0)); // Look down at teapot, Y-up vector
         
-        // Create multiple materials for demonstration
+        // Create materials to test all 4 pipeline types
+        log::info!("Creating test materials for all pipeline types...");
         let teapot_materials = vec![
-            // Material 1: Classic ceramic (warm tan, medium roughness)
+            // ==== OPAQUE MATERIALS (StandardPBR + Unlit pipelines) ====
+            
+            // 1. StandardPBR - Opaque ceramic (classic PBR with lighting)
             Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.8, 0.7, 0.5), // Warm tan
+                base_color: Vec3::new(0.8, 0.2, 0.2), // Red
                 alpha: 1.0,
                 metallic: 0.1,
                 roughness: 0.3,
                 ..Default::default()
-            }).with_name("Ceramic Teapot"),
+            }).with_name("Opaque PBR (Red Ceramic)"),
             
-            // Material 2: Metallic (silver-like, low roughness)
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.9, 0.9, 0.9), // Light gray
+            // 2. Unlit - Opaque flat green (no lighting calculations)
+            Material::unlit(UnlitMaterialParams {
+                color: Vec3::new(0.2, 0.8, 0.2), // Green
                 alpha: 1.0,
-                metallic: 0.9, // Very metallic
-                roughness: 0.1, // Very smooth
-                ..Default::default()
-            }).with_name("Metallic Silver"),
+            }).with_name("Opaque Unlit (Flat Green)"),
             
-            // Material 3: Rough plastic (bright color, high roughness)
+            // 3. StandardPBR - Metallic gold (high metallic for reflections)
             Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.2, 0.6, 0.9), // Bright blue
-                alpha: 1.0,
-                metallic: 0.0, // Non-metallic
-                roughness: 0.8, // Very rough
-                ..Default::default()
-            }).with_name("Rough Plastic"),
-            
-            // Material 4: Gold (yellow metallic, medium roughness)
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(1.0, 0.8, 0.2), // Golden yellow
+                base_color: Vec3::new(1.0, 0.8, 0.2), // Golden
                 alpha: 1.0,
                 metallic: 0.9,
                 roughness: 0.2,
                 ..Default::default()
-            }).with_name("Gold"),
+            }).with_name("Opaque PBR (Gold)"),
             
-            // Material 5: Jade (green, slightly metallic)
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.2, 0.7, 0.3), // Deep green
-                alpha: 1.0,
-                metallic: 0.3,
+            // ==== TRANSPARENT MATERIALS (TransparentPBR + TransparentUnlit pipelines) ====
+            
+            // 4. TransparentPBR - Blue glass (semi-transparent with lighting)
+            Material::transparent_pbr(StandardMaterialParams {
+                base_color: Vec3::new(0.2, 0.2, 0.8), // Blue
+                alpha: 0.5, // 50% transparent
+                metallic: 0.1,
+                roughness: 0.1, // Smooth like glass
+                ..Default::default()
+            }).with_name("Transparent PBR (Blue Glass)"),
+            
+            // 5. TransparentUnlit - Yellow ghost (semi-transparent, no lighting)
+            Material::transparent_unlit(UnlitMaterialParams {
+                color: Vec3::new(0.8, 0.8, 0.2), // Yellow
+                alpha: 0.5, // 50% transparent
+            }).with_name("Transparent Unlit (Yellow Ghost)"),
+            
+            // 6. TransparentPBR - Highly transparent cyan (test depth sorting)
+            Material::transparent_pbr(StandardMaterialParams {
+                base_color: Vec3::new(0.2, 0.8, 0.8), // Cyan
+                alpha: 0.3, // 70% transparent
+                metallic: 0.2,
                 roughness: 0.4,
                 ..Default::default()
-            }).with_name("Jade"),
+            }).with_name("Transparent PBR (Cyan)"),
         ];
+        
+        log::info!("Created {} test materials covering all 4 pipeline types", teapot_materials.len());
         
         let current_material_index = 0;
         

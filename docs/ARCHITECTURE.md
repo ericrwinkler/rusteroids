@@ -526,6 +526,33 @@ pub enum MaterialType {
 }
 ```
 
+#### ⚠️ **CRITICAL: Instanced Rendering Material Architecture**
+
+**For instanced rendering (dynamic objects), material data flows through the instance buffer, NOT material UBOs.**
+
+##### Instance Buffer Material Data (✅ CORRECT PATH)
+```rust
+// Per-instance data uploaded to GPU (binding 1)
+pub struct InstanceData {
+    pub model_matrix: [[f32; 4]; 4],
+    pub normal_matrix: [[f32; 4]; 4],
+    pub material_color: [f32; 4],  // ← Contains base_color + alpha
+    pub material_index: u32,
+    pub _padding: [u32; 3],
+}
+```
+
+**Shader Usage**:
+- `fragInstanceMaterialColor` contains the actual per-object material color/alpha
+- Material UBO (Set 1, Binding 0) should contain neutral defaults (white, alpha=1.0) for instanced rendering
+- Unlit shaders: Use `fragInstanceMaterialColor` directly (no UBO)
+- PBR shaders: Multiply `material.base_color * fragInstanceMaterialColor` (UBO provides material params, instance provides tinting)
+
+**Common Pitfall**: Unlit shaders reading from `material.base_color` UBO instead of `fragInstanceMaterialColor` will show incorrect colors (the default UBO color instead of per-instance colors).
+
+##### Material UBO System (Legacy/Single-Object Rendering)
+The Material UBO system (`update_material()` in `ubo_manager.rs`) is designed for single-object rendering where each object has its own descriptor set. For instanced rendering, this code path is **not used** - material data comes from the instance buffer instead.
+
 #### Static Material Properties
 ```rust
 #[repr(C, align(16))]

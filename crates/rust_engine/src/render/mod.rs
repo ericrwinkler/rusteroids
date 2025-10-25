@@ -64,7 +64,11 @@ pub use material::{
     StandardMaterialParams, UnlitMaterialParams,
     MaterialManager, TextureManager, MaterialTextures, TextureHandle, TextureType
 };
-pub use pipeline::{PipelineManager, PipelineConfig, CullMode};
+pub use pipeline::{
+    PipelineManager, PipelineConfig, CullMode,
+    // Future rendering attributes (currently stubbed with FIXME)
+    BlendMode, RenderPriority, PolygonMode, DepthBiasConfig,
+};
 pub use render_queue::{RenderQueue, RenderCommand, CommandType, RenderCommandId};
 pub use game_object::{GameObject, ObjectUBO, cleanup_game_object};
 #[deprecated(since = "0.1.0", note = "SharedRenderingResources is now internal - use MeshHandle/MaterialHandle instead")]
@@ -77,7 +81,7 @@ use thiserror::Error;
 use crate::foundation::math::{Vec3, Mat4, Mat4Ext, utils};
 use crate::render::dynamic::{
     MeshPoolManager, MeshType, DynamicObjectHandle,
-    SpawnerError, MaterialProperties
+    SpawnerError
 };
 
 /// # Graphics Engine
@@ -852,7 +856,7 @@ impl GraphicsEngine {
         position: Vec3,
         rotation: Vec3,
         scale: Vec3,
-        material: MaterialProperties,
+        material: Material,
     ) -> Result<DynamicObjectHandle, SpawnerError> {
         // Ensure pool system is initialized
         let pool_manager = self.pool_manager.as_mut()
@@ -860,26 +864,8 @@ impl GraphicsEngine {
                 reason: "Pool system not initialized - call initialize_dynamic_system() first".to_string()
             })?;
         
-        // Convert MaterialProperties to Material
-        let material_instance = Material::standard_pbr(crate::render::material::StandardMaterialParams {
-            base_color: Vec3::new(
-                material.base_color[0],
-                material.base_color[1],
-                material.base_color[2]
-            ),
-            alpha: material.base_color[3],
-            metallic: material.metallic,
-            roughness: material.roughness,
-            emission: Vec3::new(
-                material.emission[0],
-                material.emission[1],
-                material.emission[2]
-            ),
-            ..Default::default()
-        });
-        
-        // Spawn the object in the appropriate mesh pool
-        let handle = pool_manager.spawn_object(mesh_type, position, rotation, scale, material_instance)
+        // Spawn the object in the appropriate mesh pool with the provided material
+        let handle = pool_manager.spawn_object(mesh_type, position, rotation, scale, material)
             .map_err(|e| SpawnerError::InvalidParameters {
                 reason: format!("Pool manager spawn failed: {}", e)
             })?;
@@ -1058,8 +1044,13 @@ impl GraphicsEngine {
                 log::trace!("Recording draws for {} active dynamic objects across {} pools", 
                            stats.total_active_objects, stats.render_batches_per_frame);
                 
+                // Get camera position for depth sorting
+                let camera_position = self.current_camera.as_ref()
+                    .map(|cam| cam.position)
+                    .unwrap_or(Vec3::zeros());
+                
                 // Use MeshPoolManager's proper render method to avoid state corruption between mesh types
-                pool_manager.render_all_pools_via_backend(&mut *self.backend)
+                pool_manager.render_all_pools_via_backend(&mut *self.backend, camera_position)
                     .map_err(|e| format!("Failed to render dynamic object pools: {}", e))?;
                 
                 log::debug!("Dynamic object rendering completed: {} total objects across {} mesh types", 

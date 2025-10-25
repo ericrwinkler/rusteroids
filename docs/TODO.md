@@ -519,6 +519,1006 @@ pub struct MaterialArraySystem {
 - [ ] CPU frame time < 8ms for rendering systems
 - [ ] State changes per frame < 50 (vs. current 600+)
 
+---
+
+## 🎨 **MODULAR RENDERING PIPELINE SYSTEM** (NEW PRIORITY)
+
+### **Current State Analysis**
+- ✅ **Working**: Single StandardPBR pipeline for opaque, lit objects
+- ✅ **Partial**: Transparent pipeline types defined but not fully integrated
+- ❌ **Missing**: Flexible pipeline switching based on material attributes
+- 🎯 **Goal**: Modular system supporting opaque/transparent + lit/unlit combinations
+
+### **Motivation**
+The current system uses a single pipeline type (StandardPBR) for all dynamic objects. We need flexible pipeline selection to support:
+- **Opaque + Lit**: Full PBR with lighting (current default)
+- **Opaque + Unlit**: Simple color rendering without lighting calculations
+- **Transparent + Lit**: PBR with alpha blending and lighting
+- **Transparent + Unlit**: Simple transparent color without lighting
+
+### **Architecture Overview**
+```
+Material Attributes → Pipeline Selection → Optimized Rendering
+     ↓                       ↓                     ↓
+(transparency,         PipelineType         Batch by Pipeline
+ lighting mode)         (.StandardPBR,        + Material
+                        .Unlit,
+                        .TransparentPBR,
+                        .TransparentUnlit)
+```
+
+---
+
+## 📋 **PHASE 0: PIPELINE INFRASTRUCTURE AUDIT** ✅
+
+### **Step 0.1: Inventory Existing Pipelines**
+
+**Objective**: Understand what's already implemented vs. what needs work
+
+#### **Current Files**:
+- ✅ `pipeline_manager.rs` - Manages multiple pipeline types
+- ✅ `pipeline_config.rs` - Defines StandardPBR, Unlit, TransparentPBR, TransparentUnlit configs
+- ✅ `material_type.rs` - MaterialType enum with transparency support
+
+#### **Existing Pipeline Types**:
+```rust
+pub enum PipelineType {
+    StandardPBR,        // ✅ Implemented & used
+    Unlit,              // ✅ Implemented but rarely used
+    TransparentPBR,     // ⚠️ Defined but not initialized
+    TransparentUnlit,   // ⚠️ Defined but not initialized
+}
+```
+
+#### **Current Shader Availability**:
+- ✅ `multi_light_vert.spv` / `multi_light_frag.spv` - StandardPBR (lit, opaque)
+- ✅ `vert_material_ubo.spv` / `frag_material_ubo.spv` - Unlit (opaque)
+- ⚠️ `standard_pbr_vert.spv` / `standard_pbr_frag.spv` - TransparentPBR (needs testing)
+- ⚠️ `vert_ubo.spv` / `unlit_frag.spv` - TransparentUnlit (needs testing)
+
+#### **Gap Analysis**:
+1. **Pipeline Initialization**: Only StandardPBR and Unlit are initialized (line 52-57 in `pipeline_manager.rs`)
+2. **Pipeline Selection**: Logic exists but transparent pipelines commented out as "TODO"
+3. **Shader Support**: Shaders exist for all types but need validation
+4. **Dynamic Integration**: Dynamic object system uses single pipeline from SharedRenderingResources
+
+**Success Criteria**:
+- [x] Document all existing pipeline types and their status
+- [x] Identify which shaders are compiled and available
+- [x] Map MaterialType → PipelineType conversion logic
+- [x] Understand current bottlenecks in pipeline switching
+
+---
+
+### **Step 0.2: Add Attribute Stubs for Future Extensions**
+
+**Objective**: Add placeholder enums/structs for additional rendering attributes to make future implementation easier
+
+#### **Additional Attributes Identified**:
+- **Blend Modes**: Additive, Multiplicative, Premultiplied (for particles, lights, effects)
+- **Render Queue**: Background, Geometry, AlphaTest, Transparent, Overlay (rendering order)
+- **Two-Sided Rendering**: Disable culling for leaves, cloth, paper
+- **Polygon Mode**: Fill, Line, Point (debug visualization, wireframe)
+- **Depth Bias**: Constant/slope factors (decals, shadow maps)
+- **Color Write Mask**: R/G/B/A channel control
+- **Stencil Operations**: Masking, outlining, portal effects
+- **Depth Compare Op**: Less, LessOrEqual, Greater, Always
+
+#### **File**: `crates/rust_engine/src/render/pipeline/pipeline_config.rs`
+
+**Add stub enums at the top of the file**:
+```rust
+// FIXME: Implement BlendMode variants when particle system is added
+/// Blending modes for different rendering effects
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlendMode {
+    /// Standard alpha blending (current implementation)
+    Alpha,
+    /// Additive blending for particles and lights (FIXME: implement)
+    Additive,
+    /// Multiplicative blending for shadows (FIXME: implement)
+    Multiplicative,
+    /// Pre-multiplied alpha (FIXME: implement)
+    Premultiplied,
+}
+
+// FIXME: Implement RenderQueue system for automatic ordering
+/// Render queue determines when objects are rendered relative to others
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RenderQueue {
+    Background = 1000,   // Skybox, far background
+    Geometry = 2000,     // Opaque solid objects
+    AlphaTest = 2450,    // Cutout materials (alpha testing)
+    Transparent = 3000,  // Transparent objects (back-to-front)
+    Overlay = 4000,      // UI, screen-space effects
+}
+
+// FIXME: Implement when debug visualization is needed
+/// Polygon rendering mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolygonMode {
+    Fill,   // Normal solid rendering (current)
+    Line,   // Wireframe mode
+    Point,  // Point cloud mode
+}
+
+// FIXME: Implement when decal system is added
+/// Depth bias configuration to prevent z-fighting
+#[derive(Debug, Clone, Copy)]
+pub struct DepthBiasConfig {
+    pub enabled: bool,
+    pub constant_factor: f32,
+    pub slope_factor: f32,
+    pub clamp: f32,
+}
+```
+
+**Add fields to `PipelineConfig` (commented out with FIXME)**:
+```rust
+pub struct PipelineConfig {
+    // ... existing fields ...
+    
+    // FIXME: Uncomment and implement when blend modes are needed
+    // pub blend_mode: BlendMode,
+    
+    // FIXME: Uncomment and implement when render queues are needed
+    // pub render_queue: RenderQueue,
+    
+    // FIXME: Uncomment and implement for two-sided materials
+    // pub two_sided: bool,
+    
+    // FIXME: Uncomment and implement when wireframe debug is needed
+    // pub polygon_mode: PolygonMode,
+    
+    // FIXME: Uncomment and implement when decal system is added
+    // pub depth_bias: Option<DepthBiasConfig>,
+}
+```
+
+#### **File**: `crates/rust_engine/src/render/material/material_type.rs`
+
+**Add render queue helper (commented)**:
+```rust
+impl Material {
+    // FIXME: Implement automatic render queue assignment
+    // pub fn render_queue(&self) -> RenderQueue {
+    //     match &self.material_type {
+    //         MaterialType::StandardPBR(_) => RenderQueue::Geometry,
+    //         MaterialType::Unlit(_) => RenderQueue::Geometry,
+    //         MaterialType::Transparent { alpha_mode, .. } => {
+    //             match alpha_mode {
+    //                 AlphaMode::Mask(_) => RenderQueue::AlphaTest,
+    //                 _ => RenderQueue::Transparent,
+    //             }
+    //         }
+    //     }
+    // }
+}
+```
+
+**Success Criteria**:
+- [x] Stub enums/structs added with FIXME comments
+- [x] Future attributes documented with use cases
+- [x] Fields in PipelineConfig commented out but ready to enable
+- [x] Code compiles without warnings
+- [x] No functional changes to existing rendering
+
+---
+
+## 📋 **PHASE 1: ENABLE ALL PIPELINE TYPES**
+
+### **Step 1.1: Initialize Transparent Pipelines** ✅
+
+**Objective**: Enable TransparentPBR and TransparentUnlit pipelines at startup
+
+#### **Completed Changes**:
+
+**File**: `crates/rust_engine/src/render/pipeline/pipeline_manager.rs`
+
+- ✅ Added initialization for `PipelineConfig::transparent_pbr()`
+- ✅ Added initialization for `PipelineConfig::transparent_unlit()`
+- ✅ Removed TODO comment about unimplemented pipelines
+- ✅ Added informative log messages for pipeline initialization
+
+**Verification Results**:
+```
+[INFO] Initializing rendering pipelines...
+[INFO] Creating StandardPBR pipeline
+[INFO] StandardPBR pipeline created successfully
+[INFO] Creating Unlit pipeline
+[INFO] Unlit pipeline created successfully
+[INFO] Initializing transparent rendering pipelines...
+[INFO] Creating TransparentPBR pipeline
+[INFO] TransparentPBR pipeline created successfully
+[INFO] Creating TransparentUnlit pipeline
+[INFO] TransparentUnlit pipeline created successfully
+[INFO] Successfully initialized 4 rendering pipelines: StandardPBR, Unlit, TransparentPBR, TransparentUnlit
+```
+
+**Success Criteria**:
+- [x] All 4 pipeline types initialize without errors
+- [x] Log confirms all pipelines created successfully
+- [x] Vulkan validation layer reports no errors (pipeline-related)
+- [x] Existing teapot app still renders correctly (StandardPBR)
+- [x] No performance regression (60+ FPS maintained)
+
+---
+
+### **Step 1.2: Validate Shader Compatibility** ✅
+
+**Objective**: Ensure all shader pairs work with instanced vertex layout
+
+#### **Completed Changes**:
+
+**File**: `crates/rust_engine/src/render/material/material_type.rs`
+- ✅ Added `Material::transparent_pbr()` constructor
+- ✅ Added `Material::transparent_unlit()` constructor  
+- ✅ These create `MaterialType::Transparent` enum variant with appropriate base material
+
+**File**: `teapot_app/src/main_dynamic.rs`
+- ✅ Replaced material list with test materials covering all 4 pipeline types
+- ✅ Added 10 test materials:
+  - 4 opaque (2× StandardPBR, 2× Unlit)
+  - 6 transparent (4× TransparentPBR, 2× TransparentUnlit)
+
+**Verification Results**:
+```
+[INFO] Creating test materials for all 4 pipeline types...
+[INFO] Spawned teapot #1 at [...] with Opaque PBR (Red Ceramic) material
+[INFO] Spawned teapot #2 at [...] with Opaque Unlit (Flat Green) material
+[INFO] Spawned teapot #3 at [...] with Transparent PBR (Blue Glass) material
+[INFO] Spawned teapot #4 at [...] with Transparent Unlit (Yellow Ghost) material
+```
+
+**Current Behavior**:
+- ✅ Materials spawn and cycle through correctly
+- ✅ Material names appear in logs
+- ❌ All materials look the same (all using StandardPBR pipeline)
+- ❌ Transparent materials are not transparent
+- ❌ Unlit materials still show lighting effects
+
+**Why**: The dynamic rendering system doesn't check `material.required_pipeline()` yet - all objects use the default pipeline from `SharedRenderingResources`.
+
+**Success Criteria**:
+- [x] Test materials created for all 4 pipeline types
+- [x] Materials spawn in dynamic demo
+- [x] Material names logged correctly
+- [x] No crashes or compilation errors
+- [ ] **BLOCKED**: Visual correctness requires Phase 2 (pipeline switching)
+
+---
+
+## 📋 **PHASE 2: DYNAMIC PIPELINE SWITCHING**
+
+**Objective**: Enable TransparentPBR and TransparentUnlit pipelines at startup
+
+#### **File**: `crates/rust_engine/src/render/pipeline/pipeline_manager.rs`
+
+**Changes Required**:
+```rust
+// CURRENT (lines 52-62):
+pub fn initialize_standard_pipelines(
+    &mut self,
+    context: &VulkanContext,
+    render_pass: vk::RenderPass,
+    descriptor_set_layouts: &[vk::DescriptorSetLayout],
+) -> VulkanResult<()> {
+    // Initialize StandardPBR pipeline first
+    self.create_pipeline(/* ... */)?;
+    
+    // Initialize Unlit pipeline as backup
+    self.create_pipeline(/* ... */)?;
+    
+    // TODO: Initialize other pipelines once fully tested
+    
+    Ok(())
+}
+
+// NEW (enable all pipelines):
+pub fn initialize_standard_pipelines(
+    &mut self,
+    context: &VulkanContext,
+    render_pass: vk::RenderPass,
+    descriptor_set_layouts: &[vk::DescriptorSetLayout],
+) -> VulkanResult<()> {
+    // Initialize all opaque pipelines
+    self.create_pipeline(
+        context,
+        render_pass,
+        PipelineConfig::standard_pbr(),
+        Self::create_vertex_input_info(),
+        descriptor_set_layouts,
+    )?;
+    
+    self.create_pipeline(
+        context,
+        render_pass,
+        PipelineConfig::unlit(),
+        Self::create_vertex_input_info(),
+        descriptor_set_layouts,
+    )?;
+    
+    // Initialize transparent pipelines
+    self.create_pipeline(
+        context,
+        render_pass,
+        PipelineConfig::transparent_pbr(),
+        Self::create_vertex_input_info(),
+        descriptor_set_layouts,
+    )?;
+    
+    self.create_pipeline(
+        context,
+        render_pass,
+        PipelineConfig::transparent_unlit(),
+        Self::create_vertex_input_info(),
+        descriptor_set_layouts,
+    )?;
+    
+    log::info!("Initialized 4 rendering pipelines: StandardPBR, Unlit, TransparentPBR, TransparentUnlit");
+    
+    // Set StandardPBR as default
+    self.active_pipeline = Some(PipelineType::StandardPBR);
+    
+    Ok(())
+}
+```
+
+**Verification Steps**:
+1. Build and run: `cargo build`
+2. Check logs for "Initialized 4 rendering pipelines" message
+3. Verify no Vulkan validation errors during pipeline creation
+4. Screenshot validation: `.\tools\validate_rendering.bat baseline`
+
+**Success Criteria**:
+- [ ] All 4 pipeline types initialize without errors
+- [ ] Log confirms all pipelines created successfully
+- [ ] Vulkan validation layer reports no errors
+- [ ] Existing teapot app still renders correctly (StandardPBR)
+- [ ] No performance regression (60+ FPS maintained)
+
+---
+
+### **Step 1.2: Validate Shader Compatibility**
+
+**Objective**: Ensure all shader pairs work with instanced vertex layout
+
+#### **Test Matrix**:
+
+| Pipeline Type      | Vertex Shader            | Fragment Shader         | Expected Behavior |
+|--------------------|--------------------------|-------------------------|-------------------|
+| StandardPBR        | multi_light_vert.spv     | multi_light_frag.spv    | ✅ Working        |
+| Unlit              | vert_material_ubo.spv    | frag_material_ubo.spv   | ⚠️ Test needed   |
+| TransparentPBR     | standard_pbr_vert.spv    | standard_pbr_frag.spv   | ⚠️ Test needed   |
+| TransparentUnlit   | vert_ubo.spv             | unlit_frag.spv          | ⚠️ Test needed   |
+
+#### **Verification Method**:
+Create test materials in teapot_app that use each pipeline type:
+
+```rust
+// In teapot_app/src/main.rs
+let test_materials = vec![
+    // 1. StandardPBR (current working)
+    Material::standard_pbr(StandardMaterialParams {
+        base_color: Vec3::new(0.8, 0.2, 0.2), // Red
+        alpha: 1.0,
+        metallic: 0.5,
+        roughness: 0.3,
+        ..Default::default()
+    }).with_name("Opaque PBR"),
+    
+    // 2. Unlit opaque
+    Material::unlit(UnlitMaterialParams {
+        color: Vec3::new(0.2, 0.8, 0.2), // Green
+        alpha: 1.0,
+        ..Default::default()
+    }).with_name("Opaque Unlit"),
+    
+    // 3. TransparentPBR
+    Material::standard_pbr(StandardMaterialParams {
+        base_color: Vec3::new(0.2, 0.2, 0.8), // Blue
+        alpha: 0.5, // Semi-transparent
+        metallic: 0.3,
+        roughness: 0.4,
+        ..Default::default()
+    }).with_name("Transparent PBR"),
+    
+    // 4. TransparentUnlit
+    Material::unlit(UnlitMaterialParams {
+        color: Vec3::new(0.8, 0.8, 0.2), // Yellow
+        alpha: 0.5, // Semi-transparent
+        ..Default::default()
+    }).with_name("Transparent Unlit"),
+];
+```
+
+**Success Criteria**:
+- [ ] StandardPBR: Red opaque teapot with proper lighting
+- [ ] Unlit: Green opaque teapot, same brightness from all angles (no lighting)
+- [ ] TransparentPBR: Blue semi-transparent teapot with lighting through surface
+- [ ] TransparentUnlit: Yellow semi-transparent teapot, no lighting effects
+- [ ] Screenshot validation passes for all material types
+- [ ] No shader compilation or runtime errors
+
+---
+
+## 📋 **PHASE 2: DYNAMIC PIPELINE SWITCHING**
+
+### **Step 2.1: Pipeline Selection in Dynamic Object Manager**
+
+**Objective**: Enable dynamic objects to use different pipelines based on material properties
+
+#### **Current Limitation**:
+Dynamic objects use a single pipeline from `SharedRenderingResources`:
+```rust
+pub struct SharedRenderingResources {
+    pub vertex_buffer: vk::Buffer,
+    pub index_buffer: vk::Buffer,
+    pub pipeline: vk::Pipeline,         // ❌ Single pipeline only
+    pub pipeline_layout: vk::PipelineLayout,
+    // ...
+}
+```
+
+#### **Solution: Pipeline Per Material Type**
+
+**File**: `crates/rust_engine/src/render/dynamic/instance_renderer.rs`
+
+**Changes Required**:
+
+1. **Add pipeline parameter to rendering functions**:
+```rust
+// CURRENT:
+pub fn record_instanced_draw(
+    &mut self,
+    shared_resources: &SharedRenderingResources,
+    context: &VulkanContext,
+    frame_descriptor_set: vk::DescriptorSet,
+    material_descriptor_set: vk::DescriptorSet,
+) -> VulkanResult<()>
+
+// NEW:
+pub fn record_instanced_draw_with_pipeline(
+    &mut self,
+    shared_resources: &SharedRenderingResources,
+    pipeline: vk::Pipeline,              // Explicit pipeline parameter
+    pipeline_layout: vk::PipelineLayout, // Explicit layout parameter
+    context: &VulkanContext,
+    frame_descriptor_set: vk::DescriptorSet,
+    material_descriptor_set: vk::DescriptorSet,
+) -> VulkanResult<()>
+```
+
+2. **Group objects by pipeline type before rendering**:
+```rust
+// In DynamicObjectManager or caller
+pub fn render_batched_by_pipeline(
+    &mut self,
+    pipeline_manager: &PipelineManager,
+    // ...
+) -> VulkanResult<()> {
+    // Group active objects by required pipeline
+    let mut pipeline_batches: HashMap<PipelineType, Vec<&DynamicRenderData>> = HashMap::new();
+    
+    for object in &self.active_objects {
+        let pipeline_type = object.material.required_pipeline();
+        pipeline_batches.entry(pipeline_type)
+            .or_insert_with(Vec::new)
+            .push(object);
+    }
+    
+    // Render each batch with its pipeline
+    for (pipeline_type, objects) in pipeline_batches {
+        let pipeline = pipeline_manager.get_pipeline_by_type(pipeline_type)
+            .ok_or(VulkanError::InvalidState { 
+                reason: format!("Pipeline {:?} not found", pipeline_type)
+            })?;
+        
+        // Upload instance data for this batch
+        self.instance_renderer.upload_instance_data(objects)?;
+        
+        // Record draw with correct pipeline
+        self.instance_renderer.record_instanced_draw_with_pipeline(
+            shared_resources,
+            pipeline.handle(), // Get vk::Pipeline handle
+            pipeline.layout(), // Get vk::PipelineLayout handle
+            context,
+            frame_descriptor_set,
+            material_descriptor_set,
+        )?;
+    }
+    
+    Ok(())
+}
+```
+
+**Success Criteria**:
+- [ ] Dynamic objects can use any of the 4 pipeline types
+- [ ] Objects are automatically batched by pipeline type
+- [ ] Pipeline switching overhead measured (should be <0.5ms for 4 pipelines)
+- [ ] All material types render correctly in dynamic system
+- [ ] No visual artifacts or pipeline state leakage
+
+---
+
+### **Step 2.2: Transparent Object Depth Sorting**
+
+**Objective**: Render transparent objects back-to-front for correct alpha blending
+
+#### **Current Issue**:
+Transparent objects must be rendered in depth order (back-to-front) for correct alpha blending. Currently, objects are rendered in spawn order.
+
+#### **Solution: Depth-Based Sorting**
+
+**File**: `crates/rust_engine/src/render/dynamic/instance_renderer.rs`
+
+**Implementation**:
+```rust
+/// Sort objects by depth for correct transparent rendering
+pub fn sort_objects_by_depth(
+    objects: &mut [&DynamicRenderData],
+    camera_position: Vec3,
+) {
+    objects.sort_by(|a, b| {
+        // Calculate squared distance to camera (avoid sqrt for performance)
+        let dist_a = (a.position - camera_position).length_squared();
+        let dist_b = (b.position - camera_position).length_squared();
+        
+        // Sort back-to-front (farther objects first)
+        dist_b.partial_cmp(&dist_a).unwrap_or(std::cmp::Ordering::Equal)
+    });
+}
+
+// Modified rendering function:
+pub fn render_batched_by_pipeline(
+    &mut self,
+    pipeline_manager: &PipelineManager,
+    camera_position: Vec3, // NEW parameter
+    // ...
+) -> VulkanResult<()> {
+    // Group objects by pipeline
+    let mut pipeline_batches: HashMap<PipelineType, Vec<&DynamicRenderData>> = HashMap::new();
+    // ... grouping logic ...
+    
+    // Render opaque objects first (order doesn't matter)
+    for pipeline_type in [PipelineType::StandardPBR, PipelineType::Unlit] {
+        if let Some(mut objects) = pipeline_batches.remove(&pipeline_type) {
+            // No sorting needed for opaque objects
+            self.render_pipeline_batch(pipeline_type, &objects, pipeline_manager, ...)?;
+        }
+    }
+    
+    // Render transparent objects last (back-to-front sorted)
+    for pipeline_type in [PipelineType::TransparentPBR, PipelineType::TransparentUnlit] {
+        if let Some(mut objects) = pipeline_batches.remove(&pipeline_type) {
+            // Sort transparent objects by depth
+            Self::sort_objects_by_depth(&mut objects, camera_position);
+            self.render_pipeline_batch(pipeline_type, &objects, pipeline_manager, ...)?;
+        }
+    }
+    
+    Ok(())
+}
+```
+
+**Success Criteria**:
+- [ ] Transparent objects render in correct depth order
+- [ ] Sorting overhead <1ms for 100 transparent objects
+- [ ] Visual correctness: overlapping transparent objects blend properly
+- [ ] No Z-fighting or incorrect occlusion
+
+---
+
+## 📋 **PHASE 3: TEAPOT APP INTEGRATION & TESTING**
+
+### **Step 3.1: Multi-Material Dynamic Teapot Demo**
+
+**Objective**: Extend teapot_app to spawn multiple dynamic teapots with different material types
+
+#### **File**: `teapot_app/src/main.rs`
+
+**Implementation Plan**:
+
+1. **Add dynamic spawning capability**:
+```rust
+pub struct IntegratedApp {
+    // ... existing fields ...
+    
+    // NEW: Dynamic object management
+    dynamic_teapot_handles: Vec<DynamicObjectHandle>,
+    spawn_interval: f32, // Seconds between spawns
+    last_spawn_time: Instant,
+    next_material_index: usize, // Cycle through materials
+}
+
+impl IntegratedApp {
+    fn update_dynamic_objects(&mut self, delta_time: f32) {
+        // Spawn new teapots periodically
+        if self.last_spawn_time.elapsed().as_secs_f32() >= self.spawn_interval {
+            self.spawn_dynamic_teapot();
+            self.last_spawn_time = Instant::now();
+        }
+        
+        // Update graphics engine's dynamic system
+        if let Err(e) = self.graphics_engine.update_dynamic_objects(delta_time) {
+            log::error!("Failed to update dynamic objects: {:?}", e);
+        }
+    }
+    
+    fn spawn_dynamic_teapot(&mut self) {
+        // Cycle through material types
+        let material = self.teapot_materials[self.next_material_index].clone();
+        self.next_material_index = (self.next_material_index + 1) % self.teapot_materials.len();
+        
+        // Random position in a circle around origin
+        let angle = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
+        let radius = 3.0 + rand::random::<f32>() * 2.0;
+        let position = Vec3::new(
+            angle.cos() * radius,
+            rand::random::<f32>() * 2.0 - 1.0, // Random height
+            angle.sin() * radius,
+        );
+        
+        // Random rotation
+        let rotation = Vec3::new(
+            rand::random::<f32>() * 360.0,
+            rand::random::<f32>() * 360.0,
+            rand::random::<f32>() * 360.0,
+        );
+        
+        // Spawn dynamic object
+        match self.graphics_engine.spawn_dynamic_object(
+            position,
+            rotation,
+            Vec3::new(1.0, 1.0, 1.0), // Scale
+            material,
+            5.0, // 5 second lifetime
+        ) {
+            Ok(handle) => {
+                self.dynamic_teapot_handles.push(handle);
+                log::info!("Spawned dynamic teapot with material: {}", 
+                    self.teapot_materials[self.next_material_index - 1].name.as_deref().unwrap_or("Unnamed"));
+            }
+            Err(e) => {
+                log::error!("Failed to spawn dynamic teapot: {:?}", e);
+            }
+        }
+    }
+}
+```
+
+2. **Update render loop to include dynamic objects**:
+```rust
+fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    // Begin frame
+    self.graphics_engine.begin_frame();
+    
+    // Set camera and lighting
+    self.graphics_engine.set_camera(&self.camera);
+    let multi_light_env = self.build_multi_light_environment_from_entities().clone();
+    self.graphics_engine.set_multi_light_environment(&multi_light_env);
+    
+    // Render static teapot (if present)
+    if let Some(ref teapot_mesh) = self.teapot_mesh {
+        // ... existing static rendering ...
+    }
+    
+    // Render dynamic teapots (NEW)
+    if let Err(e) = self.graphics_engine.render_dynamic_objects() {
+        log::error!("Failed to render dynamic objects: {:?}", e);
+    }
+    
+    // End frame
+    self.graphics_engine.end_frame(&mut self.window)?;
+    
+    Ok(())
+}
+```
+
+**Testing Scenarios**:
+
+| Scenario | Description | Expected Result | Success Criteria |
+|----------|-------------|-----------------|------------------|
+| **Opaque Mix** | Spawn StandardPBR + Unlit teapots | Both render correctly, Unlit ignores lighting | Visual inspection + screenshot |
+| **Transparent Mix** | Spawn TransparentPBR + TransparentUnlit | Proper alpha blending, back-to-front order | See through objects correctly |
+| **All Types** | Spawn all 4 material types simultaneously | All render with correct properties | No visual artifacts, 60+ FPS |
+| **Many Objects** | Spawn 20+ teapots with mixed materials | Smooth rendering, proper batching | FPS >60, pipeline switches <10/frame |
+| **Lifecycle** | Objects despawn after 5 seconds | Clean memory, no leaks | Memory usage stable |
+
+**Success Criteria**:
+- [ ] Can spawn dynamic teapots with all 4 material types
+- [ ] Materials render with correct visual properties (lighting, transparency)
+- [ ] Objects automatically despawn after lifetime expires
+- [ ] Performance: 20+ mixed dynamic objects at 60+ FPS
+- [ ] Pipeline batching logs show efficient grouping
+- [ ] Screenshot validation passes for all material combinations
+- [ ] Memory usage remains stable over 60 seconds of spawning
+
+---
+
+### **Step 3.2: Performance Profiling**
+
+**Objective**: Measure and optimize pipeline switching overhead
+
+#### **Metrics to Track**:
+```rust
+pub struct PipelinePerformanceMetrics {
+    pub frame_number: u64,
+    pub pipeline_switches: u32,        // Number of pipeline binds per frame
+    pub objects_per_pipeline: HashMap<PipelineType, u32>,
+    pub draw_calls: u32,               // Total draw calls
+    pub instance_counts: HashMap<PipelineType, u32>, // Instances per pipeline
+    pub frame_time_ms: f32,
+    pub pipeline_switch_time_ms: f32,  // Time spent switching pipelines
+}
+```
+
+#### **Instrumentation**:
+Add performance tracking to `InstanceRenderer`:
+```rust
+impl InstanceRenderer {
+    pub fn record_instanced_draw_with_pipeline(
+        &mut self,
+        // ... params ...
+    ) -> VulkanResult<()> {
+        let start = Instant::now();
+        
+        // Bind pipeline
+        device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
+        
+        let pipeline_switch_time = start.elapsed();
+        self.metrics.pipeline_switch_time_ms += pipeline_switch_time.as_secs_f32() * 1000.0;
+        self.metrics.pipeline_switches += 1;
+        
+        // ... rest of rendering ...
+    }
+}
+```
+
+**Target Performance**:
+- **Pipeline switches per frame**: <10 (with batching)
+- **Pipeline switch overhead**: <0.5ms total per frame
+- **Draw calls**: ~4-8 (one or two per pipeline type, depending on instance counts)
+- **Frame time**: <16ms (60 FPS minimum)
+
+**Success Criteria**:
+- [ ] Pipeline switching overhead measured and logged
+- [ ] Performance meets target metrics with 20+ mixed objects
+- [ ] Profiling logs show efficient batching
+- [ ] No performance regression vs. single-pipeline baseline
+
+---
+
+### **Step 3.3: Visual Regression Testing**
+
+**Objective**: Ensure all material types render correctly across multiple frames
+
+#### **Test Suite**:
+
+1. **Baseline Capture** (single pipeline, StandardPBR only):
+```cmd
+.\tools\validate_rendering.bat baseline_standard_pbr
+```
+
+2. **Multi-Pipeline Capture** (all 4 pipeline types):
+```cmd
+.\tools\validate_rendering.bat test_all_pipelines
+```
+
+3. **Transparency Validation**:
+   - Spawn overlapping transparent objects
+   - Verify back-to-front rendering
+   - Check alpha blending correctness
+
+4. **Lighting Validation**:
+   - StandardPBR: Should show specular highlights and diffuse shading
+   - Unlit: Should be flat color regardless of light direction
+   - TransparentPBR: Should show lighting through transparent surface
+   - TransparentUnlit: Should be flat transparent color
+
+**Success Criteria**:
+- [ ] All pipeline types pass screenshot validation
+- [ ] Transparent objects blend correctly
+- [ ] Lighting behaves correctly for lit/unlit materials
+- [ ] No visual artifacts (flickering, z-fighting, incorrect colors)
+- [ ] Consistent rendering across multiple frames
+
+---
+
+## 📋 **PHASE 4: DOCUMENTATION & OPTIMIZATION**
+
+### **Step 4.1: Update Architecture Documentation**
+
+**Objective**: Document the new modular pipeline system in ARCHITECTURE.md
+
+#### **Sections to Add/Update**:
+
+1. **Pipeline System Architecture**:
+```markdown
+### Modular Pipeline System
+
+The engine supports four rendering pipeline types:
+
+| Pipeline Type      | Lighting | Transparency | Use Cases |
+|--------------------|----------|--------------|-----------|
+| StandardPBR        | ✅       | ❌           | Solid objects with realistic materials |
+| Unlit              | ❌       | ❌           | UI elements, stylized rendering |
+| TransparentPBR     | ✅       | ✅           | Glass, water, transparent surfaces |
+| TransparentUnlit   | ❌       | ✅           | Particle effects, flat transparent UI |
+
+#### Material → Pipeline Mapping:
+Materials automatically select the appropriate pipeline based on their properties:
+- `alpha < 1.0` → Transparent pipeline variant
+- `MaterialType::StandardPBR` → StandardPBR or TransparentPBR
+- `MaterialType::Unlit` → Unlit or TransparentUnlit
+
+#### Rendering Order:
+1. Opaque objects (StandardPBR, Unlit) - any order
+2. Transparent objects (TransparentPBR, TransparentUnlit) - back-to-front sorted
+
+#### Performance Characteristics:
+- **Pipeline switches**: O(4) per frame maximum (one per pipeline type)
+- **Batching**: Objects grouped by pipeline before rendering
+- **Sorting**: Only transparent objects sorted by depth
+```
+
+2. **API Usage Examples**:
+```markdown
+### Creating Materials for Different Pipelines
+
+```rust
+// Opaque PBR (StandardPBR pipeline)
+let ceramic = Material::standard_pbr(StandardMaterialParams {
+    base_color: Vec3::new(0.8, 0.7, 0.5),
+    alpha: 1.0,
+    metallic: 0.1,
+    roughness: 0.3,
+    ..Default::default()
+});
+
+// Opaque Unlit (Unlit pipeline)
+let ui_button = Material::unlit(UnlitMaterialParams {
+    color: Vec3::new(0.2, 0.6, 1.0),
+    alpha: 1.0,
+    ..Default::default()
+});
+
+// Transparent PBR (TransparentPBR pipeline)
+let glass = Material::standard_pbr(StandardMaterialParams {
+    base_color: Vec3::new(0.9, 0.9, 1.0),
+    alpha: 0.3, // 30% opaque = 70% transparent
+    metallic: 0.1,
+    roughness: 0.05,
+    ..Default::default()
+});
+
+// Transparent Unlit (TransparentUnlit pipeline)
+let particle = Material::unlit(UnlitMaterialParams {
+    color: Vec3::new(1.0, 0.8, 0.2),
+    alpha: 0.5,
+    ..Default::default()
+});
+```
+```
+
+**Success Criteria**:
+- [ ] ARCHITECTURE.md updated with pipeline system section
+- [ ] API examples provided for all 4 pipeline types
+- [ ] Performance characteristics documented
+- [ ] Rendering order explanation added
+
+---
+
+### **Step 4.2: Code Cleanup**
+
+**Objective**: Remove TODOs and improve code clarity
+
+#### **Files to Clean**:
+
+1. **pipeline_manager.rs**:
+   - Remove "TODO: Initialize other pipelines" comment (line 60-62)
+   - Add comprehensive doc comments for `render_batched_by_pipeline`
+
+2. **material_type.rs**:
+   - Remove "Temporary compatibility methods" section once fully migrated
+   - Add examples to enum documentation
+
+3. **instance_renderer.rs**:
+   - Document the new `record_instanced_draw_with_pipeline` function
+   - Add performance notes about batching
+
+**Success Criteria**:
+- [ ] All pipeline-related TODOs resolved
+- [ ] Public API functions have comprehensive doc comments
+- [ ] Code examples in documentation are up-to-date
+- [ ] `cargo clippy` reports no warnings
+
+---
+
+### **Step 4.3: Performance Optimization**
+
+**Objective**: Minimize pipeline switching and batching overhead
+
+#### **Optimizations**:
+
+1. **Pipeline Sort Key**:
+```rust
+// Sort materials by pipeline type for better batching
+impl PipelineType {
+    pub fn sort_key(&self) -> u8 {
+        match self {
+            PipelineType::StandardPBR => 0,
+            PipelineType::Unlit => 1,
+            PipelineType::TransparentPBR => 2,
+            PipelineType::TransparentUnlit => 3,
+        }
+    }
+}
+```
+
+2. **Reduce Redundant Pipeline Binds**:
+```rust
+pub struct InstanceRenderer {
+    // ... existing fields ...
+    current_pipeline: Option<vk::Pipeline>, // Track bound pipeline
+}
+
+impl InstanceRenderer {
+    fn bind_pipeline(&mut self, pipeline: vk::Pipeline, device: &Device, cmd: vk::CommandBuffer) {
+        // Skip if already bound
+        if self.current_pipeline == Some(pipeline) {
+            return;
+        }
+        
+        device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
+        self.current_pipeline = Some(pipeline);
+    }
+}
+```
+
+3. **Batch Size Tuning**:
+   - Measure optimal batch sizes for each pipeline type
+   - Adjust `MAX_INSTANCES_PER_DRAW` if needed
+   - Consider separate limits per pipeline type
+
+**Success Criteria**:
+- [ ] Pipeline redundant binds eliminated
+- [ ] Batching efficiency >90% (objects per pipeline / total objects)
+- [ ] Frame time reduced by ≥10% vs. naive implementation
+- [ ] CPU profiling shows <5% time in pipeline switching
+
+---
+
+## 🎯 **MODULAR PIPELINE SUCCESS CRITERIA**
+
+### **Functional Requirements**:
+- [ ] All 4 pipeline types (StandardPBR, Unlit, TransparentPBR, TransparentUnlit) working
+- [ ] Materials automatically select appropriate pipeline
+- [ ] Transparent objects render in correct depth order
+- [ ] Dynamic objects support all pipeline types
+- [ ] Teapot app demonstrates all material types
+
+### **Performance Requirements**:
+- [ ] Pipeline switches per frame: ≤10
+- [ ] Pipeline switching overhead: <0.5ms per frame
+- [ ] 60+ FPS with 20+ mixed dynamic objects
+- [ ] Batching efficiency >90%
+- [ ] No visual artifacts or rendering errors
+
+### **Quality Requirements**:
+- [ ] Screenshot validation passes for all pipeline types
+- [ ] Vulkan validation layer reports no errors
+- [ ] Documentation updated with pipeline system details
+- [ ] All public APIs have doc comments
+- [ ] Code cleanup complete (no TODOs)
+
+### **Testing Requirements**:
+- [ ] Opaque materials (PBR + Unlit) render correctly
+- [ ] Transparent materials (PBR + Unlit) render correctly
+- [ ] Mixed material types work in same scene
+- [ ] Overlapping transparent objects blend properly
+- [ ] Performance metrics collected and meet targets
+
 ### **Quality Requirements**:
 - [ ] No visual artifacts between mesh types
 - [ ] Proper lighting and shading on all entities

@@ -6,15 +6,17 @@ layout(set = 1, binding = 0) uniform MaterialUBO {
     vec4 metallic_roughness_ao_normal;      // metallic, roughness, ao, normal_scale
     vec4 emission;                          // RGB emission + strength
     uvec4 texture_flags;                    // base_color, normal, metallic_roughness, ao
-    vec4 additional_params;                 // reserved for future use
+    vec4 additional_params;                 // x: emission_texture_flag, y: opacity_texture_flag, z: unused, w: unused
     vec4 _padding;
 } material;
 
-// Textures - Set 1, Bindings 1-4
+// Textures - Set 1, Bindings 1-6
 layout(set = 1, binding = 1) uniform sampler2D baseColorTexture;
 layout(set = 1, binding = 2) uniform sampler2D normalTexture;
 layout(set = 1, binding = 3) uniform sampler2D metallicRoughnessTexture;
 layout(set = 1, binding = 4) uniform sampler2D aoTexture;
+layout(set = 1, binding = 5) uniform sampler2D emissionTexture;
+layout(set = 1, binding = 6) uniform sampler2D opacityTexture;
 
 // Light structure definitions
 struct DirectionalLight {
@@ -212,9 +214,23 @@ void main() {
     }
     
     // Add emission
-    vec3 emission = material.emission.rgb * material.emission.a;
-    lighting_result += emission;
+    vec3 emissionColor = material.emission.rgb;
+    float emissionStrength = material.emission.a;
+    
+    // Sample emission texture if enabled (additional_params.x is flag)
+    if (material.additional_params.x != 0.0) {
+        vec3 emissionTex = texture(emissionTexture, fragTexCoord).rgb;
+        emissionColor *= emissionTex;
+    }
+    
+    lighting_result += emissionColor * emissionStrength;
+    
+    // Apply opacity texture if enabled (additional_params.y is flag)
+    float finalAlpha = alpha;
+    if (material.additional_params.y != 0.0) {
+        finalAlpha *= texture(opacityTexture, fragTexCoord).r;
+    }
     
     // Output final color
-    fragColor = vec4(lighting_result, alpha);
+    fragColor = vec4(lighting_result, finalAlpha);
 }

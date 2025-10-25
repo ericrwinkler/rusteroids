@@ -19,10 +19,14 @@ pub struct SharedRenderingResources {
     /// Graphics pipeline object (keeps the VkPipeline alive)
     pub graphics_pipeline: Option<crate::render::vulkan::shader::GraphicsPipeline>,
     
-    /// Graphics pipeline handle for rendering
+    // FIXME: LEGACY - Remove after modular pipeline system is complete
+    // These fields assume a single pipeline per SharedRenderingResources
+    // New system stores pipelines in PipelineManager and selects per-material
+    /// Graphics pipeline handle for rendering (LEGACY - will be removed)
     pub pipeline: vk::Pipeline,
     
-    /// Pipeline layout for binding descriptor sets
+    // FIXME: LEGACY - Remove after modular pipeline system is complete
+    /// Pipeline layout for binding descriptor sets (LEGACY - will be removed)
     pub pipeline_layout: vk::PipelineLayout,
     
     /// Descriptor set layout for set 1: per-object data (material + textures, 5 descriptors)

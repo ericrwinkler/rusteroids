@@ -3,7 +3,7 @@
 //! This module defines the different types of materials supported by the engine
 //! and provides a unified interface for material management.
 
-use super::{StandardMaterialParams, UnlitMaterialParams};
+use super::{StandardMaterialParams, UnlitMaterialParams, MaterialTextures, TextureHandle};
 
 /// Enumeration of supported material types
 #[derive(Debug, Clone)]
@@ -43,6 +43,8 @@ impl Default for AlphaMode {
 pub struct Material {
     /// Material type and parameters
     pub material_type: MaterialType,
+    /// Texture bindings for this material
+    pub textures: MaterialTextures,
     /// Unique identifier for this material
     pub id: MaterialId,
     /// Optional name for debugging
@@ -58,6 +60,7 @@ impl Material {
     pub fn standard_pbr(params: StandardMaterialParams) -> Self {
         Self {
             material_type: MaterialType::StandardPBR(params),
+            textures: MaterialTextures::new(),
             id: MaterialId(0), // Will be assigned by MaterialManager
             name: None,
         }
@@ -67,7 +70,34 @@ impl Material {
     pub fn unlit(params: UnlitMaterialParams) -> Self {
         Self {
             material_type: MaterialType::Unlit(params),
+            textures: MaterialTextures::new(),
             id: MaterialId(0), // Will be assigned by MaterialManager
+            name: None,
+        }
+    }
+    
+    /// Create a new transparent PBR material with alpha blending
+    pub fn transparent_pbr(params: StandardMaterialParams) -> Self {
+        Self {
+            material_type: MaterialType::Transparent {
+                base_material: Box::new(MaterialType::StandardPBR(params)),
+                alpha_mode: AlphaMode::Blend,
+            },
+            textures: MaterialTextures::new(),
+            id: MaterialId(0),
+            name: None,
+        }
+    }
+    
+    /// Create a new transparent unlit material with alpha blending
+    pub fn transparent_unlit(params: UnlitMaterialParams) -> Self {
+        Self {
+            material_type: MaterialType::Transparent {
+                base_material: Box::new(MaterialType::Unlit(params)),
+                alpha_mode: AlphaMode::Blend,
+            },
+            textures: MaterialTextures::new(),
+            id: MaterialId(0),
             name: None,
         }
     }
@@ -75,6 +105,42 @@ impl Material {
     /// Set the material name for debugging
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// Attach a base color texture
+    pub fn with_base_color_texture(mut self, texture: TextureHandle) -> Self {
+        self.textures.base_color = Some(texture);
+        self
+    }
+
+    /// Attach a normal map texture
+    pub fn with_normal_texture(mut self, texture: TextureHandle) -> Self {
+        self.textures.normal = Some(texture);
+        self
+    }
+
+    /// Attach a metallic-roughness texture
+    pub fn with_metallic_roughness_texture(mut self, texture: TextureHandle) -> Self {
+        self.textures.metallic_roughness = Some(texture);
+        self
+    }
+
+    /// Attach an ambient occlusion texture
+    pub fn with_ao_texture(mut self, texture: TextureHandle) -> Self {
+        self.textures.ambient_occlusion = Some(texture);
+        self
+    }
+
+    /// Attach an emission texture
+    pub fn with_emission_texture(mut self, texture: TextureHandle) -> Self {
+        self.textures.emission = Some(texture);
+        self
+    }
+
+    /// Attach an opacity texture
+    pub fn with_opacity_texture(mut self, texture: TextureHandle) -> Self {
+        self.textures.opacity = Some(texture);
         self
     }
 
@@ -96,6 +162,22 @@ impl Material {
             }
         }
     }
+    
+    // FIXME: Implement automatic render priority assignment when system is added
+    // /// Get the render priority for this material (determines rendering order)
+    // pub fn render_priority(&self) -> crate::render::pipeline::RenderPriority {
+    //     use crate::render::pipeline::RenderPriority;
+    //     match &self.material_type {
+    //         MaterialType::StandardPBR(_) => RenderPriority::Geometry,
+    //         MaterialType::Unlit(_) => RenderPriority::Geometry,
+    //         MaterialType::Transparent { alpha_mode, .. } => {
+    //             match alpha_mode {
+    //                 AlphaMode::Mask(_) => RenderPriority::AlphaTest,
+    //                 _ => RenderPriority::Transparent,
+    //             }
+    //         }
+    //     }
+    // }
 }
 
 /// Pipeline types required for different materials

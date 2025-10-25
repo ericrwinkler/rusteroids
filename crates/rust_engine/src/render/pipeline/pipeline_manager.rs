@@ -37,7 +37,10 @@ impl PipelineManager {
         render_pass: vk::RenderPass,
         descriptor_set_layouts: &[vk::DescriptorSetLayout],
     ) -> VulkanResult<()> {
-        // Initialize StandardPBR pipeline first (uses material UBO system)
+        // Initialize all opaque pipelines
+        log::info!("Initializing rendering pipelines...");
+        
+        // StandardPBR pipeline - opaque objects with full PBR lighting
         self.create_pipeline(
             context,
             render_pass,
@@ -46,7 +49,7 @@ impl PipelineManager {
             descriptor_set_layouts,
         )?;
 
-        // Initialize Unlit pipeline as backup
+        // Unlit pipeline - opaque objects without lighting calculations
         self.create_pipeline(
             context,
             render_pass,
@@ -54,13 +57,32 @@ impl PipelineManager {
             Self::create_vertex_input_info(),
             descriptor_set_layouts,
         )?;
+        
+        // Initialize transparent pipelines
+        log::info!("Initializing transparent rendering pipelines...");
+        
+        // TransparentPBR pipeline - transparent objects with PBR lighting
+        self.create_pipeline(
+            context,
+            render_pass,
+            PipelineConfig::transparent_pbr(),
+            Self::create_vertex_input_info(),
+            descriptor_set_layouts,
+        )?;
+        
+        // TransparentUnlit pipeline - transparent objects without lighting
+        self.create_pipeline(
+            context,
+            render_pass,
+            PipelineConfig::transparent_unlit(),
+            Self::create_vertex_input_info(),
+            descriptor_set_layouts,
+        )?;
 
         // Set StandardPBR as default active pipeline to use material UBO system
         self.active_pipeline = Some(PipelineType::StandardPBR);
-
-        // TODO: Initialize other pipelines once fully tested
-        // - TransparentPBR pipeline  
-        // - TransparentUnlit pipeline
+        
+        log::info!("Successfully initialized 4 rendering pipelines: StandardPBR, Unlit, TransparentPBR, TransparentUnlit");
 
         Ok(())
     }
@@ -195,8 +217,17 @@ impl PipelineManager {
             .logic_op_enable(false)
             .attachments(&color_blend_attachments);
             
-        // Pipeline layout without push constants (using instanced vertex attributes)
-        let push_constant_ranges: &[vk::PushConstantRange] = &[];
+        // Pipeline layout WITH push constants (required for instanced rendering)
+        // Push constants: model_matrix(64) + normal_matrix(48) + material_color(16) = 128 bytes
+        const PUSH_CONSTANTS_SIZE: u32 = 128;
+        
+        let push_constant_range = vk::PushConstantRange::builder()
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+            .offset(0)
+            .size(PUSH_CONSTANTS_SIZE)
+            .build();
+        
+        let push_constant_ranges = [push_constant_range];
         let layout_info = vk::PipelineLayoutCreateInfo::builder()
             .set_layouts(descriptor_set_layouts)
             .push_constant_ranges(&push_constant_ranges);
@@ -273,19 +304,24 @@ impl PipelineManager {
         self.pipelines.get(&pipeline_type)
     }
 
-    /// Set active pipeline type
+    // FIXME: LEGACY - Remove after modular pipeline system is complete
+    // This "active pipeline" pattern assumes single pipeline for all objects
+    // New system selects pipeline per-material using get_pipeline_by_type()
+    /// Set active pipeline type (LEGACY - will be removed)
     pub fn set_active_pipeline(&mut self, material_type: &MaterialType) {
         let pipeline_type = Self::material_type_to_pipeline_type(material_type);
         self.active_pipeline = Some(pipeline_type);
     }
 
-    /// Get currently active pipeline
+    // FIXME: LEGACY - Remove after modular pipeline system is complete
+    /// Get currently active pipeline (LEGACY - will be removed)
     pub fn get_active_pipeline(&self) -> Option<&GraphicsPipeline> {
         self.active_pipeline
             .and_then(|pipeline_type| self.pipelines.get(&pipeline_type))
     }
 
-    /// Get active pipeline type
+    // FIXME: LEGACY - Remove after modular pipeline system is complete
+    /// Get active pipeline type (LEGACY - will be removed)
     pub fn get_active_pipeline_type(&self) -> Option<PipelineType> {
         self.active_pipeline
     }

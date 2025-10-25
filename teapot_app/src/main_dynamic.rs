@@ -16,14 +16,15 @@ use rust_engine::render::{
     Mesh,
     Material,
     StandardMaterialParams,
+    UnlitMaterialParams,
     lighting::MultiLightEnvironment,
     GraphicsEngine,
     VulkanRendererConfig,
     WindowHandle,
-    material::{MaterialId, MaterialType},
+    material::MaterialId,
     GameObject,
     shared_resources::SharedRenderingResources,
-    dynamic::{DynamicObjectHandle, MaterialProperties, MeshType},
+    dynamic::{DynamicObjectHandle, MeshType},
 };
 use rust_engine::foundation::math::Vec3;
 use glfw::{Action, Key, WindowEvent};
@@ -136,12 +137,12 @@ impl DynamicTeapotApp {
         
         // Create window
         log::info!("Creating window...");
-        let mut window = WindowHandle::new(1200, 800, "Rusteroids - Dynamic Teapot Demo");
+        let mut window = WindowHandle::new(1200, 800, "Rusteroids - Dynamic Monkey Demo");
         log::info!("Window created successfully");
         
         // Create renderer
         log::info!("Creating Vulkan renderer...");
-        let renderer_config = VulkanRendererConfig::new("Rusteroids - Dynamic Teapot Demo")
+        let renderer_config = VulkanRendererConfig::new("Rusteroids - Dynamic Monkey Demo")
             .with_version(1, 0, 0)
             .with_shader_paths(
                 "target/shaders/standard_pbr_vert.spv".to_string(),
@@ -258,67 +259,18 @@ impl DynamicTeapotApp {
         // Random lifetime between 5-15 seconds
         let lifetime = rng.gen_range(5.0..15.0);
         
-        // Select random material and convert to MaterialProperties
+        // Select random material from our test materials
         let materials = Self::create_teapot_materials();
         let material_index = rng.gen_range(0..materials.len());
-        let selected_material = &materials[material_index];
+        let selected_material = materials[material_index].clone();
         
-        // Convert Material to MaterialProperties for dynamic system
-        let material_props = match &selected_material.material_type {
-            MaterialType::StandardPBR(params) => {
-                MaterialProperties {
-                    base_color: [params.base_color.x, params.base_color.y, params.base_color.z, params.alpha],
-                    metallic: params.metallic,
-                    roughness: params.roughness,
-                    emission: [0.0, 0.0, 0.0], // No emission for now
-                    alpha: params.alpha,
-                }
-            }
-            MaterialType::Unlit(params) => {
-                MaterialProperties {
-                    base_color: [params.color.x, params.color.y, params.color.z, params.alpha],
-                    metallic: 0.0,
-                    roughness: 1.0,
-                    emission: [0.0, 0.0, 0.0],
-                    alpha: params.alpha,
-                }
-            }
-            MaterialType::Transparent { base_material, .. } => {
-                // Handle transparent materials by using their base material
-                match base_material.as_ref() {
-                    MaterialType::StandardPBR(params) => {
-                        MaterialProperties {
-                            base_color: [params.base_color.x, params.base_color.y, params.base_color.z, params.alpha],
-                            metallic: params.metallic,
-                            roughness: params.roughness,
-                            emission: [0.0, 0.0, 0.0],
-                            alpha: params.alpha,
-                        }
-                    }
-                    MaterialType::Unlit(params) => {
-                        MaterialProperties {
-                            base_color: [params.color.x, params.color.y, params.color.z, params.alpha],
-                            metallic: 0.0,
-                            roughness: 1.0,
-                            emission: [0.0, 0.0, 0.0],
-                            alpha: params.alpha,
-                        }
-                    }
-                    MaterialType::Transparent { .. } => {
-                        // Nested transparent materials, use default
-                        MaterialProperties::default()
-                    }
-                }
-            }
-        };
-        
-        // Spawn dynamic object with random material properties
+        // Spawn dynamic object with the full Material (preserves pipeline type)
         match self.graphics_engine.spawn_dynamic_object(
             MeshType::Teapot,
             position,
             Vec3::new(0.0, 0.0, 0.0), // No initial rotation
             Vec3::new(1.0, 1.0, 1.0), // Unit scale
-            material_props,
+            selected_material.clone(),
         ) {
             Ok(dynamic_handle) => {
                 // Create instance tracker
@@ -455,22 +407,19 @@ impl DynamicTeapotApp {
     /// - Clear separation of concerns
     /// - Reusable systems with different resource sets
     fn spawn_sphere_marker(&mut self, position: Vec3, color: Vec3) -> Option<DynamicObjectHandle> {
-        // Create MaterialProperties with the light's color
-        let sphere_material_props = MaterialProperties {
-            base_color: [color.x, color.y, color.z, 1.0],
-            metallic: 0.0,
-            roughness: 0.1,
-            emission: [color.x * 2.0, color.y * 2.0, color.z * 2.0], // Bright emission
-            alpha: 1.0,
-        };
+        // Create a transparent unlit material with the light's color
+        let sphere_material = Material::transparent_unlit(UnlitMaterialParams {
+            color,
+            alpha: 0.1, // Semi-transparent
+        });
         
         // Spawn sphere using multi-mesh system with appropriate scale
         match self.graphics_engine.spawn_dynamic_object(
             MeshType::Sphere,
             position,
             Vec3::new(0.0, 0.0, 0.0), // No rotation
-            Vec3::new(0.5, 0.5, 0.5), // Medium sphere scale for visible light markers
-            sphere_material_props,
+            Vec3::new(0.8, 0.8, 0.8), // Larger sphere scale for visible light markers
+            sphere_material,
         ) {
             Ok(handle) => {
                 Some(handle)
@@ -554,90 +503,95 @@ impl DynamicTeapotApp {
     }
     
     fn create_teapot_materials() -> Vec<Material> {
+        log::info!("Creating test materials for all 4 pipeline types...");
         vec![
-            // Ceramic variations
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.9, 0.85, 0.7), // Cream ceramic
-                alpha: 1.0,
-                metallic: 0.05,
-                roughness: 0.4,
-                ..Default::default()
-            }).with_name("Cream Ceramic"),
+            // ==== OPAQUE MATERIALS (StandardPBR + Unlit pipelines) ====
             
+            // 1. StandardPBR - Red ceramic (opaque with lighting)
             Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.7, 0.4, 0.3), // Terracotta
+                base_color: Vec3::new(0.8, 0.2, 0.2), // Red
                 alpha: 1.0,
                 metallic: 0.1,
-                roughness: 0.6,
+                roughness: 0.3,
+                emission: Vec3::new(1.0, 0.5, 0.0), // Orange emission glow
+                emission_strength: 2.0,
                 ..Default::default()
-            }).with_name("Terracotta"),
+            }).with_name("Opaque PBR (Red Ceramic with Emission)"),
             
-            // Metallic variations
+            // 2. Unlit - Flat green (opaque, no lighting)
+            Material::unlit(UnlitMaterialParams {
+                color: Vec3::new(0.2, 0.8, 0.2), // Green
+                alpha: 1.0,
+            }).with_name("Opaque Unlit (Flat Green)"),
+            
+            // 3. StandardPBR - Gold (opaque metallic)
+            Material::standard_pbr(StandardMaterialParams {
+                base_color: Vec3::new(1.0, 0.8, 0.2), // Golden
+                alpha: 1.0,
+                metallic: 0.9,
+                roughness: 0.2,
+                emission: Vec3::new(1.0, 0.8, 0.0), // Yellow-gold emission
+                emission_strength: 1.5,
+                ..Default::default()
+            }).with_name("Opaque PBR (Gold with Emission)"),
+            
+            // 4. Unlit - Flat magenta (opaque, no lighting)
+            Material::unlit(UnlitMaterialParams {
+                color: Vec3::new(0.8, 0.2, 0.8), // Magenta
+                alpha: 1.0,
+            }).with_name("Opaque Unlit (Flat Magenta)"),
+            
+            // ==== TRANSPARENT MATERIALS (TransparentPBR + TransparentUnlit pipelines) ====
+            
+            // 5. TransparentPBR - Blue glass (semi-transparent with lighting)
+            Material::transparent_pbr(StandardMaterialParams {
+                base_color: Vec3::new(0.2, 0.2, 0.8), // Blue
+                alpha: 0.5, // 50% transparent
+                metallic: 0.1,
+                roughness: 0.1, // Smooth like glass
+                ..Default::default()
+            }).with_name("Transparent PBR (Blue Glass)"),
+            
+            // 6. TransparentUnlit - Yellow ghost (semi-transparent, no lighting)
+            Material::transparent_unlit(UnlitMaterialParams {
+                color: Vec3::new(0.8, 0.8, 0.2), // Yellow
+                alpha: 0.35, // 65% transparent
+            }).with_name("Transparent Unlit (Yellow Ghost)"),
+            
+            // 7. TransparentPBR - Cyan glass (highly transparent)
+            Material::transparent_pbr(StandardMaterialParams {
+                base_color: Vec3::new(0.2, 0.8, 0.8), // Cyan
+                alpha: 0.3, // 70% transparent
+                metallic: 0.2,
+                roughness: 0.4,
+                ..Default::default()
+            }).with_name("Transparent PBR (Cyan Glass)"),
+            
+            // 8. TransparentUnlit - Orange ghost (semi-transparent, no lighting)
+            Material::transparent_unlit(UnlitMaterialParams {
+                color: Vec3::new(0.9, 0.5, 0.1), // Orange
+                alpha: 0.4, // 60% transparent
+            }).with_name("Transparent Unlit (Orange Ghost)"),
+            
+            // 9. StandardPBR - Silver (opaque metallic for contrast)
             Material::standard_pbr(StandardMaterialParams {
                 base_color: Vec3::new(0.95, 0.93, 0.88), // Silver
                 alpha: 1.0,
                 metallic: 0.9,
                 roughness: 0.1,
+                emission: Vec3::new(0.5, 0.7, 1.0), // Cool blue emission
+                emission_strength: 2.5,
                 ..Default::default()
-            }).with_name("Polished Silver"),
+            }).with_name("Opaque PBR (Silver with Emission)"),
             
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(1.0, 0.8, 0.2), // Gold
-                alpha: 1.0,
-                metallic: 0.9,
-                roughness: 0.15,
-                ..Default::default()
-            }).with_name("Gold"),
-            
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.7, 0.3, 0.2), // Copper
-                alpha: 1.0,
-                metallic: 0.8,
-                roughness: 0.2,
-                ..Default::default()
-            }).with_name("Copper"),
-            
-            // Colored plastics
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.2, 0.6, 0.9), // Blue plastic
-                alpha: 1.0,
-                metallic: 0.0,
-                roughness: 0.7,
-                ..Default::default()
-            }).with_name("Blue Plastic"),
-            
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.8, 0.2, 0.3), // Red plastic
-                alpha: 1.0,
-                metallic: 0.0,
-                roughness: 0.8,
-                ..Default::default()
-            }).with_name("Red Plastic"),
-            
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.3, 0.7, 0.2), // Green plastic
-                alpha: 1.0,
-                metallic: 0.0,
-                roughness: 0.75,
-                ..Default::default()
-            }).with_name("Green Plastic"),
-            
-            // Special materials
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.1, 0.1, 0.1), // Matte black
-                alpha: 1.0,
-                metallic: 0.0,
-                roughness: 0.9,
-                ..Default::default()
-            }).with_name("Matte Black"),
-            
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.6, 0.2, 0.8), // Purple gem-like
-                alpha: 1.0,
+            // 10. TransparentPBR - Purple gem (medium transparency)
+            Material::transparent_pbr(StandardMaterialParams {
+                base_color: Vec3::new(0.6, 0.2, 0.8), // Purple
+                alpha: 0.4, // 60% transparent
                 metallic: 0.3,
                 roughness: 0.1,
                 ..Default::default()
-            }).with_name("Purple Gem"),
+            }).with_name("Transparent PBR (Purple Gem)"),
         ]
     }
     
@@ -738,8 +692,8 @@ impl DynamicTeapotApp {
     pub fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Initializing dynamic teapot demo...");
         
-        // Load teapot mesh
-        match ObjLoader::load_obj("resources/models/teapot_with_normals.obj") {
+        // Load monkey mesh (has proper UVs and normals for texture testing)
+        match ObjLoader::load_obj("resources/models/monkey.obj") {
             Ok(mut mesh) => {
                 // Scale mesh appropriately
                 let max_extent = mesh.vertices.iter()
@@ -755,12 +709,12 @@ impl DynamicTeapotApp {
                     }
                 }
                 
-                log::info!("Loaded teapot mesh successfully with {} vertices and {} indices", 
+                log::info!("Loaded monkey mesh successfully with {} vertices and {} indices", 
                           mesh.vertices.len(), mesh.indices.len());
                 self.teapot_mesh = Some(mesh);
             }
             Err(e) => {
-                log::warn!("Failed to load teapot.obj: {:?}, using fallback cube", e);
+                log::warn!("Failed to load monkey.obj: {:?}, using fallback cube", e);
                 self.teapot_mesh = Some(Mesh::cube());
             }
         }
@@ -900,46 +854,6 @@ impl DynamicTeapotApp {
         log::info!("Dynamic teapot demo completed");
         Ok(())
     }
-    // TODO: Remove this old regenerate_scene method - using dynamic spawning now
-    /*
-    fn regenerate_scene(&mut self) {
-        log::info!("Regenerating scene with new random content...");
-        let mut rng = thread_rng();
-        
-        // Clear existing teapots from scene manager
-        for entity in &self.teapot_entities {
-            self.scene_manager.remove_entity(*entity);
-        }
-        self.teapot_entities.clear();
-        
-        // Clear existing lights (except keep world structure)
-        self.world = World::new();
-        
-        // Create new teapots with random properties
-        for i in 0..10 {
-            let position = Vec3::new(
-                rng.gen_range(-10.0..10.0),
-                rng.gen_range(-2.0..4.0),
-                rng.gen_range(-10.0..10.0),
-            );
-            let velocity = Vec3::new(
-                rng.gen_range(-2.0..2.0),
-                rng.gen_range(-1.0..1.0),
-                rng.gen_range(-2.0..2.0),
-            );
-            let material_id = self.material_ids[i % self.material_ids.len()];
-            
-            let entity = self.scene_manager.create_moving_teapot(material_id, position, velocity);
-            self.teapot_entities.push(entity);
-        }
-        
-        // Generate new lights
-        self.light_instances = Self::generate_random_lights(&mut self.world, &mut rng);
-        
-        log::info!("Regenerated {} teapots and {} lights", 
-                  self.teapot_entities.len(), self.light_instances.len());
-    }
-    */
     
     fn update_scene(&mut self) {
         let elapsed_seconds = self.start_time.elapsed().as_secs_f32();
@@ -1030,7 +944,7 @@ impl DynamicTeapotApp {
                 if let Some(light_comp) = self.world.get_component::<LightComponent>(light_instance.entity) {
                     // Calculate scale based on light intensity and range
                     // Much smaller base scale, then multiply by intensity and a fraction of range
-                    let base_scale = 0.5;
+                    let base_scale = 1.0;
                     let intensity_factor = light_comp.intensity.max(0.1); // Minimum visible scale
                     let range_factor = (light_comp.range * 0.01).max(0.1); // 1% of range, minimum 0.1
                     let combined_scale = base_scale * intensity_factor * range_factor;

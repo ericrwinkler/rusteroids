@@ -8,4 +8,12 @@ pub mod pipeline_manager;
 pub mod pipeline_config;
 
 pub use pipeline_manager::PipelineManager;
-pub use pipeline_config::{PipelineConfig, CullMode};
+pub use pipeline_config::{
+    PipelineConfig, 
+    CullMode,
+    // Future rendering attributes (currently stubbed with FIXME)
+    BlendMode,
+    RenderPriority,
+    PolygonMode,
+    DepthBiasConfig,
+};

@@ -59,6 +59,7 @@ layout(location = 4) in vec4 fragInstanceMaterialColor;
 layout(location = 5) in flat uint fragInstanceMaterialIndex;
 layout(location = 6) in vec4 fragInstanceEmission;
 layout(location = 7) in flat uvec4 fragTextureFlags;
+layout(location = 8) in vec3 fragTangent;
 
 // Output color
 layout(location = 0) out vec4 fragColor;
@@ -133,11 +134,28 @@ void main() {
         ao *= texture(aoTexture, fragTexCoord).r;
     }
     
-    // Sample normal map using per-instance flag
+    // Sample normal map using per-instance flag with proper tangent-space transformation
     vec3 normal = normalize(fragNormal);
     if (fragTextureFlags.y != 0u) {
-        // TODO: Implement proper tangent space normal mapping
-        // For now, just use the vertex normal
+        // Build TBN (Tangent-Bitangent-Normal) matrix for tangent space to world space transformation
+        vec3 T = normalize(fragTangent);
+        vec3 N = normalize(fragNormal);
+        
+        // Gram-Schmidt orthogonalization to ensure T is perpendicular to N
+        T = normalize(T - dot(T, N) * N);
+        
+        // Calculate bitangent (cross product of normal and tangent)
+        vec3 B = cross(N, T);
+        
+        // Construct TBN matrix (transforms from tangent space to world space)
+        mat3 TBN = mat3(T, B, N);
+        
+        // Sample normal map and convert from [0,1] to [-1,1] range
+        vec3 normalMap = texture(normalTexture, fragTexCoord).rgb;
+        normalMap = normalMap * 2.0 - 1.0;
+        
+        // Transform normal from tangent space to world space
+        normal = normalize(TBN * normalMap);
     }
     
     // Multi-Light calculations

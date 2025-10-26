@@ -37,7 +37,9 @@ impl ResourceManager {
         let empty_vertices = vec![Vertex { 
             position: [0.0; 3], 
             normal: [0.0; 3],
-            tex_coord: [0.0; 2]
+            tex_coord: [0.0; 2],
+            tangent: [0.0; 3],
+            _padding: 0.0,
         }];
         let empty_indices = vec![0u32];
         

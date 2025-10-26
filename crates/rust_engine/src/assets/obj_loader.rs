@@ -142,6 +142,8 @@ impl ObjLoader {
                                 position: *position,
                                 normal: *normal,
                                 tex_coord: *tex_coord,
+                                tangent: [0.0, 0.0, 0.0], // Will be calculated later
+                                _padding: 0.0,
                             };
                             
                             // Vertex deduplication: check if this exact vertex already exists
@@ -192,6 +194,9 @@ impl ObjLoader {
             "OBJ loading complete: {} unique vertices from {} total references ({}x deduplication)",
             unique_vertices, total_vertex_references, deduplication_ratio
         );
+        
+        // Calculate tangents for normal mapping
+        Self::calculate_tangents(&mut vertices, &indices);
         
         Ok(Mesh::new(vertices, indices))
     }
@@ -256,6 +261,109 @@ impl ObjLoader {
                 // Fallback for degenerate normals (standard Y-up convention)
                 *normal = [0.0, 1.0, 0.0];
             }
+        }
+    }
+    
+    /// Calculate tangent vectors for normal mapping using triangle edge vectors and UV deltas
+    fn calculate_tangents(vertices: &mut [Vertex], indices: &[u32]) {
+        // First, zero out all tangents
+        for vertex in vertices.iter_mut() {
+            vertex.tangent = [0.0, 0.0, 0.0];
+        }
+        
+        // Calculate tangents per triangle and accumulate
+        for triangle in indices.chunks(3) {
+            if triangle.len() != 3 { continue; }
+            
+            let i0 = triangle[0] as usize;
+            let i1 = triangle[1] as usize;
+            let i2 = triangle[2] as usize;
+            
+            if i0 >= vertices.len() || i1 >= vertices.len() || i2 >= vertices.len() {
+                continue;
+            }
+            
+            let v0 = &vertices[i0];
+            let v1 = &vertices[i1];
+            let v2 = &vertices[i2];
+            
+            // Position deltas
+            let edge1 = [
+                v1.position[0] - v0.position[0],
+                v1.position[1] - v0.position[1],
+                v1.position[2] - v0.position[2],
+            ];
+            let edge2 = [
+                v2.position[0] - v0.position[0],
+                v2.position[1] - v0.position[1],
+                v2.position[2] - v0.position[2],
+            ];
+            
+            // UV deltas
+            let delta_uv1 = [
+                v1.tex_coord[0] - v0.tex_coord[0],
+                v1.tex_coord[1] - v0.tex_coord[1],
+            ];
+            let delta_uv2 = [
+                v2.tex_coord[0] - v0.tex_coord[0],
+                v2.tex_coord[1] - v0.tex_coord[1],
+            ];
+            
+            // Calculate tangent using the formula:
+            // T = (edge1 * deltaUV2.y - edge2 * deltaUV1.y) / determinant
+            let det = delta_uv1[0] * delta_uv2[1] - delta_uv1[1] * delta_uv2[0];
+            
+            let tangent = if det.abs() > 1e-6 {
+                let r = 1.0 / det;
+                [
+                    r * (delta_uv2[1] * edge1[0] - delta_uv1[1] * edge2[0]),
+                    r * (delta_uv2[1] * edge1[1] - delta_uv1[1] * edge2[1]),
+                    r * (delta_uv2[1] * edge1[2] - delta_uv1[1] * edge2[2]),
+                ]
+            } else {
+                // Degenerate UV case - use fallback tangent aligned with X axis
+                [1.0, 0.0, 0.0]
+            };
+            
+            // Accumulate tangent to all three vertices of the triangle
+            vertices[i0].tangent[0] += tangent[0];
+            vertices[i0].tangent[1] += tangent[1];
+            vertices[i0].tangent[2] += tangent[2];
+            
+            vertices[i1].tangent[0] += tangent[0];
+            vertices[i1].tangent[1] += tangent[1];
+            vertices[i1].tangent[2] += tangent[2];
+            
+            vertices[i2].tangent[0] += tangent[0];
+            vertices[i2].tangent[1] += tangent[1];
+            vertices[i2].tangent[2] += tangent[2];
+        }
+        
+        // Normalize tangents and orthogonalize with respect to normals (Gram-Schmidt)
+        for vertex in vertices.iter_mut() {
+            let t = vertex.tangent;
+            let n = vertex.normal;
+            
+            // Gram-Schmidt orthogonalization: t' = t - (t·n)n
+            let dot = t[0] * n[0] + t[1] * n[1] + t[2] * n[2];
+            let mut tangent = [
+                t[0] - dot * n[0],
+                t[1] - dot * n[1],
+                t[2] - dot * n[2],
+            ];
+            
+            // Normalize
+            let length = (tangent[0] * tangent[0] + tangent[1] * tangent[1] + tangent[2] * tangent[2]).sqrt();
+            if length > 1e-6 {
+                tangent[0] /= length;
+                tangent[1] /= length;
+                tangent[2] /= length;
+            } else {
+                // Fallback tangent if normalization fails
+                tangent = [1.0, 0.0, 0.0];
+            }
+            
+            vertex.tangent = tangent;
         }
     }
 }

@@ -598,6 +598,7 @@ mod tests {
     fn create_test_material() -> Material {
         Material {
             material_type: MaterialType::StandardPBR(StandardMaterialParams::default()),
+            textures: crate::render::material::MaterialTextures::new(),
             id: crate::render::material::MaterialId(0),
             name: Some("Test Material".to_string()),
         }

@@ -91,6 +91,12 @@ pub struct Vertex {
     
     /// Texture coordinates
     pub tex_coord: [f32; 2],
+    
+    /// Tangent vector for normal mapping
+    pub tangent: [f32; 3],
+    
+    /// Padding for alignment (brings total to 44 bytes, or 48 with padding)
+    pub _padding: f32,
 }
 
 // Safe to implement Pod and Zeroable for Vertex since it only contains f32 arrays
@@ -113,6 +119,9 @@ impl std::hash::Hash for Vertex {
         self.normal[2].to_bits().hash(state);
         self.tex_coord[0].to_bits().hash(state);
         self.tex_coord[1].to_bits().hash(state);
+        self.tangent[0].to_bits().hash(state);
+        self.tangent[1].to_bits().hash(state);
+        self.tangent[2].to_bits().hash(state);
     }
 }
 
@@ -123,6 +132,19 @@ impl Vertex {
             position,
             normal,
             tex_coord,
+            tangent: [0.0, 0.0, 0.0], // Will be calculated later
+            _padding: 0.0,
+        }
+    }
+    
+    /// Create a new vertex with tangent
+    pub fn new_with_tangent(position: [f32; 3], normal: [f32; 3], tex_coord: [f32; 2], tangent: [f32; 3]) -> Self {
+        Self {
+            position,
+            normal,
+            tex_coord,
+            tangent,
+            _padding: 0.0,
         }
     }
 }

@@ -4,20 +4,21 @@
 layout(location = 0) in vec3 position;
 layout(location = 1) in vec3 normal;
 layout(location = 2) in vec2 texCoord;
+layout(location = 3) in vec3 tangent;
 
-// Instance attributes (per-instance data)
-layout(location = 3) in vec4 instanceModelMatrix0;
-layout(location = 4) in vec4 instanceModelMatrix1;
-layout(location = 5) in vec4 instanceModelMatrix2;
-layout(location = 6) in vec4 instanceModelMatrix3;
-layout(location = 7) in vec4 instanceNormalMatrix0;
-layout(location = 8) in vec4 instanceNormalMatrix1;
-layout(location = 9) in vec4 instanceNormalMatrix2;
-layout(location = 10) in vec4 instanceNormalMatrix3;
-layout(location = 11) in vec4 instanceMaterialColor;
-layout(location = 12) in vec4 instanceEmission;
-layout(location = 13) in uvec4 instanceTextureFlags;
-layout(location = 14) in uint instanceMaterialIndex;
+// Instance attributes (per-instance data) - SHIFTED from 3+ to 4+
+layout(location = 4) in vec4 instanceModelMatrix0;
+layout(location = 5) in vec4 instanceModelMatrix1;
+layout(location = 6) in vec4 instanceModelMatrix2;
+layout(location = 7) in vec4 instanceModelMatrix3;
+layout(location = 8) in vec4 instanceNormalMatrix0;
+layout(location = 9) in vec4 instanceNormalMatrix1;
+layout(location = 10) in vec4 instanceNormalMatrix2;
+layout(location = 11) in vec4 instanceNormalMatrix3;
+layout(location = 12) in vec4 instanceMaterialColor;
+layout(location = 13) in vec4 instanceEmission;
+layout(location = 14) in uvec4 instanceTextureFlags;
+layout(location = 15) in uint instanceMaterialIndex;
 
 // Camera UBO - Set 0, Binding 0
 layout(set = 0, binding = 0) uniform CameraUBO {
@@ -52,6 +53,7 @@ layout(location = 4) out vec4 fragInstanceMaterialColor;
 layout(location = 5) out flat uint fragInstanceMaterialIndex;
 layout(location = 6) out vec4 fragInstanceEmission;
 layout(location = 7) out flat uvec4 fragTextureFlags;
+layout(location = 8) out vec3 fragTangent;
 
 void main() {
     // Reconstruct model matrix from instance attributes
@@ -80,6 +82,9 @@ void main() {
     
     // Transform normal to world space using instance normal matrix
     fragNormal = normalMatrix * normal;
+    
+    // Transform tangent to world space using instance normal matrix
+    fragTangent = normalMatrix * tangent;
     
     // Pass texture coordinates unchanged
     fragTexCoord = texCoord;

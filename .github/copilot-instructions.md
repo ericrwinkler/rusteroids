@@ -17,4 +17,6 @@ When writing code, be sure to run a build and test it to ensure correctness. Use
 
 Always read the design documents and architecture diagrams provided in the `docs/` folder to understand the overall structure and design principles of the project. Follow the coding conventions and patterns established in the existing codebase.
 
+Always refer to the Game Engine Architecture .txt document when designing new systems or components to ensure alignment with established game engine design principles.
+
 Do not import new Cargo.toml dependencies without asking. We want to build our own libraries for asset loading, serialization, and other features to maintain control over the codebase and ensure compatibility with the ECS architecture.

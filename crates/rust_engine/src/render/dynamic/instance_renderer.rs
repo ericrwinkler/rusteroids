@@ -54,6 +54,10 @@ pub struct InstanceData {
     pub normal_matrix: [[f32; 4]; 4],
     /// Material color override
     pub material_color: [f32; 4],
+    /// Emission color (RGB) + emission strength (A)
+    pub emission_color: [f32; 4],
+    /// Texture enable flags: [base_color, normal, unused, unused]
+    pub texture_enable_flags: [u32; 4],
     /// Material index for texture/material lookup
     pub material_index: u32,
     /// Padding for proper alignment
@@ -71,13 +75,82 @@ impl InstanceData {
         
         // Extract material properties from the DynamicRenderData
         let (material_color, material_index) = Self::extract_material_properties(&render_data.material);
+        let emission_color = Self::extract_emission_properties(&render_data.material);
+        let texture_enable_flags = Self::extract_texture_flags(&render_data.material);
         
         Self {
             model_matrix: model_matrix.into(),
             normal_matrix,
             material_color,
+            emission_color,
+            texture_enable_flags,
             material_index,
             _padding: [0; 3],
+        }
+    }
+    
+    /// Extract emission color (RGB + strength) from Material
+    fn extract_emission_properties(material: &crate::render::material::Material) -> [f32; 4] {
+        use crate::render::material::MaterialType;
+        
+        match &material.material_type {
+            MaterialType::StandardPBR(params) => {
+                // Use emission from PBR parameters
+                [params.emission.x, params.emission.y, params.emission.z, params.emission_strength]
+            }
+            MaterialType::Unlit(_params) => {
+                // Unlit materials don't have emission
+                [0.0, 0.0, 0.0, 0.0]
+            }
+            MaterialType::Transparent { base_material, .. } => {
+                // Handle transparent materials by extracting from base material
+                match base_material.as_ref() {
+                    MaterialType::StandardPBR(params) => {
+                        [params.emission.x, params.emission.y, params.emission.z, params.emission_strength]
+                    }
+                    _ => {
+                        [0.0, 0.0, 0.0, 0.0]
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Extract texture enable flags from Material
+    fn extract_texture_flags(material: &crate::render::material::Material) -> [u32; 4] {
+        use crate::render::material::MaterialType;
+        
+        match &material.material_type {
+            MaterialType::StandardPBR(params) => {
+                // Extract texture flags from PBR parameters
+                // [base_color, normal, unused, unused]
+                [
+                    params.base_color_texture_enabled as u32,
+                    params.normal_texture_enabled as u32,
+                    0,
+                    0,
+                ]
+            }
+            MaterialType::Unlit(_params) => {
+                // Unlit materials don't use textures
+                [0, 0, 0, 0]
+            }
+            MaterialType::Transparent { base_material, .. } => {
+                // Handle transparent materials by extracting from base material
+                match base_material.as_ref() {
+                    MaterialType::StandardPBR(params) => {
+                        [
+                            params.base_color_texture_enabled as u32,
+                            params.normal_texture_enabled as u32,
+                            0,
+                            0,
+                        ]
+                    }
+                    _ => {
+                        [0, 0, 0, 0]
+                    }
+                }
+            }
         }
     }
     
@@ -954,6 +1027,8 @@ mod tests {
         // Check material defaults
         assert_eq!(instance_data.material_color, [1.0, 1.0, 1.0, 1.0]);
         assert_eq!(instance_data.material_index, 0);
+        assert_eq!(instance_data.emission_color, [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(instance_data.texture_enable_flags, [0, 0, 0, 0]);
     }
     
     #[test]
@@ -968,6 +1043,8 @@ mod tests {
                 model_matrix: [[0.0; 4]; 4],
                 normal_matrix: [[0.0; 4]; 4],
                 material_color: [1.0, 1.0, 1.0, 1.0],
+                emission_color: [0.0, 0.0, 0.0, 0.0],
+                texture_enable_flags: [0, 0, 0, 0],
                 material_index: i as u32,
                 _padding: [0; 3],
             };
@@ -983,6 +1060,8 @@ mod tests {
             model_matrix: [[0.0; 4]; 4],
             normal_matrix: [[0.0; 4]; 4],
             material_color: [1.0, 1.0, 1.0, 1.0],
+            emission_color: [0.0, 0.0, 0.0, 0.0],
+            texture_enable_flags: [0, 0, 0, 0],
             material_index: 999,
             _padding: [0; 3],
         };

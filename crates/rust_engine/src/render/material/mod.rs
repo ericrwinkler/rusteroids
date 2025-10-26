@@ -48,6 +48,10 @@ pub struct StandardMaterialParams {
     pub emission_strength: f32,
     /// Normal map scale factor
     pub normal_scale: f32,
+    /// Enable base color texture sampling
+    pub base_color_texture_enabled: bool,
+    /// Enable normal map texture sampling
+    pub normal_texture_enabled: bool,
 }
 
 impl Default for StandardMaterialParams {
@@ -61,6 +65,8 @@ impl Default for StandardMaterialParams {
             emission: Vec3::new(0.0, 0.0, 0.0),
             emission_strength: 0.0,
             normal_scale: 1.0,
+            base_color_texture_enabled: false,
+            normal_texture_enabled: false,
         }
     }
 }

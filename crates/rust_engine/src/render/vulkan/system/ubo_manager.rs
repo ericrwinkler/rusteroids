@@ -197,13 +197,15 @@ impl UboManager {
             roughness: 0.8,
             ambient_occlusion: 1.0,
             normal_scale: 1.0,
-            emission: Vec3::new(1.0, 0.5, 0.0), // Orange emission
-            emission_strength: 1.5,
+            emission: Vec3::new(0.0, 0.0, 0.0), // No global emission - per-instance now
+            emission_strength: 0.0,
+            base_color_texture_enabled: false,
+            normal_texture_enabled: false,
         };
         
         let default_material_ubo = StandardMaterialUBO::from_params(&default_material_params)
             .with_texture_flags(true, false, false, false) // Enable base_color texture
-            .with_emission_texture(true); // Enable emission texture
+            .with_emission_texture(true); // Enable emission texture sampling
         
         log::info!("Default Material UBO - base_color: {:?}, emission: {:?}, texture_flags: {:?}, additional_params: {:?}",
                    default_material_ubo.base_color,
@@ -371,6 +373,44 @@ impl UboManager {
             }
         };
         
+        // Load normal map texture BEFORE the descriptor set loop
+        let normal_map_texture_idx = {
+            let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            path.pop(); // rust_engine
+            path.pop(); // crates
+            path.push("resources");
+            path.push("textures");
+            path.push("normal_map.png");
+
+            match ImageData::from_file(path.to_str().unwrap_or("resources/textures/normal_map.png")) {
+                Ok(img) => {
+                    log::info!("Found normal_map.png at {:?}, creating GPU texture", path);
+                    match Texture::from_image_data(
+                        Arc::new(context.raw_device().clone()),
+                        Arc::new(context.instance().clone()),
+                        context.physical_device().device,
+                        resource_manager.command_pool_handle(),
+                        context.graphics_queue(),
+                        &img,
+                    ) {
+                        Ok(tex) => {
+                            let idx = resource_manager.add_loaded_texture(tex);
+                            log::info!("Successfully loaded and stored normal_map.png as texture #{}", idx);
+                            Some(idx)
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to create normal texture from image data: {:?}, falling back to default", e);
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::info!("No normal_map.png found or failed to load: {:?}, using default normal", e);
+                    None
+                }
+            }
+        };
+        
         for &descriptor_set in resource_manager.material_descriptor_sets().iter() {
             let material_buffer_info = vk::DescriptorBufferInfo::builder()
                 .buffer(self.material_ubo_buffer.handle())
@@ -424,11 +464,28 @@ impl UboManager {
                     .build()
             };
                 
-            let normal_image_info = vk::DescriptorImageInfo::builder()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(resource_manager.default_normal_texture().image_view())
-                .sampler(resource_manager.default_normal_texture().sampler())
-                .build();
+            // Build normal image info from loaded texture or default
+            let normal_image_info = if let Some(idx) = normal_map_texture_idx {
+                if let Some(stored) = resource_manager.get_loaded_texture(idx) {
+                    vk::DescriptorImageInfo::builder()
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .image_view(stored.image_view())
+                        .sampler(stored.sampler())
+                        .build()
+                } else {
+                    vk::DescriptorImageInfo::builder()
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .image_view(resource_manager.default_normal_texture().image_view())
+                        .sampler(resource_manager.default_normal_texture().sampler())
+                        .build()
+                }
+            } else {
+                vk::DescriptorImageInfo::builder()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(resource_manager.default_normal_texture().image_view())
+                    .sampler(resource_manager.default_normal_texture().sampler())
+                    .build()
+            };
                 
             let metallic_roughness_image_info = vk::DescriptorImageInfo::builder()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -677,6 +734,8 @@ impl UboManager {
             normal_scale: 1.0,
             emission: Vec3::new(0.0, 0.0, 0.0),
             emission_strength: 0.0,
+            base_color_texture_enabled: false,
+            normal_texture_enabled: false,
         };
         
         let material_ubo = StandardMaterialUBO::from_params(&material_params)

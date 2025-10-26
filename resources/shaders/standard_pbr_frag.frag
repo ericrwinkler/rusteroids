@@ -57,6 +57,8 @@ layout(location = 2) in vec2 fragTexCoord;
 layout(location = 3) in vec3 fragCameraPosition;
 layout(location = 4) in vec4 fragInstanceMaterialColor;
 layout(location = 5) in flat uint fragInstanceMaterialIndex;
+layout(location = 6) in vec4 fragInstanceEmission;
+layout(location = 7) in flat uvec4 fragTextureFlags;
 
 // Output color
 layout(location = 0) out vec4 fragColor;
@@ -109,7 +111,8 @@ void main() {
     vec3 baseColor = material.base_color.rgb * fragInstanceMaterialColor.rgb;
     float alpha = material.base_color.a * fragInstanceMaterialColor.a;
     
-    if (material.texture_flags.x != 0u) {
+    // Apply base color texture if enabled per-instance
+    if (fragTextureFlags.x != 0u) {
         vec4 textureColor = texture(baseColorTexture, fragTexCoord);
         baseColor *= textureColor.rgb;
         alpha *= textureColor.a;
@@ -130,9 +133,9 @@ void main() {
         ao *= texture(aoTexture, fragTexCoord).r;
     }
     
-    // Sample normal map (simplified)
+    // Sample normal map using per-instance flag
     vec3 normal = normalize(fragNormal);
-    if (material.texture_flags.y != 0u) {
+    if (fragTextureFlags.y != 0u) {
         // TODO: Implement proper tangent space normal mapping
         // For now, just use the vertex normal
     }
@@ -213,9 +216,9 @@ void main() {
         lighting_result += calculatePBR(baseColor, metallic, roughness, normal, lightDir, viewDir, attenuatedColor);
     }
     
-    // Add emission
-    vec3 emissionColor = material.emission.rgb;
-    float emissionStrength = material.emission.a;
+    // Add emission (use per-instance emission from vertex attributes)
+    vec3 emissionColor = fragInstanceEmission.rgb;
+    float emissionStrength = fragInstanceEmission.a;
     
     // Sample emission texture if enabled (additional_params.x is flag)
     if (material.additional_params.x != 0.0) {

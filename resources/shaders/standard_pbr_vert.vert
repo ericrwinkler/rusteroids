@@ -15,7 +15,9 @@ layout(location = 8) in vec4 instanceNormalMatrix1;
 layout(location = 9) in vec4 instanceNormalMatrix2;
 layout(location = 10) in vec4 instanceNormalMatrix3;
 layout(location = 11) in vec4 instanceMaterialColor;
-layout(location = 12) in uint instanceMaterialIndex;
+layout(location = 12) in vec4 instanceEmission;
+layout(location = 13) in uvec4 instanceTextureFlags;
+layout(location = 14) in uint instanceMaterialIndex;
 
 // Camera UBO - Set 0, Binding 0
 layout(set = 0, binding = 0) uniform CameraUBO {
@@ -48,6 +50,8 @@ layout(location = 2) out vec2 fragTexCoord;
 layout(location = 3) out vec3 fragCameraPosition;
 layout(location = 4) out vec4 fragInstanceMaterialColor;
 layout(location = 5) out flat uint fragInstanceMaterialIndex;
+layout(location = 6) out vec4 fragInstanceEmission;
+layout(location = 7) out flat uvec4 fragTextureFlags;
 
 void main() {
     // Reconstruct model matrix from instance attributes
@@ -86,4 +90,6 @@ void main() {
     // Pass instance material data to fragment shader
     fragInstanceMaterialColor = instanceMaterialColor;
     fragInstanceMaterialIndex = instanceMaterialIndex;
+    fragInstanceEmission = instanceEmission;
+    fragTextureFlags = instanceTextureFlags;
 }

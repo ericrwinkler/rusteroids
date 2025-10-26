@@ -21,7 +21,7 @@ use rust_engine::render::{
     GraphicsEngine,
     VulkanRendererConfig,
     WindowHandle,
-    material::MaterialId,
+    material::{MaterialId, MaterialType},
     GameObject,
     shared_resources::SharedRenderingResources,
     dynamic::{DynamicObjectHandle, MeshType},
@@ -32,8 +32,8 @@ use std::time::Instant;
 use rand::prelude::*;
 
 // Configuration constants
-const MAX_TEAPOTS: usize = 10;  // Maximum number of teapots before oldest are despawned
-const MAX_LIGHTS: usize = 8;    // Maximum number of lights before oldest are despawned
+const MAX_TEAPOTS: usize = 20;  // Maximum number of monkeys before oldest are despawned
+const MAX_LIGHTS: usize = 12;    // Maximum number of lights before oldest are despawned
 
 #[derive(Clone)]
 struct TeapotInstance {
@@ -259,17 +259,138 @@ impl DynamicTeapotApp {
         // Random lifetime between 5-15 seconds
         let lifetime = rng.gen_range(5.0..15.0);
         
-        // Select random material from our test materials
-        let materials = Self::create_teapot_materials();
-        let material_index = rng.gen_range(0..materials.len());
-        let selected_material = materials[material_index].clone();
+        // Weighted material selection:
+        // 60% Standard PBR (no emission)
+        // 25% Standard PBR with emission  
+        // 10% Transparent variants
+        // 5% Unlit variants
+        let roll = rng.gen_range(0.0..1.0);
         
-        // Spawn dynamic object with the full Material (preserves pipeline type)
+        let selected_material = if roll < 0.60 {
+            // Standard PBR without emission (60%)
+            let base_colors = [
+                Vec3::new(0.8, 0.2, 0.2),  // Red
+                Vec3::new(0.2, 0.8, 0.2),  // Green
+                Vec3::new(0.2, 0.2, 0.8),  // Blue
+                Vec3::new(0.8, 0.8, 0.2),  // Yellow
+                Vec3::new(0.8, 0.2, 0.8),  // Magenta
+                Vec3::new(0.2, 0.8, 0.8),  // Cyan
+                Vec3::new(0.8, 0.5, 0.3),  // Orange-brown
+            ];
+            let base_color = base_colors[rng.gen_range(0..base_colors.len())];
+            
+            // Random texture application (30-40% chance for each texture)
+            let use_base_texture = rng.gen_bool(0.35);
+            let use_normal_texture = rng.gen_bool(0.35);
+            
+            Material::standard_pbr(StandardMaterialParams {
+                base_color,
+                metallic: rng.gen_range(0.0..0.3),
+                roughness: rng.gen_range(0.6..0.9),
+                base_color_texture_enabled: use_base_texture,
+                normal_texture_enabled: use_normal_texture,
+                ..Default::default()
+            })
+        } else if roll < 0.85 {
+            // Standard PBR with emission (25%)
+            let emission_colors = [
+                Vec3::new(1.0, 0.5, 0.0),  // Orange
+                Vec3::new(1.0, 0.0, 0.5),  // Pink
+                Vec3::new(0.0, 1.0, 0.5),  // Cyan-green
+                Vec3::new(0.5, 0.0, 1.0),  // Purple
+                Vec3::new(1.0, 1.0, 0.0),  // Yellow
+                Vec3::new(0.0, 0.5, 1.0),  // Blue
+            ];
+            let emission = emission_colors[rng.gen_range(0..emission_colors.len())];
+            let emission_strength = rng.gen_range(0.8..2.5); // Dynamic intensity
+            
+            // Random texture application (30-40% chance for each texture)
+            let use_base_texture = rng.gen_bool(0.35);
+            let use_normal_texture = rng.gen_bool(0.35);
+            
+            Material::standard_pbr(StandardMaterialParams {
+                base_color: Vec3::new(0.8, 0.8, 0.8),
+                metallic: 0.1,
+                roughness: 0.8,
+                emission,
+                emission_strength,
+                base_color_texture_enabled: use_base_texture,
+                normal_texture_enabled: use_normal_texture,
+                ..Default::default()
+            })
+        } else if roll < 0.95 {
+            // Transparent variants (10%)
+            if rng.gen_bool(0.5) {
+                // Transparent PBR (glass-like)
+                let glass_colors = [
+                    Vec3::new(0.2, 0.4, 1.0),  // Blue glass
+                    Vec3::new(0.4, 1.0, 0.8),  // Cyan glass
+                    Vec3::new(1.0, 0.2, 0.8),  // Purple glass
+                ];
+                let color = glass_colors[rng.gen_range(0..glass_colors.len())];
+                
+                Material::transparent_pbr(StandardMaterialParams {
+                    base_color: color,
+                    alpha: 0.3,
+                    metallic: 0.9,
+                    roughness: 0.1,
+                    ..Default::default()
+                })
+            } else {
+                // Transparent Unlit (ghost-like)
+                let ghost_colors = [
+                    Vec3::new(1.0, 1.0, 0.5),  // Yellow ghost
+                    Vec3::new(0.5, 1.0, 0.5),  // Green ghost
+                    Vec3::new(1.0, 0.5, 0.5),  // Orange ghost
+                ];
+                let color = ghost_colors[rng.gen_range(0..ghost_colors.len())];
+                
+                Material::transparent_unlit(UnlitMaterialParams {
+                    color,
+                    alpha: 0.4,
+                })
+            }
+        } else {
+            // Unlit variants (5%)
+            let bright_colors = [
+                Vec3::new(1.0, 0.0, 0.0),  // Bright red
+                Vec3::new(0.0, 1.0, 0.0),  // Bright green
+                Vec3::new(0.0, 0.0, 1.0),  // Bright blue
+                Vec3::new(1.0, 1.0, 0.0),  // Bright yellow
+            ];
+            let color = bright_colors[rng.gen_range(0..bright_colors.len())];
+            
+            Material::unlit(UnlitMaterialParams {
+                color,
+                alpha: 1.0,
+            })
+        };
+        
+        // Get material name for logging
+        let material_name = match &selected_material.material_type {
+            MaterialType::StandardPBR(params) => {
+                if params.emission.x > 0.0 || params.emission.y > 0.0 || params.emission.z > 0.0 {
+                    "Emissive PBR Monkey"
+                } else {
+                    "Standard PBR Monkey"
+                }
+            }
+            MaterialType::Unlit(_) => "Unlit Monkey",
+            MaterialType::Transparent { base_material, .. } => {
+                match base_material.as_ref() {
+                    MaterialType::StandardPBR(_) => "Transparent PBR Monkey",
+                    MaterialType::Unlit(_) => "Transparent Unlit Monkey",
+                    _ => "Transparent Monkey"
+                }
+            }
+        };
+        
+        // Spawn dynamic object with 1.5x scale (50% bigger)
         match self.graphics_engine.spawn_dynamic_object(
             MeshType::Teapot,
             position,
             Vec3::new(0.0, 0.0, 0.0), // No initial rotation
-            Vec3::new(1.0, 1.0, 1.0), // Unit scale
+            Vec3::new(1.5, 1.5, 1.5), // 50% bigger
             selected_material.clone(),
         ) {
             Ok(dynamic_handle) => {
@@ -279,7 +400,7 @@ impl DynamicTeapotApp {
                     dynamic_handle: Some(dynamic_handle),
                     position,
                     rotation: Vec3::new(0.0, 0.0, 0.0),
-                    scale: 1.0,
+                    scale: 1.5,
                     spin_speed: Vec3::new(
                         rng.gen_range(-2.0..2.0),
                         rng.gen_range(-2.0..2.0),
@@ -288,16 +409,14 @@ impl DynamicTeapotApp {
                     orbit_radius: rng.gen_range(2.0..8.0),
                     orbit_speed: rng.gen_range(0.5..2.0),
                     orbit_center: position,
-                    material_index,
+                    material_index: 0, // Not used anymore
                     spawn_time: Instant::now(),
                     lifetime,
                 };
                 
                 self.teapot_instances.push(instance);
                 
-                let material_name = selected_material.name.as_deref().unwrap_or("Unknown");
-                
-                log::info!("Spawned teapot #{} at {:?} with {} material (lifetime: {:.1}s)", 
+                log::info!("Spawned monkey #{} at {:?} with {} material (lifetime: {:.1}s)", 
                           self.teapot_instances.len(), position, material_name, lifetime);
             }
             Err(e) => {

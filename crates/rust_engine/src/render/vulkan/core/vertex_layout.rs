@@ -66,10 +66,10 @@ impl VulkanVertexLayout {
     /// 
     /// Returns vertex input state for instanced rendering with:
     /// - Binding 0: Regular vertex data (position, normal, tex_coord)  
-    /// - Binding 1: Instance data (model matrix, normal matrix, material color, material index)
+    /// - Binding 1: Instance data (model matrix, normal matrix, material color, emission color, texture flags, material index)
     pub fn get_instanced_input_state() -> (
         [vk::VertexInputBindingDescription; 2], 
-        [vk::VertexInputAttributeDescription; 13] // 3 vertex attrs + 10 instance attrs
+        [vk::VertexInputAttributeDescription; 15] // 3 vertex attrs + 12 instance attrs
     ) {
         let vertex_binding = Self::get_binding_description();
         let instance_binding = Self::get_instance_binding_description();
@@ -80,15 +80,15 @@ impl VulkanVertexLayout {
         // Combine bindings
         let bindings = [vertex_binding, instance_binding];
         
-        // Combine attributes (3 vertex + 10 instance = 13 total)
-        let mut attributes = [vk::VertexInputAttributeDescription::default(); 13];
+        // Combine attributes (3 vertex + 12 instance = 15 total)
+        let mut attributes = [vk::VertexInputAttributeDescription::default(); 15];
         
         // Copy vertex attributes (locations 0-2)
         attributes[0] = vertex_attributes[0];
         attributes[1] = vertex_attributes[1]; 
         attributes[2] = vertex_attributes[2];
         
-        // Copy instance attributes (locations 3-12)
+        // Copy instance attributes (locations 3-14)
         for (i, attr) in instance_attributes.iter().enumerate() {
             attributes[3 + i] = *attr;
         }
@@ -111,8 +111,10 @@ impl VulkanVertexLayout {
     /// - Locations 3-6: Model matrix (4x vec4)
     /// - Locations 7-10: Normal matrix (4x vec4, only first 3 used)
     /// - Location 11: Material color (vec4)
-    /// - Location 12: Material index (uint)
-    fn get_instance_attribute_descriptions() -> [vk::VertexInputAttributeDescription; 10] {
+    /// - Location 12: Emission color (vec4)
+    /// - Location 13: Texture enable flags (uvec4)
+    /// - Location 14: Material index (uint)
+    fn get_instance_attribute_descriptions() -> [vk::VertexInputAttributeDescription; 12] {
         use std::mem::size_of;
         
         [
@@ -176,12 +178,28 @@ impl VulkanVertexLayout {
                 offset: (8 * size_of::<[f32; 4]>()) as u32,
             },
             
-            // Material index (uint at location 12)
+            // Emission color (vec4 at location 12)
             vk::VertexInputAttributeDescription {
                 binding: 1,
                 location: 12,
-                format: vk::Format::R32_UINT,
+                format: vk::Format::R32G32B32A32_SFLOAT,
                 offset: (9 * size_of::<[f32; 4]>()) as u32,
+            },
+            
+            // Texture enable flags (uvec4 at location 13)
+            vk::VertexInputAttributeDescription {
+                binding: 1,
+                location: 13,
+                format: vk::Format::R32G32B32A32_UINT,
+                offset: (10 * size_of::<[f32; 4]>()) as u32,
+            },
+            
+            // Material index (uint at location 14)
+            vk::VertexInputAttributeDescription {
+                binding: 1,
+                location: 14,
+                format: vk::Format::R32_UINT,
+                offset: (10 * size_of::<[f32; 4]>() + size_of::<[u32; 4]>()) as u32,
             },
         ]
     }

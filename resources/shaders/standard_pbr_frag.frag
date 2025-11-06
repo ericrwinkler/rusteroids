@@ -252,6 +252,12 @@ void main() {
         finalAlpha *= texture(opacityTexture, fragTexCoord).r;
     }
     
+    // Alpha cutoff for transparent materials (like text with font atlas)
+    // Discard fragments below threshold to prevent rendering background areas
+    if (finalAlpha < 0.1) {
+        discard;
+    }
+    
     // Output final color
     fragColor = vec4(lighting_result, finalAlpha);
 }

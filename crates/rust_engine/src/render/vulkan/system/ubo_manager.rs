@@ -767,4 +767,9 @@ impl UboManager {
     pub fn material_descriptor_set_layout(&self) -> vk::DescriptorSetLayout {
         self.material_descriptor_set_layout.handle()
     }
+    
+    /// Get the material UBO buffer handle for descriptor set binding
+    pub fn material_ubo_buffer_handle(&self) -> vk::Buffer {
+        self.material_ubo_buffer.handle()
+    }
 }

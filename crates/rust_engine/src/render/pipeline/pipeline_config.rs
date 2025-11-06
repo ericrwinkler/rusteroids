@@ -151,7 +151,7 @@ impl PipelineConfig {
             depth_test: true,
             depth_write: false, // Don't write to depth buffer for transparency
             alpha_blending: true,
-            cull_mode: CullMode::None, // Don't cull for transparency
+            cull_mode: CullMode::Back, // Cull back faces for single-sided quads
         }
     }
 
@@ -165,7 +165,7 @@ impl PipelineConfig {
             depth_test: true,
             depth_write: false, // Don't write to depth buffer for transparency
             alpha_blending: true,
-            cull_mode: CullMode::None, // Don't cull for transparency
+            cull_mode: CullMode::Back, // Cull back faces (single-sided rendering)
         }
     }
 }

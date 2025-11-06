@@ -592,6 +592,264 @@ impl crate::render::RenderBackend for VulkanRenderer {
         Ok(())
     }
     
+    fn record_mesh_draw(&mut self, mesh: &crate::render::Mesh, transform: &crate::foundation::math::Mat4, material: &crate::render::Material) -> crate::render::BackendResult<()> {
+        // Check if we have an active recording session
+        let recording_state = self.command_recording_state.as_ref()
+            .ok_or_else(|| crate::render::RenderError::BackendError(
+                "No active command recording. Text rendering must happen during dynamic frame.".to_string()
+            ))?;
+        
+        let command_buffer = recording_state.command_buffer;
+        let frame_index = recording_state.frame_index;
+        
+        // Update mesh data
+        self.update_mesh(&mesh.vertices, &mesh.indices)
+            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+        
+        // Determine pipeline type - simplified for text (always transparent unlit)
+        let pipeline_type = crate::render::PipelineType::TransparentUnlit;
+        
+        let pipeline_handle = self.pipeline_manager.get_pipeline_by_type(pipeline_type)
+            .ok_or_else(|| crate::render::RenderError::BackendError(
+                format!("Pipeline {:?} not found", pipeline_type)
+            ))?;
+        
+        // Get descriptor sets from resource manager
+        let frame_descriptor_set = self.resource_manager.frame_descriptor_sets()[frame_index];
+        let material_descriptor_set = self.resource_manager.material_descriptor_sets()[0]; // Use default material set
+        
+        // Record draw commands
+        unsafe {
+            let device = self.context.raw_device();
+            
+            // Bind pipeline
+            device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline_handle.handle(),
+            );
+            
+            // Set dynamic viewport and scissor
+            let extent = self.context.swapchain().extent();
+            let viewport = vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: extent.width as f32,
+                height: extent.height as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            };
+            device.cmd_set_viewport(command_buffer, 0, &[viewport]);
+            
+            let scissor = vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent,
+            };
+            device.cmd_set_scissor(command_buffer, 0, &[scissor]);
+            
+            // Bind vertex and index buffers
+            // Note: Pipeline expects 2 bindings (vertex + instance), but we're not using instancing for text
+            // We bind the same vertex buffer to both bindings as a workaround
+            device.cmd_bind_vertex_buffers(
+                command_buffer,
+                0,
+                &[
+                    self.resource_manager.vertex_buffer().handle(),
+                    self.resource_manager.vertex_buffer().handle(), // Dummy binding for instance data
+                ],
+                &[0, 0],
+            );
+            device.cmd_bind_index_buffer(
+                command_buffer,
+                self.resource_manager.index_buffer().handle(),
+                0,
+                vk::IndexType::UINT32,
+            );
+            
+            // Bind descriptor sets
+            device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline_handle.layout(),
+                0,
+                &[frame_descriptor_set, material_descriptor_set],
+                &[],
+            );
+            
+            // Push constants: model matrix (64 bytes) + normal matrix (48 bytes) + material color (16 bytes) = 128 bytes
+            let model_array = [
+                [transform[(0, 0)], transform[(1, 0)], transform[(2, 0)], transform[(3, 0)]],
+                [transform[(0, 1)], transform[(1, 1)], transform[(2, 1)], transform[(3, 1)]],
+                [transform[(0, 2)], transform[(1, 2)], transform[(2, 2)], transform[(3, 2)]],
+                [transform[(0, 3)], transform[(1, 3)], transform[(2, 3)], transform[(3, 3)]],
+            ];
+            
+            // Calculate normal matrix (transpose of inverse of upper 3x3)
+            // For uniform scale, this simplifies to just the rotation part
+            let normal_matrix = [
+                [transform[(0, 0)], transform[(1, 0)], transform[(2, 0)], 0.0],
+                [transform[(0, 1)], transform[(1, 1)], transform[(2, 1)], 0.0],
+                [transform[(0, 2)], transform[(1, 2)], transform[(2, 2)], 0.0],
+            ];
+            
+            // Material color (white with full alpha for text)
+            let material_color = [1.0f32, 1.0, 1.0, 1.0];
+            
+            // Combine all push constants (128 bytes total)
+            let mut push_constant_data = Vec::with_capacity(32); // 32 floats = 128 bytes
+            
+            // Model matrix (16 floats = 64 bytes)
+            for row in &model_array {
+                push_constant_data.extend_from_slice(row);
+            }
+            
+            // Normal matrix (12 floats = 48 bytes)
+            for row in &normal_matrix {
+                push_constant_data.extend_from_slice(row);
+            }
+            
+            // Material color (4 floats = 16 bytes)
+            push_constant_data.extend_from_slice(&material_color);
+            
+            let push_constants = bytemuck::cast_slice(&push_constant_data);
+            device.cmd_push_constants(
+                command_buffer,
+                pipeline_handle.layout(),
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT, // Both stages!
+                0,
+                push_constants,
+            );
+            
+            // Draw indexed
+            let index_count = self.resource_manager.index_buffer().index_count();
+            device.cmd_draw_indexed(command_buffer, index_count, 1, 0, 0, 0);
+        }
+        
+        Ok(())
+    }
+    
+    fn record_indexed_draw(&mut self, index_start: u32, index_count: u32, transform: &crate::foundation::math::Mat4, material: &crate::render::Material) -> crate::render::BackendResult<()> {
+        // Check if we have an active recording session
+        let recording_state = self.command_recording_state.as_ref()
+            .ok_or_else(|| crate::render::RenderError::BackendError(
+                "No active command recording. Text rendering must happen during dynamic frame.".to_string()
+            ))?;
+        
+        let command_buffer = recording_state.command_buffer;
+        let frame_index = recording_state.frame_index;
+        
+        // Use the material's required pipeline type
+        let pipeline_type = material.required_pipeline();
+        
+        let pipeline_handle = self.pipeline_manager.get_pipeline_by_type(pipeline_type)
+            .ok_or_else(|| crate::render::RenderError::BackendError(
+                format!("Pipeline {:?} not found", pipeline_type)
+            ))?;
+        
+        // Get descriptor sets from resource manager
+        let frame_descriptor_set = self.resource_manager.frame_descriptor_sets()[frame_index];
+        let material_descriptor_set = self.resource_manager.material_descriptor_sets()[0];
+        
+        // Record draw commands (mesh data already uploaded)
+        unsafe {
+            let device = self.context.raw_device();
+            
+            // Bind pipeline
+            device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline_handle.handle(),
+            );
+            
+            // Set dynamic viewport and scissor
+            let extent = self.context.swapchain().extent();
+            let viewport = vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: extent.width as f32,
+                height: extent.height as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            };
+            device.cmd_set_viewport(command_buffer, 0, &[viewport]);
+            
+            let scissor = vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent,
+            };
+            device.cmd_set_scissor(command_buffer, 0, &[scissor]);
+            
+            // Bind vertex and index buffers
+            device.cmd_bind_vertex_buffers(
+                command_buffer,
+                0,
+                &[
+                    self.resource_manager.vertex_buffer().handle(),
+                    self.resource_manager.vertex_buffer().handle(),
+                ],
+                &[0, 0],
+            );
+            device.cmd_bind_index_buffer(
+                command_buffer,
+                self.resource_manager.index_buffer().handle(),
+                0,
+                vk::IndexType::UINT32,
+            );
+            
+            // Bind descriptor sets
+            device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline_handle.layout(),
+                0,
+                &[frame_descriptor_set, material_descriptor_set],
+                &[],
+            );
+            
+            // Push constants
+            let model_array = [
+                [transform[(0, 0)], transform[(1, 0)], transform[(2, 0)], transform[(3, 0)]],
+                [transform[(0, 1)], transform[(1, 1)], transform[(2, 1)], transform[(3, 1)]],
+                [transform[(0, 2)], transform[(1, 2)], transform[(2, 2)], transform[(3, 2)]],
+                [transform[(0, 3)], transform[(1, 3)], transform[(2, 3)], transform[(3, 3)]],
+            ];
+            
+            let normal_matrix = [
+                [transform[(0, 0)], transform[(1, 0)], transform[(2, 0)], 0.0],
+                [transform[(0, 1)], transform[(1, 1)], transform[(2, 1)], 0.0],
+                [transform[(0, 2)], transform[(1, 2)], transform[(2, 2)], 0.0],
+            ];
+            
+            // Use material's base color
+            let color = material.get_base_color_array();
+            let material_color = [color[0], color[1], color[2], color[3]];
+            
+            let mut push_constant_data = Vec::with_capacity(32);
+            for row in &model_array {
+                push_constant_data.extend_from_slice(row);
+            }
+            for row in &normal_matrix {
+                push_constant_data.extend_from_slice(row);
+            }
+            push_constant_data.extend_from_slice(&material_color);
+            
+            let push_constants = bytemuck::cast_slice(&push_constant_data);
+            device.cmd_push_constants(
+                command_buffer,
+                pipeline_handle.layout(),
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                0,
+                push_constants,
+            );
+            
+            // Draw indexed with specific range
+            println!("DRAW CMD: index_start={}, index_count={}", index_start, index_count);
+            device.cmd_draw_indexed(command_buffer, index_count, 1, index_start, 0, 0);
+        }
+        
+        Ok(())
+    }
+    
     fn create_object_resources(&mut self, _material: &crate::render::Material) -> crate::render::BackendResult<crate::render::backend::ObjectResourceHandle> {
         let object_id = self.next_object_id;
         self.next_object_id += 1;
@@ -699,7 +957,9 @@ impl VulkanRenderer {
                                                        instance_renderer: &mut crate::render::dynamic::InstanceRenderer,
                                                        dynamic_objects: &std::collections::HashMap<crate::render::dynamic::DynamicObjectHandle, crate::render::dynamic::DynamicRenderData>,
                                                        shared_resources: &crate::render::SharedRenderingResources,
-                                                       camera_position: crate::foundation::math::Vec3) 
+                                                       pool_material_descriptor_set: ash::vk::DescriptorSet,
+                                                       camera_position: crate::foundation::math::Vec3,
+                                                       camera_target: crate::foundation::math::Vec3) 
                                                        -> crate::render::BackendResult<()> {
         use std::collections::HashMap;
         use crate::render::material::PipelineType;
@@ -717,9 +977,9 @@ impl VulkanRenderer {
             
             log::debug!("Rendering {} objects grouped into {} pipeline types", dynamic_objects.len(), pipeline_groups.len());
             
-            // Get frame and material descriptor sets
+            // Get frame descriptor set and use pool-specific material descriptor set
             let frame_descriptor_set = self.resource_manager.frame_descriptor_sets()[self.current_frame];
-            let material_descriptor_set = self.resource_manager.material_descriptor_sets()[0];
+            let material_descriptor_set = pool_material_descriptor_set;  // Use pool's descriptor set with its texture
             
             // Set command buffer once for all pipeline groups
             instance_renderer.set_active_command_buffer(state.command_buffer, self.current_frame);
@@ -744,14 +1004,20 @@ impl VulkanRenderer {
             let opaque_pipeline_types = [PipelineType::StandardPBR, PipelineType::Unlit];
             let transparent_pipeline_types = [PipelineType::TransparentPBR, PipelineType::TransparentUnlit];
             
+            // Calculate camera forward direction for view-space Z sorting (industry standard)
+            let camera_forward = (camera_target - camera_position).normalize();
+            
             // Render opaque objects front-to-back
             for pipeline_type in &opaque_pipeline_types {
                 if let Some(mut objects) = pipeline_groups.remove(pipeline_type) {
-                    // Sort front-to-back: closest objects first for early-Z optimization
+                    // Sort front-to-back using view-space Z (dot product with camera forward)
+                    // This is more accurate than radial distance for large/elongated objects
                     objects.sort_by(|a, b| {
-                        let dist_a = (a.1.position - camera_position).norm_squared();
-                        let dist_b = (b.1.position - camera_position).norm_squared();
-                        dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+                        let to_object_a = a.1.position - camera_position;
+                        let to_object_b = b.1.position - camera_position;
+                        let depth_a = to_object_a.dot(&camera_forward); // View-space Z coordinate
+                        let depth_b = to_object_b.dot(&camera_forward);
+                        depth_a.partial_cmp(&depth_b).unwrap_or(std::cmp::Ordering::Equal)
                     });
                     
                     self.render_pipeline_group(
@@ -767,22 +1033,66 @@ impl VulkanRenderer {
             }
             
             // Render transparent objects back-to-front
+            // CRITICAL: Merge all transparent pipeline types and sort together for correct depth ordering
+            let mut all_transparent_objects = Vec::new();
             for pipeline_type in &transparent_pipeline_types {
-                if let Some(mut objects) = pipeline_groups.remove(pipeline_type) {
-                    // Sort back-to-front: furthest objects first for correct alpha blending
-                    objects.sort_by(|a, b| {
-                        let dist_a = (a.1.position - camera_position).norm_squared();
-                        let dist_b = (b.1.position - camera_position).norm_squared();
-                        dist_b.partial_cmp(&dist_a).unwrap_or(std::cmp::Ordering::Equal) // Note: reversed comparison
-                    });
-                    
+                if let Some(objects) = pipeline_groups.remove(pipeline_type) {
+                    all_transparent_objects.extend(objects.into_iter().map(|obj| (*pipeline_type, obj)));
+                }
+            }
+            
+            // Sort ALL transparent objects back-to-front using view-space Z
+            // This ensures correct alpha blending across different material types
+            all_transparent_objects.sort_by(|a, b| {
+                let to_object_a = a.1.1.position - camera_position;
+                let to_object_b = b.1.1.position - camera_position;
+                let depth_a = to_object_a.dot(&camera_forward);
+                let depth_b = to_object_b.dot(&camera_forward);
+                
+                // Log depth values for debugging
+                log::trace!("Comparing transparent objects: depth_a={:.2} (pipeline={:?}), depth_b={:.2} (pipeline={:?})", 
+                           depth_a, a.0, depth_b, b.0);
+                
+                depth_b.partial_cmp(&depth_a).unwrap_or(std::cmp::Ordering::Equal) // Reversed for back-to-front
+            });
+            
+            log::debug!("Sorted {} transparent objects for rendering", all_transparent_objects.len());
+            
+            // Render sorted transparent objects (may require pipeline switches)
+            let mut current_pipeline: Option<PipelineType> = None;
+            let mut batch_objects = Vec::new();
+            
+            for (pipeline_type, object) in all_transparent_objects {
+                // If pipeline changes, render the current batch first
+                if let Some(current) = current_pipeline {
+                    if current != pipeline_type {
+                        self.render_pipeline_group(
+                            instance_renderer,
+                            shared_resources,
+                            frame_descriptor_set,
+                            material_descriptor_set,
+                            current,
+                            &batch_objects,
+                            &object_indices
+                        )?;
+                        batch_objects.clear();
+                    }
+                }
+                
+                current_pipeline = Some(pipeline_type);
+                batch_objects.push(object);
+            }
+            
+            // Render final batch
+            if let Some(pipeline_type) = current_pipeline {
+                if !batch_objects.is_empty() {
                     self.render_pipeline_group(
                         instance_renderer,
                         shared_resources,
                         frame_descriptor_set,
                         material_descriptor_set,
-                        *pipeline_type,
-                        &objects,
+                        pipeline_type,
+                        &batch_objects,
                         &object_indices
                     )?;
                 }
@@ -793,6 +1103,85 @@ impl VulkanRenderer {
         } else {
             Err(crate::render::RenderError::BackendError("No active command recording".to_string()))
         }
+    }
+    
+    /// Upload instance data for a pool without rendering (Phase 1 of split architecture)
+    ///
+    /// This uploads ALL objects to the GPU buffer and returns the index mapping.
+    /// The indices can then be used for multiple draw calls without re-uploading.
+    pub fn upload_pool_instance_data(
+        &mut self,
+        instance_renderer: &mut crate::render::dynamic::InstanceRenderer,
+        dynamic_objects: &std::collections::HashMap<crate::render::dynamic::DynamicObjectHandle, crate::render::dynamic::DynamicRenderData>,
+    ) -> crate::render::BackendResult<std::collections::HashMap<crate::render::dynamic::DynamicObjectHandle, u32>> {
+        if let Some(ref state) = self.command_recording_state {
+            // Set command buffer for this pool
+            instance_renderer.set_active_command_buffer(state.command_buffer, self.current_frame);
+            
+            // Upload ALL objects ONCE
+            instance_renderer.upload_instance_data(dynamic_objects)
+                .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+            
+            // Build and return index map
+            let mut object_indices = std::collections::HashMap::new();
+            let mut current_index = 0u32;
+            for (handle, _) in dynamic_objects.iter() {
+                object_indices.insert(*handle, current_index);
+                current_index += 1;
+            }
+            
+            Ok(object_indices)
+        } else {
+            Err(crate::render::RenderError::BackendError("No active command recording".to_string()))
+        }
+    }
+    
+    /// Render a subset of already-uploaded objects (Phase 2 of split architecture)
+    ///
+    /// This renders specific objects using indices from upload_pool_instance_data().
+    /// Does NOT upload data - assumes upload_pool_instance_data() was already called.
+    pub fn render_uploaded_objects_subset(
+        &mut self,
+        instance_renderer: &mut crate::render::dynamic::InstanceRenderer,
+        shared_resources: &crate::render::SharedRenderingResources,
+        material_descriptor_set: vk::DescriptorSet,
+        objects: &[(crate::render::dynamic::DynamicObjectHandle, crate::render::dynamic::DynamicRenderData)],
+        object_indices: &std::collections::HashMap<crate::render::dynamic::DynamicObjectHandle, u32>,
+    ) -> crate::render::BackendResult<()> {
+        use std::collections::HashMap;
+        use crate::render::material::PipelineType;
+        
+        if self.command_recording_state.is_none() {
+            return Err(crate::render::RenderError::BackendError("No active command recording".to_string()));
+        }
+        
+        // Get frame descriptor set
+        let frame_descriptor_set = self.resource_manager.frame_descriptor_sets()[self.current_frame];
+        
+        // Group objects by pipeline type
+        let mut pipeline_groups: HashMap<PipelineType, Vec<(crate::render::dynamic::DynamicObjectHandle, &crate::render::dynamic::DynamicRenderData)>> = HashMap::new();
+        
+        for (handle, render_data) in objects.iter() {
+            let pipeline_type = render_data.material.required_pipeline();
+            pipeline_groups.entry(pipeline_type)
+                .or_insert_with(Vec::new)
+                .push((*handle, render_data));
+        }
+        
+        // Render each pipeline group
+        for (pipeline_type, group_objects) in pipeline_groups {
+            self.render_pipeline_group(
+                instance_renderer,
+                shared_resources,
+                frame_descriptor_set,
+                material_descriptor_set,
+                pipeline_type,
+                &group_objects,
+                object_indices
+            )?;
+        }
+        
+        Ok(())
     }
     
     /// Helper method to render a single pipeline group
@@ -856,6 +1245,135 @@ impl VulkanRenderer {
         self.max_frames_in_flight
     }
     
+    /// Get the default material descriptor set
+    ///
+    /// Returns the first material descriptor set which serves as the default.
+    /// This is used for pools that don't have their own descriptor sets yet.
+    pub fn get_default_material_descriptor_set(&self) -> vk::DescriptorSet {
+        self.resource_manager.material_descriptor_sets()[0]
+    }
+    
+    /// Create a material descriptor set with a specific texture
+    ///
+    /// Allocates a new descriptor set and binds the specified texture to it.
+    /// All other texture bindings use default white textures.
+    ///
+    /// # Arguments
+    /// * `texture_handle` - The texture to bind as base color (binding 1)
+    ///
+    /// # Returns
+    /// A descriptor set configured with the specified texture
+    pub fn create_material_descriptor_set_with_texture(
+        &mut self,
+        texture_handle: crate::render::material::TextureHandle,
+    ) -> Result<vk::DescriptorSet, Box<dyn std::error::Error>> {
+        // Allocate a new descriptor set
+        let layouts = vec![self.ubo_manager.material_descriptor_set_layout()];
+        let alloc_info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(self.resource_manager.get_descriptor_pool())
+            .set_layouts(&layouts);
+
+        let descriptor_sets = unsafe {
+            self.context.raw_device().allocate_descriptor_sets(&alloc_info)
+                .map_err(|e| format!("Failed to allocate descriptor set: {:?}", e))?
+        };
+        
+        let descriptor_set = descriptor_sets[0];
+        
+        // Get the texture from resource manager
+        let texture = self.resource_manager.get_loaded_texture(texture_handle.0 as usize)
+            .ok_or("Texture not found in resource manager")?;
+        
+        // Material UBO buffer info - use actual size of StandardMaterialUBO
+        use crate::render::material::StandardMaterialUBO;
+        let material_ubo_size = std::mem::size_of::<StandardMaterialUBO>() as vk::DeviceSize;
+        let material_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(self.ubo_manager.material_ubo_buffer_handle())
+            .offset(0)
+            .range(material_ubo_size)
+            .build();
+        
+        // Base color texture - use the specified texture
+        let base_color_image_info = vk::DescriptorImageInfo::builder()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(texture.image_view())
+            .sampler(texture.sampler())
+            .build();
+        
+        // All other textures use default white
+        let default_image_info = vk::DescriptorImageInfo::builder()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(self.resource_manager.default_white_texture().image_view())
+            .sampler(self.resource_manager.default_white_texture().sampler())
+            .build();
+        
+        let descriptor_writes = vec![
+            // Binding 0: Material UBO
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(0)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(&[material_buffer_info])
+                .build(),
+            // Binding 1: Base color texture (custom texture)
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(1)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&[base_color_image_info])
+                .build(),
+            // Binding 2: Normal map (default)
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(2)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&[default_image_info])
+                .build(),
+            // Binding 3: Metallic/roughness (default)
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(3)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&[default_image_info])
+                .build(),
+            // Binding 4: AO (default)
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(4)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&[default_image_info])
+                .build(),
+            // Binding 5: Emission (default)
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(5)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&[default_image_info])
+                .build(),
+            // Binding 6: Opacity (default)
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(6)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&[default_image_info])
+                .build(),
+        ];
+        
+        unsafe {
+            self.context.raw_device().update_descriptor_sets(&descriptor_writes, &[]);
+        }
+        
+        log::info!("Created material descriptor set {:?} with texture {:?}", descriptor_set, texture_handle);
+        Ok(descriptor_set)
+    }
+    
     // FIXME: LEGACY - Remove after modular pipeline system is complete
     // This assumes a single active pipeline; new system selects pipeline per-material
     /// Get the current graphics pipeline (INTERNAL) (LEGACY - will be removed)
@@ -889,6 +1407,47 @@ impl VulkanRenderer {
     /// Get the render pass handle (INTERNAL)
     pub(crate) fn get_render_pass(&self) -> vk::RenderPass {
         self.render_pass.handle()
+    }
+
+    /// Upload texture from image data to GPU
+    ///
+    /// Creates a Vulkan texture from image data and returns a handle for use with materials.
+    /// This method provides access to texture creation for procedurally generated textures
+    /// like font atlases.
+    ///
+    /// # Arguments
+    /// * `image_data` - Image data (RGBA format)
+    /// * `texture_type` - Type of texture (BaseColor, Normal, etc.)
+    ///
+    /// # Returns
+    /// TextureHandle for the uploaded texture
+    pub fn upload_texture_from_image_data(
+        &mut self,
+        image_data: crate::assets::ImageData,
+        texture_type: crate::render::material::TextureType,
+    ) -> Result<crate::render::material::TextureHandle, Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+        use crate::render::vulkan::core::Texture;
+        
+        // Create Vulkan texture from image data
+        let texture = Texture::from_image_data(
+            Arc::new(self.context.raw_device().clone()),
+            Arc::new(self.context.instance().clone()),
+            self.context.physical_device().device,
+            self.resource_manager.command_pool_handle(),
+            self.context.graphics_queue(),
+            &image_data,
+        )?;
+        
+        // Store texture in resource manager and get index
+        let texture_index = self.resource_manager.add_loaded_texture(texture);
+        
+        // Create a TextureHandle (using index as handle ID)
+        // Note: This is a simplified approach - ideally TextureManager would be integrated
+        let handle = crate::render::material::TextureHandle(texture_index as u32);
+        
+        log::debug!("Uploaded texture {:?} (type: {:?}, index: {})", handle, texture_type, texture_index);
+        Ok(handle)
     }
     
     /// Record a minimal command buffer for instanced rendering only

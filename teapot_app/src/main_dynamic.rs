@@ -25,8 +25,12 @@ use rust_engine::render::{
     GameObject,
     shared_resources::SharedRenderingResources,
     dynamic::{DynamicObjectHandle, MeshType},
+    FontAtlas,
+    TextLayout,
+    text::{create_lit_text_material, TextRenderer},
 };
 use rust_engine::foundation::math::Vec3;
+use rust_engine::foundation::math::Vec4;
 use glfw::{Action, Key, WindowEvent};
 use std::time::Instant;
 use rand::prelude::*;
@@ -106,6 +110,7 @@ pub struct DynamicTeapotApp {
     light_instances: Vec<LightInstance>,
     teapot_mesh: Option<Mesh>,
     sphere_mesh: Option<Mesh>,
+    quad_mesh: Option<Mesh>, // Simple quad for testing
     material_ids: Vec<MaterialId>,
     
     // GameObject rendering system - unified multi-mesh architecture
@@ -129,6 +134,13 @@ pub struct DynamicTeapotApp {
     
     // Sunlight entity
     sunlight_entity: Option<Entity>,
+    
+    // Text rendering test
+    font_atlas: Option<FontAtlas>,
+    text_layout: Option<TextLayout>,
+    text_test_handle: Option<DynamicObjectHandle>,
+    text_renderer: Option<TextRenderer>,
+    text_material: Option<Material>,
 }
 
 impl DynamicTeapotApp {
@@ -212,6 +224,7 @@ impl DynamicTeapotApp {
             light_instances,
             teapot_mesh: None,
             sphere_mesh: None,
+            quad_mesh: None,
             material_ids,
             teapot_game_objects: Vec::new(),
             shared_resources: None,
@@ -228,6 +241,11 @@ impl DynamicTeapotApp {
             max_teapots: 10,
             max_lights: 10,
             sunlight_entity: Some(sunlight_entity),
+            font_atlas: None,
+            text_layout: None,
+            text_test_handle: None,
+            text_renderer: None,
+            text_material: None,
         }
     }
     
@@ -859,6 +877,55 @@ impl DynamicTeapotApp {
             }
         }
         
+        // Create simple quad mesh for testing
+        use rust_engine::render::Vertex;
+        let quad_vertices = vec![
+            // Bottom-left
+            Vertex {
+                position: [-1.0, -1.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                tex_coord: [0.0, 0.0],
+                tangent: [1.0, 0.0, 0.0],
+                _padding: 0.0,
+            },
+            // Top-left
+            Vertex {
+                position: [-1.0, 1.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                tex_coord: [0.0, 1.0],
+                tangent: [1.0, 0.0, 0.0],
+                _padding: 0.0,
+            },
+            // Top-right
+            Vertex {
+                position: [1.0, 1.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                tex_coord: [1.0, 1.0],
+                tangent: [1.0, 0.0, 0.0],
+                _padding: 0.0,
+            },
+            // Bottom-right
+            Vertex {
+                position: [1.0, -1.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                tex_coord: [1.0, 0.0],
+                tangent: [1.0, 0.0, 0.0],
+                _padding: 0.0,
+            },
+        ];
+        
+        let quad_indices = vec![
+            0, 2, 1,  // First triangle (CCW from front)
+            0, 3, 2,  // Second triangle (CCW from front)
+        ];
+        
+        let quad_mesh = Mesh {
+            vertices: quad_vertices,
+            indices: quad_indices,
+        };
+        self.quad_mesh = Some(quad_mesh.clone());
+        log::info!("Created quad mesh for testing");
+        
         // Initialize GameObject system for multiple individual draw calls
         if let Some(ref teapot_mesh) = self.teapot_mesh {
             // Create materials for teapots
@@ -911,7 +978,77 @@ impl DynamicTeapotApp {
             }
             log::info!("Created sphere mesh pool successfully");
         }
+        
+        // Initialize text rendering test
+        log::info!("Initializing text rendering test...");
+        self.initialize_text_test()?;
 
+        Ok(())
+    }
+    
+    fn initialize_text_test(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Load font
+        log::info!("Loading font from resources/fonts/default.ttf...");
+        let font_data = std::fs::read("resources/fonts/default.ttf")?;
+        
+        // Create font atlas
+        log::info!("Creating font atlas at 48px...");
+        let mut font_atlas = FontAtlas::new(&font_data, 48.0)?;
+        
+        // Upload font atlas to GPU
+        log::info!("Uploading font atlas to GPU...");
+        let texture_handle = font_atlas.upload_to_gpu(&mut self.graphics_engine)?;
+        log::info!("Font atlas uploaded successfully: {:?}", texture_handle);
+        
+        // Create text layout engine
+        let text_layout = TextLayout::new(font_atlas.clone());
+        
+        // Create text material - using lit text so it participates in scene lighting
+        // This makes text behave like other world objects (monkeys, etc.)
+        let bright_cyan = Vec3::new(0.0, 1.0, 1.0);
+        let text_material = create_lit_text_material(texture_handle, bright_cyan);
+        log::info!("Text material created");
+        
+        // Create TextRenderer (simple utility wrapper)
+        let text_renderer = TextRenderer::new(font_atlas.clone());
+        
+        // Store state
+        self.font_atlas = Some(font_atlas);
+        self.text_layout = Some(text_layout);
+        self.text_renderer = Some(text_renderer);
+        self.text_material = Some(text_material.clone());
+        
+        log::info!("✓ Text rendering system initialized");
+        
+        // Spawn static 3D text at origin using pool system
+        log::info!("Creating static 3D text 'HI BLAKE'...");
+        
+        use rust_engine::render::text::text_vertices_to_mesh;
+        let (test_vertices, test_indices) = self.text_layout.as_ref().unwrap().layout_text("HI BLAKE");
+        let test_mesh = text_vertices_to_mesh(test_vertices, test_indices);
+        
+        let test_text_material = self.text_material.as_ref().unwrap().clone();
+        
+        // Create pool for this text string
+        self.graphics_engine.create_mesh_pool(
+            MeshType::TextQuad,
+            &test_mesh,
+            &vec![test_text_material.clone()],
+            10
+        )?;
+        
+        // Spawn at origin
+        let test_text_handle = self.graphics_engine.spawn_dynamic_object(
+            MeshType::TextQuad,
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.05, 0.05, 0.05),
+            test_text_material,
+        )?;
+        
+        self.text_test_handle = Some(test_text_handle);
+        log::info!("✓ Static 3D text spawned at origin");
+        
         Ok(())
     }
     

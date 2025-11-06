@@ -201,6 +201,142 @@ let teapot_handle = pool_manager.spawn_object(
 pool_manager.render_all_pools(frame_index)?;
 ```
 
+#### Transparent Object Rendering - Split-Phase Architecture
+
+**Problem**: Transparent objects from different mesh pools (e.g., TextQuad pool and Teapot pool) need to sort correctly against each other for proper alpha blending. Simply rendering each pool sequentially causes visual artifacts where transparent objects from one pool always render before/after another pool regardless of depth.
+
+**Solution**: Split-phase rendering architecture that separates GPU upload from draw call recording.
+
+**Phase 1: Upload (Once Per Pool)**
+```rust
+// Upload ALL objects from each pool to GPU instance buffer
+for (mesh_type, pool) in &mut pools {
+    let active_objects = pool.get_active_objects();
+    
+    // Upload to GPU instance buffer ONCE
+    let object_indices = vulkan_renderer.upload_pool_instance_data(
+        pool.instance_renderer,
+        &active_objects
+    )?;
+    
+    // Store mapping: DynamicObjectHandle → buffer index
+    pool_upload_state.insert(mesh_type, object_indices);
+}
+```
+
+**Phase 2: Categorize Objects**
+```rust
+let camera_forward = (camera_target - camera_position).normalize();
+
+for (mesh_type, pool) in &pools {
+    for (handle, render_data) in pool.get_active_objects() {
+        let pipeline_type = render_data.material.required_pipeline();
+        
+        if pipeline_type.is_transparent() {
+            // Calculate view-space depth (dot product with camera forward)
+            let depth = (render_data.position - camera_position).dot(&camera_forward);
+            
+            transparent_objects.push(TransparentObjectInfo {
+                mesh_type,
+                handle,
+                render_data,
+                depth,
+            });
+        } else {
+            opaque_by_pool.entry(mesh_type).push((handle, render_data));
+        }
+    }
+}
+```
+
+**Phase 3: Render Opaque (Batched By Pool)**
+```rust
+// Opaque objects can render in any order (Z-buffer handles occlusion)
+for (mesh_type, objects) in opaque_by_pool {
+    let pool = get_pool(mesh_type);
+    
+    // Render using ALREADY-UPLOADED data (no re-upload)
+    vulkan_renderer.render_uploaded_objects_subset(
+        pool.instance_renderer,
+        pool.shared_resources,
+        pool.material_descriptor_set,
+        &objects,
+        &pool_upload_state[mesh_type]  // Use indices from Phase 1
+    )?;
+}
+```
+
+**Phase 4: Render Transparent (Globally Sorted)**
+```rust
+// Sort ALL transparent objects back-to-front for correct alpha blending
+transparent_objects.sort_by(|a, b| {
+    b.depth.partial_cmp(&a.depth).unwrap_or(Equal)  // Furthest first
+});
+
+// Batch consecutive same-pool objects for efficiency
+let mut current_batch = Vec::new();
+let mut current_pool = transparent_objects[0].mesh_type;
+
+for obj in transparent_objects {
+    if obj.mesh_type != current_pool {
+        // Pool changed - render current batch
+        render_transparent_batch(current_pool, &current_batch)?;
+        current_batch.clear();
+        current_pool = obj.mesh_type;
+    }
+    current_batch.push((obj.handle, obj.render_data));
+}
+
+// Render final batch
+render_transparent_batch(current_pool, &current_batch)?;
+
+fn render_transparent_batch(mesh_type, objects) {
+    let pool = get_pool(mesh_type);
+    
+    // Render using ALREADY-UPLOADED data (no re-upload)
+    vulkan_renderer.render_uploaded_objects_subset(
+        pool.instance_renderer,
+        pool.shared_resources,
+        pool.material_descriptor_set,
+        objects,
+        &pool_upload_state[mesh_type]  // CRITICAL: Same indices from Phase 1
+    )?;
+}
+```
+
+**Why This Works**:
+1. **Each pool uploads ONCE** - GPU instance buffers stay valid for entire frame
+2. **Object indices remain valid** - they reference the same uploaded buffer throughout rendering
+3. **Multiple draw calls possible** - can render different subsets without re-uploading
+4. **Cross-pool sorting** - transparent objects from different pools sort correctly
+5. **Efficient batching** - consecutive same-pool objects = single draw call
+6. **No buffer overwrites** - the critical flaw from naive approach is eliminated
+
+**Performance**:
+- **Upload overhead**: One upload per pool per frame (same as before)
+- **Sorting overhead**: O(N log N) where N = transparent object count (~100 objects = 0.01-0.05ms)
+- **Draw call overhead**: 5-20 draw calls instead of 2-3 for mixed transparent scenes
+- **Total impact**: <0.2ms per frame for typical scenes (<1% of 16.6ms budget)
+
+**Common Pitfall - Why Naive Batching Fails**:
+```rust
+// ❌ WRONG - This causes flickering!
+for batch in transparent_batches {
+    // This OVERWRITES the GPU buffer each call!
+    pool.upload_instance_data(&batch.objects)?;
+    pool.render()?;
+}
+
+// ✅ CORRECT - Upload once, render multiple times
+pool.upload_instance_data(&all_objects)?;  // Upload ONCE
+let indices = build_index_map(&all_objects);
+
+for batch in transparent_batches {
+    // Render subset using existing buffer
+    pool.render_subset(&batch.objects, &indices)?;
+}
+```
+
 **Data Structures**:
 ```rust
 #[repr(C)]

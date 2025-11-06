@@ -521,6 +521,395 @@ pub struct MaterialArraySystem {
 
 ---
 
+## 🚀 **TEXTURE RENDERING IN DYNAMIC SYSTEM**
+
+### **Current State Analysis (October 2025)**
+- ✅ **Working**: Dynamic object pooling with instanced rendering
+- ✅ **Working**: Material color tinting via push constants
+- ❌ **Issue**: Textures not rendered - all pools share default texture binding
+- 🎯 **Solution**: Implement Option A - per-pool descriptor sets with texture binding
+
+### **Architecture Limitation Identified**
+The dynamic system was designed for simple colored meshes where all instances share one material:
+- `create_mesh_pool()` receives materials parameter but ignores textures (`_materials` with underscore = unused)
+- Single default material descriptor set created at initialization
+- All pools bind to same descriptor set with `texture.png` hardcoded
+- Material textures from spawned objects are stored but never used for rendering
+
+**Impact**: Font atlas for text rendering exists (TextureHandle(3)) but shader samples default texture instead.
+
+---
+
+## 📋 **PHASE: PER-POOL TEXTURE SUPPORT (OPTION A)** ⭐ CURRENT PRIORITY
+
+### **Implementation Overview**
+Enable each mesh pool to have its own texture binding while maintaining zero-cost instancing.
+
+**Performance Impact**: ZERO - still one draw call per mesh type per frame
+**Complexity**: Low - approximately 50-100 lines of changes
+**Timeline**: 1-2 hours implementation
+
+### **Step A.1: Modify Pool Data Structure**
+
+**Objective**: Store per-pool descriptor sets with texture bindings
+
+#### **File**: `crates/rust_engine/src/render/dynamic/pool_manager.rs`
+
+**Current Structure**:
+```rust
+pub struct MeshPoolManager {
+    pools: HashMap<MeshType, (DynamicObjectManager, SharedRenderingResources, Option<InstanceRenderer>)>,
+    // ...
+}
+```
+
+**New Structure**:
+```rust
+pub struct MeshPoolManager {
+    pools: HashMap<MeshType, PoolResources>,
+    // ...
+}
+
+pub struct PoolResources {
+    manager: DynamicObjectManager,
+    shared_resources: SharedRenderingResources,
+    instance_renderer: Option<InstanceRenderer>,
+    material_descriptor_set: vk::DescriptorSet,  // NEW: Per-pool descriptor set
+    texture_handle: Option<TextureHandle>,        // NEW: Pool's texture
+}
+```
+
+**Success Criteria**:
+- [ ] `PoolResources` struct created with descriptor set field
+- [ ] All existing pool access code updated to use new structure
+- [ ] Code compiles without warnings
+
+---
+
+### **Step A.2: Create Descriptor Sets with Textures**
+
+**Objective**: Generate descriptor set for each pool with correct texture binding
+
+#### **File**: `crates/rust_engine/src/render/mod.rs`
+
+**Modify**: `create_mesh_pool()` function to extract and bind texture
+
+**Implementation**:
+```rust
+pub fn create_mesh_pool(
+    &mut self,
+    mesh_type: MeshType,
+    mesh: &Mesh,
+    materials: &[Material],  // Currently ignored, now will use textures
+    max_objects: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Extract texture from first material (all instances in pool share texture)
+    let texture_handle = materials.get(0)
+        .and_then(|mat| mat.textures.base_color);
+    
+    // Create shared resources (unchanged)
+    let shared_resources = self.create_instanced_rendering_resources(mesh, materials)?;
+    
+    if let Some(ref mut pool_manager) = self.pool_manager {
+        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<VulkanRenderer>() {
+            let context = vulkan_backend.get_context();
+            
+            // NEW: Create descriptor set for this pool with its texture
+            let material_descriptor_set = if let Some(tex_handle) = texture_handle {
+                self.create_pool_material_descriptor_set(context, tex_handle)?
+            } else {
+                // Use default descriptor set if no texture
+                vulkan_backend.get_default_material_descriptor_set()
+            };
+            
+            // Store pool with its descriptor set
+            pool_manager.create_pool_with_descriptor_set(
+                mesh_type,
+                shared_resources,
+                max_objects,
+                context,
+                material_descriptor_set,
+                texture_handle,
+            )?;
+            
+            Ok(())
+        } else {
+            Err("Backend is not a VulkanRenderer".into())
+        }
+    } else {
+        Err("Dynamic system not initialized".into())
+    }
+}
+
+/// NEW: Create descriptor set with specific texture
+fn create_pool_material_descriptor_set(
+    &self,
+    context: &VulkanContext,
+    texture_handle: TextureHandle,
+) -> Result<vk::DescriptorSet, Box<dyn std::error::Error>> {
+    // Get texture from texture manager
+    let texture = self.texture_manager.get_texture(texture_handle)
+        .ok_or("Texture not found")?;
+    
+    // Allocate descriptor set from pool
+    let descriptor_set = self.allocate_material_descriptor_set(context)?;
+    
+    // Write texture binding to descriptor set
+    self.update_descriptor_set_with_texture(context, descriptor_set, texture)?;
+    
+    Ok(descriptor_set)
+}
+```
+
+**Success Criteria**:
+- [ ] `create_pool_material_descriptor_set()` function implemented
+- [ ] Texture extracted from material parameter
+- [ ] Descriptor set allocated and updated with texture binding
+- [ ] Error handling for missing textures
+
+---
+
+### **Step A.3: Update Rendering to Use Pool Descriptor Sets**
+
+**Objective**: Bind per-pool descriptor sets instead of global default
+
+#### **File**: `crates/rust_engine/src/render/vulkan/system/mod.rs`
+
+**Modify**: `record_dynamic_draws_with_dedicated_renderer()` function
+
+**Current Code** (line 979):
+```rust
+let material_descriptor_set = self.resource_manager.material_descriptor_sets()[0];  // Global default
+```
+
+**New Code**:
+```rust
+// Get pool-specific descriptor set instead of global default
+let material_descriptor_set = pool_resources.material_descriptor_set;  // Per-pool texture
+```
+
+**Modify**: `render_all_pools_via_backend()` to pass descriptor set from pool
+
+**Implementation in pool_manager.rs**:
+```rust
+pub fn render_all_pools_via_backend(
+    &mut self,
+    backend: &mut dyn RenderBackend,
+    camera_position: Vec3,
+) -> Result<(), String> {
+    if let Some(vulkan_renderer) = backend.as_any_mut().downcast_mut::<VulkanRenderer>() {
+        for (mesh_type, pool_resources) in &mut self.pools {
+            if pool_resources.manager.active_count() > 0 {
+                if let Some(instance_renderer) = &mut pool_resources.instance_renderer {
+                    let active_objects = pool_resources.manager.get_active_objects_map();
+                    
+                    // Pass pool's descriptor set to renderer
+                    vulkan_renderer.record_dynamic_draws_with_pool_descriptor(
+                        instance_renderer,
+                        &active_objects,
+                        &pool_resources.shared_resources,
+                        pool_resources.material_descriptor_set,  // NEW: Per-pool descriptor
+                        camera_position,
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+```
+
+**Success Criteria**:
+- [ ] Pool descriptor set passed to rendering functions
+- [ ] Each mesh pool binds its own texture
+- [ ] Existing rendering flow unchanged (still one draw call per pool)
+- [ ] No performance regression
+
+---
+
+### **Step A.4: Test Text Rendering with Font Atlas**
+
+**Objective**: Verify text renders with actual glyphs from font atlas
+
+#### **Test Procedure**:
+1. Build: `cargo build --bin teapot_dynamic`
+2. Run: `cargo run --bin teapot_dynamic`
+3. Expected: "TEST" text shows actual letter shapes, not solid color
+4. Verify: Monkeys still render with texture.png correctly
+
+**Expected Visual Results**:
+- Text quads show glyph shapes from font atlas
+- Each character distinct (T, E, S, T)
+- Proper UV mapping visible
+- Cyan color tinting preserved (texture × color)
+- Monkeys unchanged with their texture
+
+**Debug Logging to Add**:
+```rust
+log::info!("Creating descriptor set for {:?} with texture {:?}", mesh_type, texture_handle);
+log::info!("Pool {:?} bound to descriptor set {:?}", mesh_type, descriptor_set);
+```
+
+**Success Criteria**:
+- [ ] Text renders with visible glyph shapes (not solid color)
+- [ ] Font atlas texture sampled correctly
+- [ ] Monkeys still render with texture.png
+- [ ] Both text and monkeys visible in same frame
+- [ ] No Vulkan validation errors
+- [ ] 60+ FPS maintained
+
+---
+
+### **Option A Success Criteria Summary**:
+- [ ] Each mesh pool has its own descriptor set
+- [ ] Textures correctly bound per pool
+- [ ] Text renders with font atlas glyphs visible
+- [ ] Monkeys render with texture.png
+- [ ] Zero performance impact (still one draw call per pool)
+- [ ] Code changes < 100 lines
+- [ ] Implementation time < 2 hours
+
+---
+
+## 🔮 **FUTURE OPTIMIZATION: TEXTURE ARRAYS WITH DYNAMIC INDEXING (OPTION C)**
+
+### **Overview**
+Option C represents the ultimate texture rendering performance - allowing thousands of objects with different textures in a single draw call using GPU-side dynamic texture indexing.
+
+### **When to Consider This**
+- **Current system** (Option A): Works perfectly for text (all text shares one atlas)
+- **Option C needed when**: We need many instances with DIFFERENT textures per instance
+  - Example: 1000 asteroids, each with unique texture variant
+  - Example: Particle system with 100 different particle types
+  - Example: Procedural terrain with thousands of unique material tiles
+
+### **Technical Approach**
+
+#### **Architecture**:
+```
+Instead of:
+  Pool 1 → Texture A → Draw 500 instances
+  Pool 2 → Texture B → Draw 500 instances
+  Pool 3 → Texture C → Draw 500 instances
+  = 3 pools, 3 draw calls, 1500 instances
+
+Option C achieves:
+  Single Pool → Texture Array[A, B, C, ...] → Draw 1500 instances with texture indices
+  = 1 pool, 1 draw call, 1500 instances
+```
+
+#### **Key Components**:
+
+1. **Texture Array Creation**:
+```rust
+// Pack multiple textures into Vulkan texture array
+pub struct TextureArray {
+    image: vk::Image,
+    image_view: vk::ImageView,
+    layer_count: u32,  // Number of textures in array
+    descriptor_set: vk::DescriptorSet,
+}
+
+// Example: Pack 256 textures into single array
+let texture_array = TextureArray::new(context, &all_textures, 256)?;
+```
+
+2. **Instance Data Extension**:
+```rust
+#[repr(C)]
+pub struct InstanceData {
+    pub model_matrix: Mat4,
+    pub normal_matrix: Mat3,
+    pub material_color: Vec4,
+    pub texture_index: u32,  // NEW: Index into texture array
+}
+```
+
+3. **Shader Modifications**:
+```glsl
+// Vertex shader output
+layout(location = 3) flat out uint v_texture_index;
+
+v_texture_index = instance_data.texture_index;
+
+// Fragment shader with dynamic indexing
+layout(set = 1, binding = 0) uniform sampler2DArray u_texture_array;
+layout(location = 3) flat in uint v_texture_index;
+
+void main() {
+    // Sample from correct layer using instance's texture index
+    vec4 tex_color = texture(u_texture_array, vec3(v_uv, float(v_texture_index)));
+    o_color = tex_color * v_color;
+}
+```
+
+4. **Descriptor Set with Array**:
+```rust
+// Single descriptor set with texture array binding
+let descriptor_write = vk::WriteDescriptorSet::builder()
+    .dst_set(descriptor_set)
+    .dst_binding(0)
+    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+    .image_info(&[vk::DescriptorImageInfo {
+        sampler: texture_array.sampler,
+        image_view: texture_array.image_view,  // Array view, not single texture
+        image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+    }]);
+```
+
+### **Requirements**
+- **Vulkan Version**: 1.2+ or `VK_EXT_descriptor_indexing` extension
+- **Feature Flags**:
+  - `shaderSampledImageArrayDynamicIndexing`
+  - `descriptorBindingVariableDescriptorCount`
+- **Shader Capability**: `GL_EXT_nonuniform_qualifier` in GLSL
+
+### **Performance Benefits**
+- **Draw calls**: 100 texture variations → 1 draw call (vs. 100 draw calls)
+- **State changes**: No texture rebinding between instances
+- **GPU utilization**: Single large draw call better than many small draws
+- **Batch size**: Can render 10,000+ instances with texture variation in one call
+
+### **Implementation Complexity**
+- **Shader changes**: Moderate - need to modify vertex and fragment shaders
+- **Descriptor system**: Complex - array descriptors different from single textures
+- **Texture management**: Complex - need to pack/manage texture arrays
+- **Memory management**: Tricky - array size limits, texture size consistency
+- **Estimated effort**: 1-2 weeks full implementation and testing
+
+### **When to Implement**
+Wait until we have a specific use case that requires it:
+- [ ] **Profiling shows** texture rebinding is bottleneck (>2ms per frame)
+- [ ] **Use case identified**: Need 100+ texture variants per mesh type
+- [ ] **Performance target**: Can't achieve 60 FPS with Option A batching
+- [ ] **Vulkan 1.2 confirmed**: Target hardware supports required features
+
+### **Alternatives to Consider First**
+Before implementing Option C, try:
+1. **Texture atlasing**: Pack similar textures into single atlas (what we're doing for text)
+2. **Option B**: Batch by texture, multiple draw calls (simpler than Option C)
+3. **Fewer texture variants**: Reduce art asset diversity to use fewer unique textures
+4. **Instanced indirect drawing**: Batch multiple mesh types with texture sorting
+
+### **Documentation References**
+- Vulkan Spec: Descriptor Indexing extension
+- Best Practices: "Approaching Zero Driver Overhead" (GDC 2014)
+- Sascha Willems samples: `texturearray` example
+- GPU Gems: "Batch, Batch, Batch" chapter
+
+**Success Criteria for Future Implementation**:
+- [ ] Vulkan 1.2 feature detection working
+- [ ] Texture array creation and management system
+- [ ] Shader modifications with dynamic indexing
+- [ ] Descriptor system updated for array bindings
+- [ ] Performance testing shows >50% reduction in draw calls
+- [ ] Visual correctness with 100+ texture variants
+- [ ] Memory usage acceptable (<10% increase vs Option A)
+
+---
+
+---
+
 ## 🎨 **MODULAR RENDERING PIPELINE SYSTEM** (NEW PRIORITY)
 
 ### **Current State Analysis**

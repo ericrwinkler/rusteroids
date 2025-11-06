@@ -6,7 +6,7 @@
 
 use crate::foundation::math::Vec3;
 use crate::render::vulkan::{VulkanContext, VulkanError};
-use crate::render::material::Material;
+use crate::render::material::{Material, TextureHandle};
 use crate::render::dynamic::{
     MeshType, DynamicObjectManager, DynamicSpawnParams, DynamicObjectHandle, 
     DynamicRenderData, DynamicObjectError, resource_pool::MaterialProperties,
@@ -15,6 +15,31 @@ use crate::render::dynamic::{
 use crate::render::SharedRenderingResources;
 use ash::vk;
 use std::collections::HashMap;
+
+/// Metadata for a transparent object (used for global depth sorting)
+struct TransparentObjectInfo {
+    mesh_type: MeshType,
+    handle: DynamicObjectHandle,
+    render_data: DynamicRenderData,
+    depth: f32,
+}
+
+/// Resources associated with a single mesh pool
+///
+/// Each mesh pool has its own set of rendering resources including
+/// a dedicated descriptor set with texture binding.
+pub struct PoolResources {
+    /// Dynamic object manager for this mesh type
+    pub manager: DynamicObjectManager,
+    /// Shared rendering resources (vertex/index buffers, pipeline)
+    pub shared_resources: SharedRenderingResources,
+    /// Dedicated instance renderer for this pool
+    pub instance_renderer: Option<InstanceRenderer>,
+    /// Material descriptor set with this pool's texture binding
+    pub material_descriptor_set: vk::DescriptorSet,
+    /// Texture handle for this pool (all instances share this texture)
+    pub texture_handle: Option<TextureHandle>,
+}
 
 /// Errors that can occur during mesh pool management
 #[derive(Debug)]
@@ -114,8 +139,8 @@ impl From<VulkanError> for PoolManagerError {
 /// pool_manager.render_all_pools(context, frame_index)?;
 /// ```
 pub struct MeshPoolManager {
-    /// Individual single-mesh pools with their rendering resources and dedicated renderers
-    pools: HashMap<MeshType, (DynamicObjectManager, SharedRenderingResources, Option<InstanceRenderer>)>,
+    /// Individual single-mesh pools with their rendering resources
+    pools: HashMap<MeshType, PoolResources>,
     
     /// Statistics for monitoring performance
     stats: PoolManagerStats,
@@ -153,6 +178,8 @@ impl MeshPoolManager {
     /// * `shared_resources` - Rendering resources specific to this mesh type (stored for later use)
     /// * `max_objects` - Maximum number of objects this pool can hold
     /// * `context` - Vulkan context for InstanceRenderer creation
+    /// * `material_descriptor_set` - Descriptor set with texture binding for this pool
+    /// * `texture_handle` - Optional texture handle for this pool
     ///
     /// # Returns
     ///
@@ -164,6 +191,8 @@ impl MeshPoolManager {
         shared_resources: SharedRenderingResources,
         max_objects: usize,
         context: &VulkanContext,
+        material_descriptor_set: vk::DescriptorSet,
+        texture_handle: Option<TextureHandle>,
     ) -> Result<(), PoolManagerError> {
         if self.pools.contains_key(&mesh_type) {
             return Err(PoolManagerError::PoolCreationFailed {
@@ -189,10 +218,19 @@ impl MeshPoolManager {
                 reason: format!("Failed to create InstanceRenderer: {}", err),
             })?;
             
-        self.pools.insert(mesh_type, (pool, shared_resources, Some(instance_renderer)));
+        let pool_resources = PoolResources {
+            manager: pool,
+            shared_resources,
+            instance_renderer: Some(instance_renderer),
+            material_descriptor_set,
+            texture_handle,
+        };
+        
+        self.pools.insert(mesh_type, pool_resources);
         self.stats.active_pools = self.pools.len();
         
-        log::info!("Created single-mesh pool for {} with capacity {} and dedicated InstanceRenderer", mesh_type, max_objects);
+        log::info!("Created single-mesh pool for {} with capacity {}, descriptor set {:?}, texture {:?}", 
+                   mesh_type, max_objects, material_descriptor_set, texture_handle);
         Ok(())
     }
     
@@ -214,8 +252,8 @@ impl MeshPoolManager {
         // But we can validate that all existing pools have their renderers
         let mut missing_renderers = Vec::new();
         
-        for (mesh_type, (pool, _shared_resources, instance_renderer_opt)) in &self.pools {
-            if pool.capacity() > 0 && instance_renderer_opt.is_none() {
+        for (mesh_type, pool_resources) in &self.pools {
+            if pool_resources.manager.capacity() > 0 && pool_resources.instance_renderer.is_none() {
                 missing_renderers.push(*mesh_type);
             }
         }
@@ -255,7 +293,7 @@ impl MeshPoolManager {
         scale: Vec3,
         material: Material,
     ) -> Result<DynamicObjectHandle, PoolManagerError> {
-        let (pool, _shared_resources, _renderer) = self.pools.get_mut(&mesh_type)
+        let pool_resources = self.pools.get_mut(&mesh_type)
             .ok_or(PoolManagerError::PoolNotFound { mesh_type })?;
         
         let spawn_params = DynamicSpawnParams::new(
@@ -265,7 +303,7 @@ impl MeshPoolManager {
             material,
         );
         
-        let handle = pool.spawn_object(spawn_params)
+        let handle = pool_resources.manager.spawn_object(spawn_params)
             .map_err(|err| PoolManagerError::PoolOperationFailed {
                 mesh_type,
                 operation: "spawn_object".to_string(),
@@ -295,10 +333,10 @@ impl MeshPoolManager {
         mesh_type: MeshType,
         handle: DynamicObjectHandle,
     ) -> Result<(), PoolManagerError> {
-        let (pool, _shared_resources, _renderer) = self.pools.get_mut(&mesh_type)
+        let pool_resources = self.pools.get_mut(&mesh_type)
             .ok_or(PoolManagerError::PoolNotFound { mesh_type })?;
         
-        pool.despawn_object(handle)
+        pool_resources.manager.despawn_object(handle)
             .map_err(|err| PoolManagerError::PoolOperationFailed {
                 mesh_type,
                 operation: "despawn_object".to_string(),
@@ -329,7 +367,7 @@ impl MeshPoolManager {
         handle: DynamicObjectHandle,
     ) -> Option<&DynamicRenderData> {
         self.pools.get(&mesh_type)
-            .and_then(|(pool, _shared_resources, _renderer)| pool.get_object(handle).ok())
+            .and_then(|pool_resources| pool_resources.manager.get_object(handle).ok())
     }
     
     /// Update all pools (handle object lifecycles)
@@ -341,8 +379,8 @@ impl MeshPoolManager {
     ///
     /// * `delta_time` - Time elapsed since last update (seconds)
     pub fn update_all_pools(&mut self, delta_time: f32) {
-        for (pool, _shared_resources, _renderer) in self.pools.values_mut() {
-            pool.update(delta_time);
+        for pool_resources in self.pools.values_mut() {
+            pool_resources.manager.update(delta_time);
         }
         
         self.update_stats();
@@ -363,7 +401,7 @@ impl MeshPoolManager {
         mesh_type: MeshType,
     ) -> Option<std::collections::HashMap<DynamicObjectHandle, DynamicRenderData>> {
         self.pools.get(&mesh_type)
-            .map(|(pool, _shared_resources, _renderer)| pool.get_active_objects_map())
+            .map(|pool_resources| pool_resources.manager.get_active_objects_map())
     }
     
     /// Get all active pools with their mesh types and resources
@@ -372,8 +410,8 @@ impl MeshPoolManager {
     /// for pools that have active objects.
     pub fn active_pools_with_resources(&self) -> impl Iterator<Item = (MeshType, &DynamicObjectManager, &SharedRenderingResources)> {
         self.pools.iter()
-            .filter(|(_, (pool, _, _))| pool.active_count() > 0)
-            .map(|(mesh_type, (pool, resources, _))| (*mesh_type, pool, resources))
+            .filter(|(_, pool_resources)| pool_resources.manager.active_count() > 0)
+            .map(|(mesh_type, pool_resources)| (*mesh_type, &pool_resources.manager, &pool_resources.shared_resources))
     }
 
     /// Render all active pools using backend interface (with dedicated renderers)
@@ -383,39 +421,160 @@ impl MeshPoolManager {
     pub fn render_all_pools_via_backend(
         &mut self, 
         backend: &mut dyn crate::render::backend::RenderBackend,
-        camera_position: crate::foundation::math::Vec3
+        camera_position: crate::foundation::math::Vec3,
+        camera_target: crate::foundation::math::Vec3
     ) -> Result<(), String> {
-        log::debug!("Rendering all active pools via backend with dedicated renderers");
+        log::debug!("Rendering all active pools via backend with global transparent sorting");
         
-        // Track total objects rendered for performance monitoring
-        let mut total_objects = 0;
-        let mut pools_rendered = 0;
+        // Cast to VulkanRenderer to access split-phase rendering methods
+        let vulkan_renderer = backend.as_any_mut().downcast_mut::<crate::render::vulkan::VulkanRenderer>()
+            .ok_or("Backend is not a VulkanRenderer")?;
         
-        // Cast to VulkanRenderer to access the dedicated renderer method
-        if let Some(vulkan_renderer) = backend.as_any_mut().downcast_mut::<crate::render::vulkan::VulkanRenderer>() {
-            // Render each active pool separately using dedicated renderers
-            for (mesh_type, (pool, shared_resources, instance_renderer_opt)) in &mut self.pools {
-                if pool.active_count() > 0 {
-                    if let Some(instance_renderer) = instance_renderer_opt {
-                        let active_objects = pool.get_active_objects_map();
-                        log::debug!("Rendering {} objects of type {:?} with dedicated renderer", active_objects.len(), mesh_type);
+        // ========== PHASE 1: UPLOAD ALL POOLS (ONCE PER POOL) ==========
+        // Upload instance data and build index maps for each pool
+        let mut pool_indices: HashMap<MeshType, HashMap<DynamicObjectHandle, u32>> = HashMap::new();
+        
+        for (mesh_type, pool_resources) in &mut self.pools {
+            if pool_resources.manager.active_count() > 0 {
+                if let Some(instance_renderer) = &mut pool_resources.instance_renderer {
+                    let active_objects = pool_resources.manager.get_active_objects_map();
+                    
+                    log::debug!("Uploading {} objects for {:?} pool", active_objects.len(), mesh_type);
+                    
+                    let indices = vulkan_renderer.upload_pool_instance_data(
+                        instance_renderer,
+                        &active_objects
+                    ).map_err(|e| format!("Failed to upload data for {:?}: {}", mesh_type, e))?;
+                    
+                    pool_indices.insert(*mesh_type, indices);
+                }
+            }
+        }
+        
+        // ========== PHASE 2: COLLECT AND CATEGORIZE OBJECTS ==========
+        let camera_forward = (camera_target - camera_position).normalize();
+        let mut opaque_by_pool: HashMap<MeshType, Vec<(DynamicObjectHandle, DynamicRenderData)>> = HashMap::new();
+        let mut transparent_objects: Vec<TransparentObjectInfo> = Vec::new();
+        
+        for (mesh_type, pool_resources) in &self.pools {
+            if pool_resources.manager.active_count() > 0 {
+                let active_objects = pool_resources.manager.get_active_objects_map();
+                
+                for (handle, render_data) in active_objects {
+                    let pipeline_type = render_data.material.required_pipeline();
+                    let is_transparent = matches!(
+                        pipeline_type,
+                        crate::render::material::PipelineType::TransparentPBR | 
+                        crate::render::material::PipelineType::TransparentUnlit
+                    );
+                    
+                    if is_transparent {
+                        // Calculate view-space depth for sorting
+                        let to_object = render_data.position - camera_position;
+                        let depth = to_object.dot(&camera_forward);
                         
-                        // Use the VulkanRenderer's new dedicated method with camera position for sorting
-                        vulkan_renderer.record_dynamic_draws_with_dedicated_renderer(instance_renderer, &active_objects, shared_resources, camera_position)
-                            .map_err(|e| format!("Failed to record draws with dedicated renderer for {:?}: {}", mesh_type, e))?;
-                        
-                        total_objects += active_objects.len();
-                        pools_rendered += 1;
+                        transparent_objects.push(TransparentObjectInfo {
+                            mesh_type: *mesh_type,
+                            handle,
+                            render_data: render_data.clone(),
+                            depth,
+                        });
                     } else {
-                        log::warn!("Pool for {:?} has active objects but no InstanceRenderer", mesh_type);
+                        // Opaque object
+                        opaque_by_pool.entry(*mesh_type)
+                            .or_insert_with(Vec::new)
+                            .push((handle, render_data.clone()));
                     }
                 }
             }
-        } else {
-            return Err("Backend is not a VulkanRenderer - dedicated renderer method not available".to_string());
         }
         
-        log::debug!("Rendered {} total objects across {} mesh type pools via dedicated renderers", total_objects, pools_rendered);
+        log::debug!("Categorized {} opaque and {} transparent objects", 
+                   opaque_by_pool.values().map(|v| v.len()).sum::<usize>(),
+                   transparent_objects.len());
+        
+        // ========== PHASE 3: RENDER OPAQUE OBJECTS (BATCHED BY POOL) ==========
+        for (mesh_type, objects) in opaque_by_pool {
+            if let Some(pool_resources) = self.pools.get_mut(&mesh_type) {
+                if let Some(instance_renderer) = &mut pool_resources.instance_renderer {
+                    if let Some(indices) = pool_indices.get(&mesh_type) {
+                        log::debug!("Rendering {} opaque objects from {:?} pool", objects.len(), mesh_type);
+                        
+                        vulkan_renderer.render_uploaded_objects_subset(
+                            instance_renderer,
+                            &pool_resources.shared_resources,
+                            pool_resources.material_descriptor_set,
+                            &objects,
+                            indices
+                        ).map_err(|e| format!("Failed to render opaque {:?}: {}", mesh_type, e))?;
+                    }
+                }
+            }
+        }
+        
+        // ========== PHASE 4: RENDER TRANSPARENT OBJECTS (GLOBALLY SORTED) ==========
+        if !transparent_objects.is_empty() {
+            // Sort back-to-front for correct alpha blending
+            transparent_objects.sort_by(|a, b| {
+                b.depth.partial_cmp(&a.depth).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            
+            log::debug!("Sorted {} transparent objects by depth", transparent_objects.len());
+            
+            // Batch consecutive objects from same pool for efficiency
+            let mut current_batch_type = transparent_objects[0].mesh_type;
+            let mut current_batch: Vec<(DynamicObjectHandle, DynamicRenderData)> = Vec::new();
+            
+            for obj in transparent_objects {
+                if obj.mesh_type != current_batch_type {
+                    // Pool changed - render current batch
+                    if let Some(pool_resources) = self.pools.get_mut(&current_batch_type) {
+                        if let Some(instance_renderer) = &mut pool_resources.instance_renderer {
+                            if let Some(indices) = pool_indices.get(&current_batch_type) {
+                                log::debug!("Rendering {} transparent objects from {:?} pool", 
+                                           current_batch.len(), current_batch_type);
+                                
+                                vulkan_renderer.render_uploaded_objects_subset(
+                                    instance_renderer,
+                                    &pool_resources.shared_resources,
+                                    pool_resources.material_descriptor_set,
+                                    &current_batch,
+                                    indices
+                                ).map_err(|e| format!("Failed to render transparent {:?}: {}", current_batch_type, e))?;
+                            }
+                        }
+                    }
+                    
+                    // Start new batch
+                    current_batch.clear();
+                    current_batch_type = obj.mesh_type;
+                }
+                
+                current_batch.push((obj.handle, obj.render_data));
+            }
+            
+            // Render final batch
+            if !current_batch.is_empty() {
+                if let Some(pool_resources) = self.pools.get_mut(&current_batch_type) {
+                    if let Some(instance_renderer) = &mut pool_resources.instance_renderer {
+                        if let Some(indices) = pool_indices.get(&current_batch_type) {
+                            log::debug!("Rendering {} transparent objects from {:?} pool (final batch)", 
+                                       current_batch.len(), current_batch_type);
+                            
+                            vulkan_renderer.render_uploaded_objects_subset(
+                                instance_renderer,
+                                &pool_resources.shared_resources,
+                                pool_resources.material_descriptor_set,
+                                &current_batch,
+                                indices
+                            ).map_err(|e| format!("Failed to render transparent {:?}: {}", current_batch_type, e))?;
+                        }
+                    }
+                }
+            }
+        }
+        
+        log::debug!("Completed rendering with global transparent sorting");
         Ok(())
     }
 
@@ -438,10 +597,10 @@ impl MeshPoolManager {
         let mut pools_rendered = 0;
         
         // Render each active pool separately using its dedicated InstanceRenderer
-        for (mesh_type, (pool, shared_resources, instance_renderer_opt)) in &mut self.pools {
-            if pool.active_count() > 0 {
-                if let Some(instance_renderer) = instance_renderer_opt {
-                    let active_objects = pool.get_active_objects_map();
+        for (mesh_type, pool_resources) in &mut self.pools {
+            if pool_resources.manager.active_count() > 0 {
+                if let Some(instance_renderer) = &mut pool_resources.instance_renderer {
+                    let active_objects = pool_resources.manager.get_active_objects_map();
                     log::debug!("Rendering {} objects of type {:?} with dedicated renderer", active_objects.len(), mesh_type);
                     
                     // Use the pool's dedicated InstanceRenderer following the same pattern as VulkanRenderer
@@ -452,7 +611,7 @@ impl MeshPoolManager {
                         .map_err(|e| format!("Failed to upload instance data for {:?}: {}", mesh_type, e))?;
                     
                     // Record instanced draw commands
-                    instance_renderer.record_instanced_draw(shared_resources, vulkan_context, frame_descriptor_set, material_descriptor_set)
+                    instance_renderer.record_instanced_draw(&pool_resources.shared_resources, vulkan_context, frame_descriptor_set, material_descriptor_set)
                         .map_err(|e| format!("Failed to record draw commands for {:?}: {}", mesh_type, e))?;
                     
                     total_objects += active_objects.len();
@@ -473,8 +632,8 @@ impl MeshPoolManager {
     /// for pools that have active objects.
     pub fn active_pools(&self) -> impl Iterator<Item = (MeshType, &DynamicObjectManager)> {
         self.pools.iter()
-            .filter(|(_, (pool, _, _))| pool.active_count() > 0)
-            .map(|(mesh_type, (pool, _, _))| (*mesh_type, pool))
+            .filter(|(_, pool_resources)| pool_resources.manager.active_count() > 0)
+            .map(|(mesh_type, pool_resources)| (*mesh_type, &pool_resources.manager))
     }
     
     /// Get mesh pool manager statistics
@@ -494,13 +653,13 @@ impl MeshPoolManager {
     /// * `None` - Pool not found
     pub fn get_pool_stats(&self, mesh_type: MeshType) -> Option<(usize, usize)> {
         self.pools.get(&mesh_type)
-            .map(|(pool, _shared_resources, _renderer)| (pool.active_count(), pool.capacity()))
+            .map(|pool_resources| (pool_resources.manager.active_count(), pool_resources.manager.capacity()))
     }
     
     /// Get total number of active objects across all pools
     pub fn total_active_objects(&self) -> usize {
         self.pools.values()
-            .map(|(pool, _shared_resources, _renderer)| pool.active_count())
+            .map(|pool_resources| pool_resources.manager.active_count())
             .sum()
     }
     
@@ -519,7 +678,7 @@ impl MeshPoolManager {
         self.stats.active_pools = self.pools.len();
         self.stats.total_active_objects = self.total_active_objects();
         self.stats.render_batches_per_frame = self.pools.iter()
-            .filter(|(_, (pool, _, _))| pool.active_count() > 0)
+            .filter(|(_, pool_resources)| pool_resources.manager.active_count() > 0)
             .count();
     }
     
@@ -545,8 +704,8 @@ impl MeshPoolManager {
         rotation: Vec3,
         scale: Vec3,
     ) -> Result<(), DynamicObjectError> {
-        if let Some((pool, _shared_resources, _renderer)) = self.pools.get_mut(&mesh_type) {
-            pool.update_object_transform(handle, position, rotation, scale)
+        if let Some(pool_resources) = self.pools.get_mut(&mesh_type) {
+            pool_resources.manager.update_object_transform(handle, position, rotation, scale)
         } else {
             Err(DynamicObjectError::ResourceCreationFailed(
                 format!("No pool found for mesh type: {:?}", mesh_type)
@@ -571,8 +730,8 @@ impl MeshPoolManager {
         handle: DynamicObjectHandle,
         position: Vec3,
     ) -> Result<(), DynamicObjectError> {
-        if let Some((pool, _shared_resources, _renderer)) = self.pools.get_mut(&mesh_type) {
-            pool.update_object_position(handle, position)
+        if let Some(pool_resources) = self.pools.get_mut(&mesh_type) {
+            pool_resources.manager.update_object_position(handle, position)
         } else {
             Err(DynamicObjectError::ResourceCreationFailed(
                 format!("No pool found for mesh type: {:?}", mesh_type)

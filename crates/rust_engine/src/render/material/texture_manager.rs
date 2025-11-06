@@ -196,6 +196,41 @@ impl TextureManager {
         Ok(handle)
     }
 
+    /// Load texture directly from ImageData (useful for procedurally generated textures)
+    pub fn load_texture_from_image_data(
+        &mut self,
+        image_data: ImageData,
+        texture_type: TextureType,
+        name: Option<String>,
+    ) -> VulkanResult<TextureHandle> {
+        // Create Vulkan texture from image data
+        let texture = Texture::from_image_data(
+            self.device.clone(),
+            self.instance.clone(),
+            self.physical_device,
+            self.command_pool,
+            self.graphics_queue,
+            &image_data,
+        )?;
+
+        let handle = TextureHandle(self.next_handle);
+        self.next_handle += 1;
+
+        let texture_info = TextureInfo {
+            handle,
+            texture_type,
+            params: TextureParams::default(),
+            name: name.clone(),
+        };
+
+        self.textures.insert(handle, Arc::new(texture));
+        self.texture_info.insert(handle, texture_info);
+
+        log::debug!("Loaded texture {:?} from ImageData ({}x{}, {:?}) of type {:?}", 
+                    handle, image_data.width, image_data.height, name, texture_type);
+        Ok(handle)
+    }
+
     /// Get the Vulkan texture for a handle
     pub fn get_texture(&self, handle: TextureHandle) -> Option<Arc<Texture>> {
         self.textures.get(&handle).cloned()

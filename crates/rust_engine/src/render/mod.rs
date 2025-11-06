@@ -33,6 +33,7 @@ pub mod mesh;
 pub mod material;
 pub mod lighting;
 pub mod coordinates;
+pub mod text;
 
 // Internal modules - prefer not to use directly in applications
 pub mod pipeline;
@@ -53,6 +54,11 @@ pub use mesh::{Mesh, Vertex};
 pub use material::{Material, MaterialType, MaterialId, PipelineType, AlphaMode};
 pub use lighting::{Light, LightType, LightingEnvironment};
 pub use coordinates::{CoordinateSystem, CoordinateConverter};
+pub use text::{
+    FontAtlas, GlyphInfo, TextLayout, TextVertex, TextBounds, text_vertices_to_mesh,
+    create_lit_text_material, create_unlit_text_material,
+    WorldTextManager, WorldTextHandle, WorldTextConfig,
+};
 
 // DEPRECATED: These should be removed in favor of cleaner APIs
 // TODO: Remove these exports once applications migrate to new APIs
@@ -749,16 +755,40 @@ impl GraphicsEngine {
     ) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Creating mesh pool for {:?} with capacity {}", mesh_type, max_objects);
         
+        // Extract texture from first material (all instances in pool share this texture)
+        let texture_handle = materials.get(0)
+            .and_then(|mat| mat.textures.base_color);
+        
+        log::info!("Pool {:?} texture: {:?}", mesh_type, texture_handle);
+        
         // Create SharedRenderingResources for this mesh using instanced rendering
         #[allow(deprecated)]
         let shared_resources = self.create_instanced_rendering_resources(mesh, materials)?;
         
         // Create the pool in the MeshPoolManager
         if let Some(ref mut pool_manager) = self.pool_manager {
-            // Get VulkanContext from backend
-            if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
+            // Get VulkanRenderer from backend
+            if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::vulkan::VulkanRenderer>() {
+                // Create per-pool descriptor set with texture binding
+                let material_descriptor_set = if let Some(tex_handle) = texture_handle {
+                    log::info!("Creating descriptor set for pool {:?} with texture {:?}", mesh_type, tex_handle);
+                    vulkan_backend.create_material_descriptor_set_with_texture(tex_handle)?
+                } else {
+                    log::info!("No texture for pool {:?}, using default descriptor set", mesh_type);
+                    vulkan_backend.get_default_material_descriptor_set()
+                };
+                
+                // Get context after descriptor set creation to avoid borrow conflicts
                 let context = vulkan_backend.get_context();
-                pool_manager.create_pool(mesh_type, shared_resources, max_objects, context)?;
+                
+                pool_manager.create_pool(
+                    mesh_type,
+                    shared_resources,
+                    max_objects,
+                    context,
+                    material_descriptor_set,
+                    texture_handle,
+                )?;
                 log::info!("Successfully created pool for {:?}", mesh_type);
                 Ok(())
             } else {
@@ -1044,13 +1074,13 @@ impl GraphicsEngine {
                 log::trace!("Recording draws for {} active dynamic objects across {} pools", 
                            stats.total_active_objects, stats.render_batches_per_frame);
                 
-                // Get camera position for depth sorting
-                let camera_position = self.current_camera.as_ref()
-                    .map(|cam| cam.position)
-                    .unwrap_or(Vec3::zeros());
+                // Get camera position and target for depth sorting
+                let (camera_position, camera_target) = self.current_camera.as_ref()
+                    .map(|cam| (cam.position, cam.target))
+                    .unwrap_or((Vec3::zeros(), Vec3::new(0.0, 0.0, -1.0)));
                 
                 // Use MeshPoolManager's proper render method to avoid state corruption between mesh types
-                pool_manager.render_all_pools_via_backend(&mut *self.backend, camera_position)
+                pool_manager.render_all_pools_via_backend(&mut *self.backend, camera_position, camera_target)
                     .map_err(|e| format!("Failed to render dynamic object pools: {}", e))?;
                 
                 log::debug!("Dynamic object rendering completed: {} total objects across {} mesh types", 
@@ -1138,6 +1168,52 @@ impl GraphicsEngine {
         self.backend.initialize_instance_renderer(max_instances)?;
         log::info!("Initialized instance renderer with max {} instances", max_instances);
         Ok(())
+    }
+
+    // ================================
+    // TEXTURE MANAGEMENT API
+    // ================================
+
+    /// Upload texture from image data to GPU
+    ///
+    /// Uploads a texture from raw image data (useful for procedurally generated textures
+    /// like font atlases). The texture is uploaded to GPU memory and a handle is returned
+    /// for use with materials.
+    ///
+    /// # Arguments
+    /// * `image_data` - Image data (RGBA format)
+    /// * `texture_type` - Type of texture (BaseColor, Normal, etc.)
+    ///
+    /// # Returns
+    /// TextureHandle for use with materials, or error on failure
+    ///
+    /// # Example
+    /// ```rust
+    /// // Upload font atlas texture
+    /// let image_data = ImageData {
+    ///     data: atlas_pixels,
+    ///     width: 1024,
+    ///     height: 1024,
+    ///     channels: 4,
+    /// };
+    /// let texture_handle = graphics_engine.upload_texture_from_image_data(
+    ///     image_data,
+    ///     TextureType::BaseColor,
+    /// )?;
+    /// ```
+    pub fn upload_texture_from_image_data(
+        &mut self,
+        image_data: crate::assets::ImageData,
+        texture_type: material::TextureType,
+    ) -> Result<material::TextureHandle, Box<dyn std::error::Error>> {
+        // Delegate to backend's texture manager
+        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::vulkan::VulkanRenderer>() {
+            let texture_handle = vulkan_backend.upload_texture_from_image_data(image_data, texture_type)?;
+            log::debug!("Uploaded texture to GPU: {:?} (type: {:?})", texture_handle, texture_type);
+            Ok(texture_handle)
+        } else {
+            Err("Backend doesn't support texture upload".into())
+        }
     }
 
     // ================================

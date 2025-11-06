@@ -143,6 +143,35 @@ pub trait RenderBackend {
     /// # Returns
     /// Result indicating successful command recording
     fn record_dynamic_draws(&mut self, object_count: usize, mesh_id: u32) -> BackendResult<()>;
+    
+    /// Record a mesh draw command into the current command buffer
+    ///
+    /// This method records a draw without submitting the frame, allowing it to work
+    /// within the dynamic frame lifecycle. Used for text rendering and other
+    /// non-batched rendering.
+    ///
+    /// # Arguments
+    /// * `mesh` - Mesh to render
+    /// * `transform` - World transform matrix
+    /// * `material` - Material for rendering
+    ///
+    /// # Returns
+    /// Result indicating successful command recording
+    fn record_mesh_draw(&mut self, mesh: &crate::render::Mesh, transform: &Mat4, material: &crate::render::Material) -> BackendResult<()>;
+    
+    /// Record an indexed draw command with specific index range
+    ///
+    /// Assumes mesh data is already uploaded. Records draw commands for a subset of the index buffer.
+    ///
+    /// # Arguments
+    /// * `index_start` - Starting index in the index buffer
+    /// * `index_count` - Number of indices to draw
+    /// * `transform` - World transform matrix
+    /// * `material` - Material for rendering
+    ///
+    /// # Returns
+    /// Result indicating successful command recording
+    fn record_indexed_draw(&mut self, index_start: u32, index_count: u32, transform: &Mat4, material: &crate::render::Material) -> BackendResult<()>;
 }
 
 /// Window backend access trait

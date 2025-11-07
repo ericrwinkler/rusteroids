@@ -583,7 +583,7 @@ impl crate::render::RenderBackend for VulkanRenderer {
         Ok(())
     }
     
-    fn record_mesh_draw(&mut self, mesh: &crate::render::Mesh, transform: &crate::foundation::math::Mat4, material: &crate::render::Material) -> crate::render::BackendResult<()> {
+    fn record_mesh_draw(&mut self, mesh: &crate::render::Mesh, transform: &crate::foundation::math::Mat4, _material: &crate::render::Material) -> crate::render::BackendResult<()> {
         // Check if we have an active recording session
         let recording_state = self.command_recording_state.as_ref()
             .ok_or_else(|| crate::render::RenderError::BackendError(

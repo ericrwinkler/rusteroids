@@ -24,11 +24,14 @@ pub trait Application {
     
     /// Render the application
     /// 
-    /// Called after update. Use this for any custom rendering that isn't
-    /// handled by the ECS rendering systems.
-    fn render(&mut self, engine: &mut Engine) -> Result<(), AppError> {
-        // Default implementation uses the engine's renderer
-        engine.render()
+    /// Called after update. Implement your application-specific rendering workflow here.
+    /// Use the graphics engine's command recording API:
+    /// - engine.graphics_engine_mut().begin_command_recording()
+    /// - engine.graphics_engine_mut().render_objects(...)
+    /// - engine.graphics_engine_mut().submit_commands_and_present(window)
+    fn render(&mut self, _engine: &mut Engine) -> Result<(), AppError> {
+        // Default: no-op (applications must implement their own rendering)
+        Ok(())
     }
     
     /// Handle application events

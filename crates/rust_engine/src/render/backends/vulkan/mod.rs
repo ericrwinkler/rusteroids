@@ -1,11 +1,23 @@
-// Vulkan backend implementation
-// Organized into initialization, resources, rendering, state, and core modules
+//! Vulkan backend implementation
+//! 
+//! Organized into initialization, resources, rendering, state, and core modules.
 
+/// Vulkan initialization types (context, surface, window)
 pub mod initialization;
+
+/// Vulkan resource management (buffers, textures, descriptors)
 pub mod resources;
+
+/// Vulkan rendering operations (shaders, pipelines, render passes, commands)
 pub mod rendering;
+
+/// Vulkan state management
 pub mod state;
+
+/// Core Vulkan types and utilities
 pub mod core;
+
+/// Main Vulkan renderer implementation
 pub mod renderer;
 
 // Re-export main renderer

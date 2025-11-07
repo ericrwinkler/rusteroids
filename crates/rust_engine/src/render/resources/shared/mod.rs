@@ -6,8 +6,10 @@
 pub mod shared_mesh_resources;
 pub mod game_object;
 pub mod render_queue;
+pub mod resource_factory;
 
 // Re-export commonly used types
 pub use shared_mesh_resources::{SharedRenderingResources, SharedRenderingResourcesBuilder};
 pub use game_object::{GameObject, ObjectUBO, cleanup_game_object};
 pub use render_queue::{RenderQueue, RenderCommand, CommandType, RenderCommandId};
+pub use resource_factory::*;

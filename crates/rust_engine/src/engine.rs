@@ -116,12 +116,6 @@ impl Engine {
         Ok(())
     }
     
-    /// Render the current frame
-    pub fn render(&mut self) -> Result<(), AppError> {
-        self.graphics_engine.render()
-            .map_err(|e| AppError::Custom(format!("Render error: {}", e)))
-    }
-    
     /// Handle an application event
     pub fn handle_event(&mut self, event: AppEvent) -> Result<(), AppError> {
         match event {

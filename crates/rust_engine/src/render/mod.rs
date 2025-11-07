@@ -36,7 +36,10 @@ pub mod resources;
 // Systems
 pub mod systems;
 
-// Backends
+/// Graphics backend implementations
+/// 
+/// Contains platform-specific rendering backend implementations.
+/// Currently supports Vulkan with potential for additional backends in the future.
 pub mod backends;
 
 // High-level APIs that applications should use
@@ -45,7 +48,7 @@ pub use resources::materials::ShaderConfig;
 pub use window::WindowHandle;
 
 // Core rendering types that applications need
-pub use primitives::{Mesh, Vertex, CoordinateSystem, CoordinateConverter};
+pub use primitives::{Mesh, Vertex, CoordinateSystem, CoordinateConverter, Camera};
 pub use resources::materials::{Material, MaterialType, MaterialId, PipelineType, AlphaMode};
 pub use systems::lighting::{Light, LightType, LightingEnvironment};
 pub use systems::text::{
@@ -78,7 +81,7 @@ pub use systems::batching::{BatchRenderer, RenderBatch, BatchError, BatchStats, 
 use thiserror::Error;
 // REMOVED: Engine coupling for cleaner library abstraction
 // use crate::engine::{RendererConfig, WindowConfig}; 
-use crate::foundation::math::{Vec3, Mat4, Mat4Ext, utils};
+use crate::foundation::math::{Vec3, Mat4, Mat4Ext};
 use crate::render::systems::dynamic::{
     MeshPoolManager, MeshType, DynamicObjectHandle,
     SpawnerError
@@ -459,62 +462,11 @@ impl GraphicsEngine {
     /// Create SharedRenderingResources for efficient multi-object rendering (DEPRECATED)
     /// This handles the complex Vulkan resource creation for shared geometry
     #[deprecated(since = "0.1.0", note = "Use load_mesh to get MeshHandle for cleaner API")]
-    pub fn create_shared_rendering_resources(&self, mesh: &Mesh, _materials: &[Material]) -> Result<resources::shared::SharedRenderingResources, Box<dyn std::error::Error>> {
+    pub fn create_shared_rendering_resources(&self, mesh: &Mesh, materials: &[Material]) -> Result<resources::shared::SharedRenderingResources, Box<dyn std::error::Error>> {
         // Access VulkanContext through backend downcasting
         if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::backends::vulkan::VulkanRenderer>() {
-            use ash::vk;
-            
-            log::info!("Creating SharedRenderingResources with {} vertices and {} indices", 
-                      mesh.vertices.len(), mesh.indices.len());
-            
-            // Get required components from VulkanRenderer
-            let context = vulkan_backend.get_context();
-            let frame_descriptor_set_layout = vulkan_backend.get_frame_descriptor_set_layout();
-            let material_descriptor_set_layout = vulkan_backend.get_object_descriptor_set_layout();
-            
-            // Create shared vertex buffer
-            let vertex_buffer = crate::render::backends::vulkan::Buffer::new(
-                context.raw_device(),
-                context.instance().clone(),
-                context.physical_device().device,
-                (mesh.vertices.len() * std::mem::size_of::<Vertex>()) as vk::DeviceSize,
-                vk::BufferUsageFlags::VERTEX_BUFFER,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            
-            // Upload vertex data
-            vertex_buffer.write_data(&mesh.vertices)?;
-            
-            // Create shared index buffer
-            let index_buffer = crate::render::backends::vulkan::Buffer::new(
-                context.raw_device(),
-                context.instance().clone(),
-                context.physical_device().device,
-                (mesh.indices.len() * std::mem::size_of::<u32>()) as vk::DeviceSize,
-                vk::BufferUsageFlags::INDEX_BUFFER,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            
-            // Upload index data
-            index_buffer.write_data(&mesh.indices)?;
-            
-            // Get pipeline and layouts (these should already exist in the VulkanRenderer)
-            let pipeline = vulkan_backend.get_graphics_pipeline();
-            let pipeline_layout = vulkan_backend.get_pipeline_layout();
-            
-            let shared_resources = resources::shared::SharedRenderingResources::new(
-                vertex_buffer,
-                index_buffer,
-                pipeline,
-                pipeline_layout,
-                material_descriptor_set_layout,
-                frame_descriptor_set_layout,
-                mesh.indices.len() as u32,
-                mesh.vertices.len() as u32,
-            );
-            
-            log::info!("SharedRenderingResources created successfully");
-            Ok(shared_resources)
+            #[allow(deprecated)]
+            resources::shared::create_shared_rendering_resources(vulkan_backend, mesh, materials)
         } else {
             Err("Renderer is not using Vulkan backend".into())
         }
@@ -523,63 +475,18 @@ impl GraphicsEngine {
     /// Create SharedRenderingResources for instanced dynamic object rendering (DEPRECATED)
     /// This creates resources with an instanced pipeline for efficient batch rendering
     #[deprecated(since = "0.1.0", note = "Use load_mesh to get MeshHandle for cleaner API")]
-    pub fn create_instanced_rendering_resources(&self, mesh: &Mesh, _materials: &[Material]) -> Result<resources::shared::SharedRenderingResources, Box<dyn std::error::Error>> {
+    pub fn create_instanced_rendering_resources(&self, mesh: &Mesh, materials: &[Material]) -> Result<resources::shared::SharedRenderingResources, Box<dyn std::error::Error>> {
         // Access VulkanContext through backend downcasting
         if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::backends::vulkan::VulkanRenderer>() {
-            use ash::vk;
-            
-            log::info!("Creating InstancedRenderingResources with {} vertices and {} indices", 
-                mesh.vertices.len(), mesh.indices.len());            // Get required components from VulkanRenderer
-            let context = vulkan_backend.get_context();
-            let frame_descriptor_set_layout = vulkan_backend.get_frame_descriptor_set_layout();
-            let material_descriptor_set_layout = vulkan_backend.get_object_descriptor_set_layout();
-            
-            // Create shared vertex buffer (same as regular)
-            let vertex_buffer = crate::render::backends::vulkan::Buffer::new(
-                context.raw_device(),
-                context.instance().clone(),
-                context.physical_device().device,
-                (mesh.vertices.len() * std::mem::size_of::<Vertex>()) as vk::DeviceSize,
-                vk::BufferUsageFlags::VERTEX_BUFFER,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            
-            // Upload vertex data
-            vertex_buffer.write_data(&mesh.vertices)?;
-            
-            // Create shared index buffer (same as regular)
-            let index_buffer = crate::render::backends::vulkan::Buffer::new(
-                context.raw_device(),
-                context.instance().clone(),
-                context.physical_device().device,
-                (mesh.indices.len() * std::mem::size_of::<u32>()) as vk::DeviceSize,
-                vk::BufferUsageFlags::INDEX_BUFFER,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            
-            // Upload index data
-            index_buffer.write_data(&mesh.indices)?;
-            
-            // Create INSTANCED pipeline (different from regular)
-            let (graphics_pipeline, pipeline_layout) = self.create_instanced_pipeline(context, frame_descriptor_set_layout, material_descriptor_set_layout)?;
-            
-            // Debug log the pipeline handle
-            log::info!("Created instanced pipeline: {:?}", graphics_pipeline.handle());
-            
-            // Build SharedRenderingResources with instanced pipeline
-            let shared_resources = resources::shared::SharedRenderingResources::new_with_graphics_pipeline(
-                vertex_buffer,
-                index_buffer,
-                graphics_pipeline,
-                pipeline_layout,
-                material_descriptor_set_layout,
-                frame_descriptor_set_layout,
-                mesh.indices.len() as u32,
-                mesh.vertices.len() as u32,
-            );
-            
-            log::info!("InstancedRenderingResources created successfully");
-            Ok(shared_resources)
+            #[allow(deprecated)]
+            resources::shared::create_instanced_rendering_resources(
+                vulkan_backend,
+                mesh,
+                materials,
+                |context, frame_layout, material_layout| {
+                    self.create_instanced_pipeline(context, frame_layout, material_layout)
+                },
+            )
         } else {
             Err("Renderer is not using Vulkan backend".into())
         }
@@ -587,76 +494,17 @@ impl GraphicsEngine {
     
     /// Create instanced pipeline for dynamic object rendering
     fn create_instanced_pipeline(&self, context: &crate::render::backends::vulkan::VulkanContext, frame_layout: ash::vk::DescriptorSetLayout, material_layout: ash::vk::DescriptorSetLayout) -> Result<(crate::render::backends::vulkan::GraphicsPipeline, ash::vk::PipelineLayout), Box<dyn std::error::Error>> {
-        use crate::render::backends::vulkan::{VulkanVertexLayout, ShaderModule};
-        use ash::vk;
-        
-        // Validate push constants size against device limits (industry best practice)
-        // Our optimized layout: model_matrix(64) + normal_matrix(48) + material_color(16) = 128 bytes
-        const REQUIRED_PUSH_CONSTANTS_SIZE: u32 = 128; 
-        let max_push_constants_size = context.physical_device.properties.limits.max_push_constants_size;
-        
-        if max_push_constants_size < REQUIRED_PUSH_CONSTANTS_SIZE {
-            return Err(format!(
-                "Device push constants limit ({} bytes) is less than required ({} bytes). This violates Vulkan minimum spec!",
-                max_push_constants_size, REQUIRED_PUSH_CONSTANTS_SIZE
-            ).into());
-        } else if max_push_constants_size == REQUIRED_PUSH_CONSTANTS_SIZE {
-            log::warn!(
-                "Device push constants limit ({} bytes) exactly matches our usage ({} bytes). Consider reducing push constants size for better compatibility.",
-                max_push_constants_size, REQUIRED_PUSH_CONSTANTS_SIZE
-            );
-        } else {
-            log::info!(
-                "Push constants validation passed: device limit {} bytes, using {} bytes ({} bytes headroom)",
-                max_push_constants_size, REQUIRED_PUSH_CONSTANTS_SIZE, max_push_constants_size - REQUIRED_PUSH_CONSTANTS_SIZE
-            );
-        }
-        
-        // Load the same shaders (they'll adapt to instanced input via vertex attributes)
-        let vertex_shader = ShaderModule::from_file(
-            context.raw_device(),
-            "target/shaders/standard_pbr_vert.spv",
-        )?;
-        
-        let fragment_shader = ShaderModule::from_file(
-            context.raw_device(),
-            "target/shaders/standard_pbr_frag.spv",
-        )?;
-        
-        // Create INSTANCED vertex input state
-        let (binding_descriptions, attribute_descriptions) = VulkanVertexLayout::get_instanced_input_state();
-        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder()
-            .vertex_binding_descriptions(&binding_descriptions)
-            .vertex_attribute_descriptions(&attribute_descriptions)
-            .build();
-        
-        // Create descriptor set layout array for pipeline creation
-        let descriptor_set_layouts = [frame_layout, material_layout];
-        
-        // Get render pass from VulkanRenderer (need to access it through backend)
+        // Get render pass from VulkanRenderer
         if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::backends::vulkan::VulkanRenderer>() {
             let render_pass = vulkan_backend.get_render_pass();
             
-            // Create instanced graphics pipeline (it will create its own pipeline layout internally)
-            let pipeline = crate::render::backends::vulkan::GraphicsPipeline::new_with_descriptor_layouts(
-                context.raw_device(),
+            // Delegate to pipeline builder module
+            systems::dynamic::instancing::create_instanced_pipeline(
+                context,
+                frame_layout,
+                material_layout,
                 render_pass,
-                &vertex_shader,
-                &fragment_shader,
-                vertex_input_info,
-                &descriptor_set_layouts,
-            )?;
-            
-            let pipeline_handle = pipeline.handle();
-            
-            if pipeline_handle == vk::Pipeline::null() {
-                return Err("Pipeline creation failed - returned null handle".into());
-            }
-            
-            // Get the pipeline layout that was actually used to create the pipeline
-            let pipeline_layout = pipeline.layout();
-            
-            Ok((pipeline, pipeline_layout))
+            )
         } else {
             Err("Backend is not Vulkan".into())
         }
@@ -701,30 +549,12 @@ impl GraphicsEngine {
     /// )?;
     /// ```
     pub fn initialize_dynamic_system(&mut self, max_objects_per_pool: usize) -> Result<(), Box<dyn std::error::Error>> {
-        log::info!("Initializing mesh pool system with {} objects per pool", max_objects_per_pool);
+        systems::dynamic::graphics_api::initialize_dynamic_system(&mut self.pool_manager, &*self.backend, max_objects_per_pool)?;
         
-        // Access VulkanContext through backend downcasting for pool system initialization
-        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::backends::vulkan::VulkanRenderer>() {
-            let context = vulkan_backend.get_context();
-            
-            // Create MeshPoolManager
-            let mut pool_manager = MeshPoolManager::new();
-            
-            // TODO: In Phase 3, create pools for each mesh type with proper SharedRenderingResources
-            // For now, we create empty pools that will be populated when SharedRenderingResources integration is complete
-            
-            // Initialize the pool manager with Vulkan resources
-            pool_manager.initialize_pools(context)?;
-            self.pool_manager = Some(pool_manager);
-            
-            // Initialize backend's dynamic rendering system
-            self.backend.initialize_dynamic_rendering(max_objects_per_pool)?;
-            
-            log::info!("Mesh pool system initialized successfully");
-            Ok(())
-        } else {
-            Err("Renderer is not using Vulkan backend".into())
-        }
+        // Initialize backend's dynamic rendering system
+        self.backend.initialize_dynamic_rendering(max_objects_per_pool)?;
+        
+        Ok(())
     }
 
     /// Create a mesh pool for a specific mesh type (MeshPoolManager system)
@@ -747,35 +577,28 @@ impl GraphicsEngine {
         materials: &[Material],
         max_objects: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        log::info!("Creating mesh pool for {:?} with capacity {}", mesh_type, max_objects);
-        
-        // Extract texture from first material (all instances in pool share this texture)
-        let texture_handle = materials.get(0)
-            .and_then(|mat| mat.textures.base_color);
-        
-        log::info!("Pool {:?} texture: {:?}", mesh_type, texture_handle);
-        
-        // Create SharedRenderingResources for this mesh using instanced rendering
+        // Create SharedRenderingResources first (before borrowing pool_manager mutably)
         #[allow(deprecated)]
         let shared_resources = self.create_instanced_rendering_resources(mesh, materials)?;
         
-        // Create the pool in the MeshPoolManager
-        if let Some(ref mut pool_manager) = self.pool_manager {
-            // Get VulkanRenderer from backend
+        // Extract texture from first material
+        let texture_handle = materials.get(0)
+            .and_then(|mat| mat.textures.base_color);
+        
+        log::info!("Creating mesh pool for {:?} with capacity {} and texture {:?}", mesh_type, max_objects, texture_handle);
+        
+        // Now delegate to graphics_api with pre-created resources
+        if let Some(ref mut mgr) = self.pool_manager {
             if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
-                // Create per-pool descriptor set with texture binding
                 let material_descriptor_set = if let Some(tex_handle) = texture_handle {
-                    log::info!("Creating descriptor set for pool {:?} with texture {:?}", mesh_type, tex_handle);
                     vulkan_backend.create_material_descriptor_set_with_texture(tex_handle)?
                 } else {
-                    log::info!("No texture for pool {:?}, using default descriptor set", mesh_type);
                     vulkan_backend.get_default_material_descriptor_set()
                 };
                 
-                // Get context after descriptor set creation to avoid borrow conflicts
                 let context = vulkan_backend.get_context();
                 
-                pool_manager.create_pool(
+                mgr.create_pool(
                     mesh_type,
                     shared_resources,
                     max_objects,
@@ -786,10 +609,10 @@ impl GraphicsEngine {
                 log::info!("Successfully created pool for {:?}", mesh_type);
                 Ok(())
             } else {
-                Err("Backend is not a VulkanRenderer - cannot get VulkanContext".into())
+                Err("Backend is not a VulkanRenderer".into())
             }
         } else {
-            Err("Dynamic system not initialized. Call initialize_dynamic_system first.".into())
+            Err("Dynamic system not initialized".into())
         }
     }
     
@@ -882,20 +705,14 @@ impl GraphicsEngine {
         scale: Vec3,
         material: Material,
     ) -> Result<DynamicObjectHandle, SpawnerError> {
-        // Ensure pool system is initialized
-        let pool_manager = self.pool_manager.as_mut()
-            .ok_or(SpawnerError::InvalidParameters {
-                reason: "Pool system not initialized - call initialize_dynamic_system() first".to_string()
-            })?;
-        
-        // Spawn the object in the appropriate mesh pool with the provided material
-        let handle = pool_manager.spawn_object(mesh_type, position, rotation, scale, material)
-            .map_err(|e| SpawnerError::InvalidParameters {
-                reason: format!("Pool manager spawn failed: {}", e)
-            })?;
-        
-        log::debug!("Spawned {} object at position {:?}", mesh_type, position);
-        Ok(handle)
+        systems::dynamic::graphics_api::spawn_dynamic_object(
+            &mut self.pool_manager,
+            mesh_type,
+            position,
+            rotation,
+            scale,
+            material,
+        )
     }
 
     /// Despawn a specific dynamic object by handle
@@ -922,17 +739,7 @@ impl GraphicsEngine {
     /// graphics_engine.despawn_dynamic_object(MeshType::Teapot, handle)?;
     /// ```
     pub fn despawn_dynamic_object(&mut self, mesh_type: MeshType, handle: DynamicObjectHandle) -> Result<(), SpawnerError> {
-        let pool_manager = self.pool_manager.as_mut()
-            .ok_or(SpawnerError::InvalidParameters {
-                reason: "Pool system not initialized".to_string()
-            })?;
-        
-        pool_manager.despawn_object(mesh_type, handle)
-            .map_err(|e| SpawnerError::InvalidParameters {
-                reason: format!("Pool manager despawn failed: {}", e)
-            })?;
-        log::debug!("Despawned {} object with handle generation {}", mesh_type, handle.generation);
-        Ok(())
+        systems::dynamic::graphics_api::despawn_dynamic_object(&mut self.pool_manager, mesh_type, handle)
     }
 
     /// Update the transform of a dynamic object
@@ -963,16 +770,14 @@ impl GraphicsEngine {
         rotation: Vec3,
         scale: Vec3,
     ) -> Result<(), SpawnerError> {
-        if let Some(ref mut pool_manager) = self.pool_manager {
-            pool_manager.update_object_transform(mesh_type, handle, position, rotation, scale)
-                .map_err(|e| SpawnerError::InvalidParameters {
-                    reason: format!("Failed to update object transform: {}", e),
-                })
-        } else {
-            Err(SpawnerError::InvalidParameters {
-                reason: "Pool manager not initialized".to_string(),
-            })
-        }
+        systems::dynamic::graphics_api::update_dynamic_object_transform(
+            &mut self.pool_manager,
+            mesh_type,
+            handle,
+            position,
+            rotation,
+            scale,
+        )
     }
 
     /// Update only the position of a dynamic object, preserving rotation and scale
@@ -982,16 +787,12 @@ impl GraphicsEngine {
         handle: DynamicObjectHandle,
         position: Vec3,
     ) -> Result<(), SpawnerError> {
-        if let Some(ref mut pool_manager) = self.pool_manager {
-            pool_manager.update_object_position(mesh_type, handle, position)
-                .map_err(|e| SpawnerError::InvalidParameters {
-                    reason: format!("Failed to update object position: {}", e),
-                })
-        } else {
-            Err(SpawnerError::InvalidParameters {
-                reason: "Pool manager not initialized".to_string(),
-            })
-        }
+        systems::dynamic::graphics_api::update_dynamic_object_position(
+            &mut self.pool_manager,
+            mesh_type,
+            handle,
+            position,
+        )
     }
 
     /// Begin dynamic frame rendering setup
@@ -1028,13 +829,7 @@ impl GraphicsEngine {
     /// graphics_engine.end_dynamic_frame(window)?;
     /// ```
     pub fn begin_dynamic_frame(&mut self, delta_time: f32) -> Result<(), Box<dyn std::error::Error>> {
-        // Dynamic frame started - process any pending cleanup from manual despawns
-        log::trace!("Dynamic frame started");
-        
-        // Update pool manager to process cleanup of manually despawned objects
-        if let Some(pool_manager) = &mut self.pool_manager {
-            pool_manager.update_all_pools(delta_time);
-        }
+        systems::dynamic::graphics_api::begin_dynamic_frame(&mut self.pool_manager, delta_time);
         
         // Begin command recording for the frame (same as static objects)
         self.begin_command_recording()?;
@@ -1061,30 +856,17 @@ impl GraphicsEngine {
     /// - begin_dynamic_frame() must be called first
     /// - Camera and lighting should be set up
     pub fn record_dynamic_draws(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(ref mut pool_manager) = self.pool_manager {
-            let stats = pool_manager.get_stats();
-            
-            if stats.total_active_objects > 0 {
-                log::trace!("Recording draws for {} active dynamic objects across {} pools", 
-                           stats.total_active_objects, stats.render_batches_per_frame);
-                
-                // Get camera position and target for depth sorting
-                let (camera_position, camera_target) = self.current_camera.as_ref()
-                    .map(|cam| (cam.position, cam.target))
-                    .unwrap_or((Vec3::zeros(), Vec3::new(0.0, 0.0, -1.0)));
-                
-                // Use MeshPoolManager's proper render method to avoid state corruption between mesh types
-                pool_manager.render_all_pools_via_backend(&mut *self.backend, camera_position, camera_target)
-                    .map_err(|e| format!("Failed to render dynamic object pools: {}", e))?;
-                
-                log::debug!("Dynamic object rendering completed: {} total objects across {} mesh types", 
-                           stats.total_active_objects, stats.render_batches_per_frame);
-            } else {
-                log::trace!("No active dynamic objects to render");
-            }
-        }
+        // Get camera position and target for depth sorting
+        let (camera_position, camera_target) = self.current_camera.as_ref()
+            .map(|cam| (cam.position, cam.target))
+            .unwrap_or((Vec3::zeros(), Vec3::new(0.0, 0.0, -1.0)));
         
-        Ok(())
+        systems::dynamic::graphics_api::record_dynamic_draws(
+            &mut self.pool_manager,
+            &mut *self.backend,
+            camera_position,
+            camera_target,
+        )
     }
 
     /// End dynamic frame and submit commands
@@ -1137,7 +919,7 @@ impl GraphicsEngine {
     /// }
     /// ```
     pub fn get_dynamic_stats(&self) -> Option<crate::render::systems::dynamic::PoolManagerStats> {
-        self.pool_manager.as_ref().map(|manager| manager.get_stats())
+        systems::dynamic::graphics_api::get_dynamic_stats(&self.pool_manager)
     }
 
     /// Initialize instanced rendering system for efficient batch rendering
@@ -1209,517 +991,21 @@ impl GraphicsEngine {
             Err("Backend doesn't support texture upload".into())
         }
     }
-
-    // ================================
-    // LEGACY RENDERING API (TO BE DEPRECATED)
-    // ================================
-    /// - apply_material() - Material state setup  
-    /// - execute_draw_call() - Actual rendering
-    pub fn draw_mesh_3d(&mut self, mesh: &Mesh, model_matrix: &Mat4, material: &Material) -> Result<(), Box<dyn std::error::Error>> {
-        
-        // ARCHITECTURE ISSUE: Direct Vulkan API calls violate library-agnostic principle
-        // A proper abstraction would hide the backend implementation entirely
-        
-        // Update mesh data - PERFORMANCE ISSUE: This happens on every draw call
-        // Meshes should be uploaded once and referenced by handle for efficiency
-        // FIXME: Implement mesh caching/handle system to avoid redundant uploads
-        self.backend.update_mesh(&mesh.vertices, &mesh.indices)
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-        
-        // Set material properties
-        // FIXME: Material should be an object that can be applied as a unit,
-        // not individual property calls that can get out of sync
-        let material_color = material.get_base_color_array();
-        self.backend.set_material_color(material_color);
-        
-        // ARCHITECTURAL DEPENDENCY: Requires camera to be set beforehand
-        // This creates a fragile runtime dependency that could be compile-time checked
-        if let Some(ref camera) = self.current_camera {
-            
-            // MATRIX MATHEMATICS: Following Johannes Unterguggenberger's academic approach
-            // This is the one aspect that's architecturally sound and mathematically correct
-            
-            // Camera transformation matrices (now handled by UBOs)
-            // 1. View matrix: World space → Camera/view space (Y-up, right-handed)
-            let view_matrix = camera.get_view_matrix();
-            
-            // 2. Vulkan coordinate transform: Standard view space → Vulkan NDC conventions
-            let coord_transform = Mat4::vulkan_coordinate_transform();
-            
-            // 3. Projection matrix: Camera frustum → normalized device coordinates
-            let projection_matrix = camera.get_projection_matrix();
-            
-            // 4. Complete view-projection transformation for UBO
-            let view_projection = projection_matrix * coord_transform * view_matrix;
-            
-            // Update camera UBO with current frame data
-            self.backend.update_camera_ubo(view_matrix, projection_matrix, view_projection, camera.position);
-            
-            // FIXME: Duplicate conversion logic - this pattern is repeated for every matrix
-            // Should have a generic to_vulkan_array() extension method for Mat4<f32>
-            let model_array = [
-                [model_matrix[(0, 0)], model_matrix[(1, 0)], model_matrix[(2, 0)], model_matrix[(3, 0)]],
-                [model_matrix[(0, 1)], model_matrix[(1, 1)], model_matrix[(2, 1)], model_matrix[(3, 1)]],
-                [model_matrix[(0, 2)], model_matrix[(1, 2)], model_matrix[(2, 2)], model_matrix[(3, 2)]],
-                [model_matrix[(0, 3)], model_matrix[(1, 3)], model_matrix[(2, 3)], model_matrix[(3, 3)]],
-            ];
-
-            // Industry-standard approach: transforms via push constants, other data via UBOs
-            self.backend.set_model_matrix(model_array);
-            
-            // ARCHITECTURAL ANTI-PATTERN: Setting lighting data per mesh draw
-            // Lighting should be set once per frame, not once per object
-            // This creates unnecessary GPU state changes and CPU overhead
-            if let Some(ref lighting) = self.current_lighting {
-                if let Some(first_light) = lighting.lights.first() {
-                    match first_light.light_type {
-                        LightType::Directional => {
-                            // Keep light direction in world space (don't transform it)
-                            // The shader will handle lighting calculations in world space
-                            
-                            // PERFORMANCE ISSUE: This call happens for every mesh, not once per frame
-                            // FIXME: Move lighting setup to begin_frame() or a dedicated set_scene_lighting()
-                            self.backend.set_directional_light(
-                                first_light.direction_array(),
-                                first_light.intensity,
-                                first_light.color_array(),
-                                lighting.ambient_intensity,
-                            );
-                            log::trace!("Set world-space directional light: dir={:?}, intensity={}", 
-                                       first_light.direction_array(), first_light.intensity);
-                        },
-                        _ => {
-                            // API CONTRACT VIOLATION: We accept all light types but only support one
-                            log::warn!("Only directional lights are currently supported in UBO implementation");
-                        }
-                    }
-                }
-            }
-        } else {
-            // RUNTIME ERROR: Camera dependency creates fragile rendering state
-            // FIXME: This should be a compile-time requirement, not runtime failure
-            log::error!("Cannot render mesh without camera - call set_camera() first");
-            return Err("No camera set for rendering".into());
-        }
-        
-        // Execute the actual draw call
-        // IMPROVED ERROR HANDLING: Backend abstraction now properly handles errors
-        match self.backend.draw_frame() {
-            Ok(()) => {
-                // Success - frame has been submitted and will be presented
-                log::trace!("Successfully drew mesh with {} vertices", mesh.vertices.len());
-            },
-            Err(RenderError::BackendError(ref err_msg)) if err_msg.contains("ERROR_OUT_OF_DATE_KHR") => {
-                // Backend reports swapchain out of date - handle gracefully
-                log::warn!("Swapchain out of date during render - requesting recreation");
-                // FIXME: Automatic swapchain recreation should happen transparently
-                return Ok(()); // Skip this frame to avoid crashes
-            }
-            // Backend abstraction now provides clean error handling
-            Err(e) => {
-                log::error!("Backend rendering error: {:?}", e);
-                return Err(Box::new(e) as Box<dyn std::error::Error>);
-            }
-        }
-        
-        Ok(())
-    }
-    
-    /// End the current frame and present to screen
-    ///
-    /// Finalizes the rendering of the current frame. Currently this is mostly
-    /// a formality since the actual frame presentation happens within draw_mesh_3d().
-    ///
-    /// # Arguments
-    /// * `_window_handle` - Window handle (currently unused)
-    ///
-    /// # Architecture Issues
-    /// This method reveals a fundamental design problem with the frame lifecycle.
-    /// The actual presentation happens in draw_mesh_3d() → draw_frame(), making
-    /// this method mostly ceremonial and the frame boundaries poorly defined.
-    ///
-    /// # Proper Frame Lifecycle Should Be:
-    /// 1. `begin_frame()` - Reset command buffers, start render pass
-    /// 2. `draw_*()` calls - Record drawing commands (no presentation)
-    /// 3. `end_frame()` - End render pass, submit commands, present
-    ///
-    /// FIXME: Currently the lifecycle is broken because draw_mesh_3d() does everything.
-    /// This makes it impossible to batch multiple draw calls into a single frame.
-    pub fn end_frame(&mut self, _window_handle: &mut WindowHandle) -> Result<(), Box<dyn std::error::Error>> {
-        log::trace!("End frame {}", self.frame_count);
-        self.frame_count += 1;
-        
-        // FIXME: Frame is already presented by draw_mesh_3d() calls
-        // This reveals the broken frame lifecycle architecture - we just increment a counter
-        Ok(())
-    }
     
     /// Recreate the Vulkan swapchain for window resizing
-    ///
-    /// Handles window resize events by recreating the Vulkan swapchain with new dimensions.
-    /// This is necessary when the window size changes to maintain proper rendering.
-    ///
-    /// # Arguments
-    /// * `window_handle` - Mutable reference to window handle for accessing Vulkan surface
-    ///
-    /// # Vulkan Implementation Details
-    /// This method directly accesses Vulkan-specific window data, violating library-agnostic
-    /// design principles. A proper abstraction would hide swapchain management entirely.
-    ///
-    /// FIXME: Swapchain recreation should be automatic and transparent to applications.
-    /// The renderer should detect out-of-date swapchains and recreate them without
-    /// requiring explicit application calls.
     pub fn recreate_swapchain(&mut self, window_handle: &mut WindowHandle) {
         log::info!("Recreating swapchain for window resize");
         
-        // INTERNAL BACKEND ACCESS: Use safe downcasting via RenderSurface trait
-        // Backend now handles swapchain recreation internally
-        
-        // FIXME: Error handling should be more robust
-        // Failed swapchain recreation should either retry or gracefully degrade
         if let Err(e) = self.backend.recreate_swapchain(window_handle) {
             log::error!("Failed to recreate swapchain: {:?}", e);
-            // FIXME: What should we do if swapchain recreation fails?
-            // Current behavior is to continue with broken state
         } else {
             log::info!("Successfully recreated swapchain");
         }
     }
     
     /// Get the current swapchain dimensions
-    ///
-    /// Returns the current swapchain extent in pixels. This is primarily used
-    /// for aspect ratio calculations and viewport configuration.
-    ///
-    /// # Returns
-    /// Tuple of (width, height) in pixels
-    ///
-    /// # Architecture Notes
-    /// This method exposes Vulkan swapchain implementation details to the application.
-    /// A better design would provide generic "get_render_area()" or "get_aspect_ratio()"
-    /// methods that don't reveal the underlying graphics API.
-    ///
-    /// FIXME: This should return a generic RenderArea struct, not raw dimensions
     pub fn get_swapchain_extent(&self) -> (u32, u32) {
-        // ABSTRACTION LEAK: Exposing Vulkan swapchain details
         self.backend.get_swapchain_extent()
-    }
-    
-    /// Legacy ECS rendering method
-    ///
-    /// Provides compatibility with the old ECS-based rendering system.
-    /// Currently does minimal work and is primarily used for engine integration.
-    ///
-    /// # Returns
-    /// Result indicating success or rendering error
-    ///
-    /// # Architecture Notes
-    /// This method represents the old architecture where the renderer was tightly
-    /// coupled to the ECS system. The new architecture separates rendering from
-    /// ECS to improve modularity and testability.
-    ///
-    /// FIXME: This legacy method should eventually be removed once all applications
-    /// migrate to the new explicit draw_mesh_3d() API.
-    pub fn render(&mut self) -> Result<(), RenderError> {
-        // Legacy rendering path - minimal implementation for backward compatibility
-        log::trace!("Legacy render call - frame {}", self.frame_count);
-        self.frame_count += 1;
-        Ok(())
-    }
-    
-    /// Resize the renderer to new dimensions
-    ///
-    /// Handles renderer resize events. Currently not fully implemented.
-    ///
-    /// # Arguments  
-    /// * `_width` - New width in pixels (currently unused)
-    /// * `_height` - New height in pixels (currently unused)
-    ///
-    /// # Returns
-    /// Result indicating success or rendering error
-    ///
-    /// # Implementation Status
-    /// This method is a placeholder and doesn't perform actual resize operations.
-    /// Proper implementation should update projection matrices and viewport settings.
-    ///
-    /// FIXME: Implement actual resize logic:
-    /// 1. Update projection matrix aspect ratios
-    /// 2. Recreate swapchain if necessary  
-    /// 3. Update viewport and scissor rectangles
-    /// 4. Notify cameras of aspect ratio changes
-    pub fn resize(&mut self, _width: u32, _height: u32) -> Result<(), RenderError> {
-        // TODO: Implement resize logic
-        log::debug!("Renderer resize requested: {}x{} (not yet implemented)", _width, _height);
-        Ok(())
-    }
-}
-
-/// 3D Camera for perspective and orthographic projections
-///
-/// Represents a camera in 3D space with position, orientation, and projection parameters.
-/// Supports both perspective and orthographic projections with proper matrix generation
-/// following Johannes Unterguggenberger's mathematical approach.
-///
-/// # Coordinate System
-/// Uses standard right-handed Y-up coordinate system in view space:
-/// - X+ = Right
-/// - Y+ = Up  
-/// - Z+ = Forward (towards viewer, opposite of OpenGL convention)
-///
-/// The Vulkan coordinate transformation is applied separately to convert to Vulkan's
-/// Y-down NDC convention while preserving standard view space mathematics.
-///
-/// # Design Principles
-/// - Library-agnostic: No direct Vulkan dependencies in camera math
-/// - Immutable operation: Methods don't modify camera state unexpectedly
-/// - Mathematical correctness: Follows established computer graphics conventions
-/// - Flexible API: Supports various camera creation and manipulation patterns
-///
-/// # Performance Notes
-/// Matrix calculations are performed on-demand rather than cached. For performance-
-/// critical applications with static cameras, consider caching the computed matrices.
-#[derive(Debug, Clone)]
-pub struct Camera {
-    /// Camera position in world space
-    pub position: Vec3,
-    
-    /// Point the camera is looking at in world space
-    pub target: Vec3,
-    
-    /// Up vector for camera orientation (typically [0, 1, 0])
-    pub up: Vec3,
-    
-    /// Field of view angle in radians (for perspective projection)
-    pub fov: f32,
-    
-    /// Aspect ratio (width / height) for projection calculations
-    pub aspect: f32,
-    
-    /// Distance to near clipping plane
-    pub near: f32,
-    
-    /// Distance to far clipping plane  
-    pub far: f32,
-}
-
-impl Camera {
-    /// Create a new perspective camera with standard Y-up orientation
-    ///
-    /// Creates a perspective camera suitable for 3D rendering with the specified
-    /// field of view, aspect ratio, and clipping plane distances.
-    ///
-    /// # Arguments
-    /// * `position` - Camera position in world space
-    /// * `fov_degrees` - Field of view angle in degrees (converted to radians internally)
-    /// * `aspect` - Aspect ratio (width / height) of the viewport
-    /// * `near` - Distance to near clipping plane (must be > 0)
-    /// * `far` - Distance to far clipping plane (must be > near)
-    ///
-    /// # Returns
-    /// New Camera instance configured for perspective projection
-    ///
-    /// # Example
-    /// ```rust
-    /// let camera = Camera::perspective(
-    ///     Vec3::new(0.0, 2.0, 5.0),  // Position 5 units back, 2 up
-    ///     75.0,                       // 75-degree field of view
-    ///     16.0 / 9.0,                // Widescreen aspect ratio
-    ///     0.1,                        // Near plane at 10cm
-    ///     100.0                       // Far plane at 100 meters
-    /// );
-    /// ```
-    ///
-    /// # Design Notes
-    /// The default target is origin [0,0,0] and up vector is +Y [0,1,0], providing
-    /// a sensible starting configuration that can be customized after creation.
-    pub fn perspective(position: Vec3, fov_degrees: f32, aspect: f32, near: f32, far: f32) -> Self {
-        Self {
-            position,
-            target: Vec3::zeros(), // Default to looking at origin
-            up: Vec3::new(0.0, 1.0, 0.0), // Standard Y-up orientation
-            fov: utils::deg_to_rad(fov_degrees), // Convert degrees to radians for internal use
-            aspect,
-            near,
-            far,
-        }
-    }
-    
-    /// Update camera position in world space
-    ///
-    /// Sets the camera position to a new location while preserving the current
-    /// target and orientation.
-    ///
-    /// # Arguments
-    /// * `position` - New camera position in world coordinates
-    ///
-    /// # Performance Notes
-    /// This method is lightweight and doesn't trigger any matrix recalculations
-    /// until the next call to get_view_matrix() or get_projection_matrix().
-    pub fn set_position(&mut self, position: Vec3) {
-        self.position = position;
-        log::trace!("Camera position updated to: {:?}", position);
-    }
-    
-    /// Update camera target (look-at point)
-    ///
-    /// Changes where the camera is pointing without moving the camera position.
-    ///
-    /// # Arguments
-    /// * `target` - Point in world space to look at
-    pub fn set_target(&mut self, target: Vec3) {
-        self.target = target;
-        log::trace!("Camera target updated to: {:?}", target);
-    }
-    
-    /// Configure camera to look at a specific point with custom up vector
-    ///
-    /// Simultaneously sets the target point and up vector for camera orientation.
-    /// This is useful for creating specific camera orientations or for orbit-style
-    /// camera controls.
-    ///
-    /// # Arguments
-    /// * `target` - Point in world space to look at
-    /// * `up` - Up vector for camera orientation (should be normalized)
-    ///
-    /// # Mathematical Notes
-    /// The up vector doesn't need to be perpendicular to the view direction.
-    /// The view matrix calculation will automatically orthonormalize the vectors
-    /// using the Gram-Schmidt process.
-    pub fn look_at(&mut self, target: Vec3, up: Vec3) {
-        self.target = target;
-        self.up = up;
-        log::trace!("Camera look_at updated - target: {:?}, up: {:?}", target, up);
-    }
-    
-    /// Update camera aspect ratio for viewport changes
-    ///
-    /// Updates the aspect ratio used for projection matrix calculations.
-    /// This is typically called when the window/viewport is resized.
-    ///
-    /// # Arguments
-    /// * `aspect` - New aspect ratio (width / height)
-    ///
-    /// # Automatic Change Detection
-    /// Only logs aspect ratio changes when the difference is significant
-    /// (> 0.01) to reduce log noise during window resize events.
-    pub fn set_aspect_ratio(&mut self, aspect: f32) {
-        // Use a larger threshold to prevent spam during window resize
-        if (self.aspect - aspect).abs() > 0.01 {
-            log::info!("Camera aspect ratio changed: {:.3} → {:.3}", self.aspect, aspect);
-            self.aspect = aspect;
-        } else {
-            // Still update the aspect ratio, just don't log it
-            self.aspect = aspect;
-        }
-    }
-    
-    /// Generate view matrix for world-to-camera space transformation
-    ///
-    /// Creates the view matrix that transforms vertices from world space to
-    /// camera space using the camera's position, target, and up vector.
-    ///
-    /// # Returns
-    /// 4x4 view transformation matrix
-    ///
-    /// # Mathematical Implementation
-    /// Uses the standard look-at matrix calculation following right-handed
-    /// coordinate system conventions. The transformation:
-    /// 1. Translates world by -camera_position
-    /// 2. Rotates to align world axes with camera axes
-    ///
-    /// # Coordinate System Notes
-    /// Generates matrices for standard Y-up view space. The separate Vulkan
-    /// coordinate transformation matrix handles conversion to Vulkan conventions.
-    pub fn get_view_matrix(&self) -> Mat4 {
-        // Use standard look-at matrix generation (Y-up, right-handed)
-        // Vulkan coordinate transformation is applied separately
-        Mat4::look_at(self.position, self.target, self.up)
-    }
-    
-    /// Generate perspective projection matrix  
-    ///
-    /// Creates the projection matrix for perspective rendering using the camera's
-    /// field of view, aspect ratio, and clipping planes.
-    ///
-    /// # Returns
-    /// 4x4 perspective projection matrix
-    ///
-    /// # Mathematical Implementation
-    /// Follows Johannes Unterguggenberger's mathematically correct approach for
-    /// perspective projection. Uses standard right-handed coordinate conventions
-    /// in view space before Vulkan coordinate transformation.
-    ///
-    /// # Aspect Ratio Handling
-    /// Automatically uses the current aspect ratio. For dynamic viewports,
-    /// ensure set_aspect_ratio() is called when window dimensions change.
-    pub fn get_projection_matrix(&self) -> Mat4 {
-        // Use standard perspective projection (Y-up view space)
-        // Vulkan coordinate transformation applied separately in rendering pipeline
-        Mat4::perspective(self.fov, self.aspect, self.near, self.far)
-    }
-    
-    /// Generate combined view-projection matrix
-    ///
-    /// Creates the complete view-projection transformation following Johannes
-    /// Unterguggenberger's mathematically correct approach: P × X × V
-    ///
-    /// # Matrix Chain Components
-    /// - P = Perspective projection matrix
-    /// - X = Vulkan coordinate transformation matrix  
-    /// - V = View matrix (world to camera space)
-    ///
-    /// # Returns
-    /// 4x4 combined view-projection matrix ready for rendering
-    ///
-    /// # Usage Notes
-    /// This method provides the complete camera transformation. For rendering
-    /// individual objects, multiply this result by the model matrix:
-    /// `Final = ViewProjection × Model × Vertex`
-    ///
-    /// # Performance Consideration
-    /// This method recalculates matrices on every call. For static cameras,
-    /// consider caching the result until camera parameters change.
-    pub fn get_view_projection_matrix(&self) -> Mat4 {
-        // Calculate component matrices
-        let view_matrix = self.get_view_matrix();
-        let coord_transform = Mat4::vulkan_coordinate_transform();
-        let projection_matrix = self.get_projection_matrix();
-        
-        // Combine in mathematically correct order: P × X × V
-        // This follows Johannes Unterguggenberger's academic approach
-        projection_matrix * coord_transform * view_matrix
-    }
-}
-
-impl Default for Camera {
-    /// Create a default perspective camera with sensible settings
-    ///
-    /// Provides a reasonable starting camera configuration suitable for most
-    /// 3D applications. Positioned above and behind the origin, looking down
-    /// at the scene center.
-    ///
-    /// # Default Configuration
-    /// - Position: (0, 3, 3) - Above and behind origin
-    /// - Target: (0, 0, 0) - Looking at origin
-    /// - Up: (0, 1, 0) - Standard Y-up orientation
-    /// - FOV: 45 degrees - Natural perspective view
-    /// - Aspect: 16:9 - Common widescreen ratio
-    /// - Near: 0.1 - Close near plane for detailed objects
-    /// - Far: 1000.0 - Distant far plane for large scenes
-    ///
-    /// # Coordinate System
-    /// Uses standard Y-up right-handed coordinates, compatible with common
-    /// 3D modeling conventions and the engine's mathematical foundation.
-    fn default() -> Self {
-        Self {
-            position: Vec3::new(0.0, 3.0, 3.0), // Above and behind origin - good default viewpoint
-            target: Vec3::zeros(),               // Look at scene center
-            up: Vec3::new(0.0, 1.0, 0.0),      // Standard Y-up orientation
-            fov: std::f32::consts::FRAC_PI_4,   // 45 degrees in radians - natural FOV
-            aspect: 16.0 / 9.0,                 // Widescreen aspect ratio
-            near: 0.1,                          // Close near plane - good for detail
-            far: 1000.0,                        // Distant far plane - good for landscapes
-        }
     }
 }
 

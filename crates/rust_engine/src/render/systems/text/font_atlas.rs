@@ -17,15 +17,19 @@ pub type FontResult<T> = Result<T, FontError>;
 /// Errors that can occur during font operations
 #[derive(Debug, thiserror::Error)]
 pub enum FontError {
+    /// Failed to load font from file or data
     #[error("Failed to load font: {0}")]
     LoadError(String),
     
+    /// Failed to rasterize a specific glyph character
     #[error("Failed to rasterize glyph '{0}': {1}")]
     RasterizeError(char, String),
     
+    /// Failed to create or upload the atlas texture
     #[error("Failed to create atlas texture: {0}")]
     AtlasCreationError(String),
     
+    /// Requested character was not found in the font atlas
     #[error("Character '{0}' not found in atlas")]
     GlyphNotFound(char),
 }

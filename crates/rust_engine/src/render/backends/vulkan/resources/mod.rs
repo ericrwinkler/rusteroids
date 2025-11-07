@@ -1,12 +1,30 @@
-// Vulkan resource management
+//! Vulkan resource management
+//! 
+//! Contains types for managing GPU resources including buffers, textures,
+//! uniform buffers, descriptors, and resource caching.
 
+/// Buffer types (vertex, index, staging, generic)
 pub mod buffer;
+
+/// Texture management and loading
 pub mod texture;
+
+/// Uniform buffer objects (UBOs) for shader data
 pub mod uniform_buffer;
+
+/// Descriptor set management
 pub mod descriptor_set;
+
+/// High-level resource manager
 pub mod resource_manager;
+
+/// Texture resource manager
 pub mod texture_manager;
+
+/// UBO resource manager
 pub mod ubo_manager;
+
+/// Resource caching system
 pub mod cache_manager;
 
 // Re-export buffer types (except UniformBuffer which conflicts)

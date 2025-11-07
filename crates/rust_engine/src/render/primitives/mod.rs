@@ -1,11 +1,13 @@
 //! Core primitive types for rendering
 //!
 //! This module contains fundamental data structures used throughout
-//! the rendering system, such as meshes, vertices, and coordinate systems.
+//! the rendering system, such as meshes, vertices, cameras, and coordinate systems.
 
 pub mod mesh;
 pub mod coordinates;
+pub mod camera;
 
 // Re-export commonly used types
 pub use mesh::{Mesh, Vertex};
 pub use coordinates::*;
+pub use camera::Camera;

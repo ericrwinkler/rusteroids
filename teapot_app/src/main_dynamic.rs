@@ -17,20 +17,19 @@ use rust_engine::render::{
     Material,
     StandardMaterialParams,
     UnlitMaterialParams,
-    lighting::MultiLightEnvironment,
+    systems::lighting::MultiLightEnvironment,
     GraphicsEngine,
     VulkanRendererConfig,
     WindowHandle,
-    material::{MaterialId, MaterialType},
+    resources::materials::{MaterialId, MaterialType},
     GameObject,
-    shared_resources::SharedRenderingResources,
-    dynamic::{DynamicObjectHandle, MeshType},
+    SharedRenderingResources,
+    systems::dynamic::{DynamicObjectHandle, MeshType},
     FontAtlas,
     TextLayout,
-    text::{create_lit_text_material, TextRenderer},
+    systems::text::{create_lit_text_material, TextRenderer},
 };
 use rust_engine::foundation::math::Vec3;
-use rust_engine::foundation::math::Vec4;
 use glfw::{Action, Key, WindowEvent};
 use std::time::Instant;
 use rand::prelude::*;
@@ -1023,7 +1022,7 @@ impl DynamicTeapotApp {
         // Spawn static 3D text at origin using pool system
         log::info!("Creating static 3D text 'HI BLAKE'...");
         
-        use rust_engine::render::text::text_vertices_to_mesh;
+        use rust_engine::render::systems::text::text_vertices_to_mesh;
         let (test_vertices, test_indices) = self.text_layout.as_ref().unwrap().layout_text("HI BLAKE");
         let test_mesh = text_vertices_to_mesh(test_vertices, test_indices);
         

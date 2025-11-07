@@ -7,7 +7,7 @@
 use crate::ecs::{World, Entity};
 use crate::ecs::components::{RenderableComponent, MovementComponent, LifecycleComponent};
 use crate::ecs::systems::RenderableCollector;
-use crate::render::{GraphicsEngine, material::MaterialId, mesh::Mesh};
+use crate::render::{GraphicsEngine, resources::materials::MaterialId, primitives::Mesh};
 use nalgebra::Vector3;
 use std::time::{Duration, Instant};
 
@@ -289,7 +289,7 @@ impl SceneManager {
     }
     
     /// Get rendering system statistics
-    pub fn rendering_stats(&self) -> &crate::render::batch_renderer::BatchStats {
+    pub fn rendering_stats(&self) -> &crate::render::systems::batching::BatchStats {
         self.renderable_collector.get_stats()
     }
 }

@@ -4,8 +4,8 @@
 //! needed to submit them to the rendering system via the batch renderer.
 
 use crate::ecs::Component;
-use crate::render::material::MaterialId;
-use crate::render::mesh::Mesh;
+use crate::render::resources::materials::MaterialId;
+use crate::render::primitives::Mesh;
 
 /// Component for entities that can be rendered
 #[derive(Debug, Clone)]
@@ -107,7 +107,7 @@ impl RenderableFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::mesh::Vertex;
+    use crate::render::primitives::Vertex;
 
     fn create_test_mesh() -> Mesh {
         Mesh::new(

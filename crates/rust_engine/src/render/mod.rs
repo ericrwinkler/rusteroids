@@ -24,37 +24,31 @@
 //! - **Push Constant Limitations**: Complex rendering features constrained by 160-byte limit
 
 // Public modules for application use
-pub mod config;
 pub mod window;
-pub mod backend;
+pub mod api;
 
-// Modules needed by other engine components (ECS, etc.)
-pub mod mesh;
-pub mod material;
-pub mod lighting;
-pub mod coordinates;
-pub mod text;
+// Core primitives
+pub mod primitives;
 
-// Internal modules - prefer not to use directly in applications
-pub mod pipeline;
-pub mod dynamic;
-pub mod vulkan;
-pub mod render_queue;
-pub mod batch_renderer;
-pub mod game_object;
-pub mod shared_resources;
+// Resources
+pub mod resources;
+
+// Systems
+pub mod systems;
+
+// Backends
+pub mod backends;
 
 // High-level APIs that applications should use
-pub use config::{VulkanRendererConfig, ShaderConfig};
+pub use api::{VulkanRendererConfig, RenderBackend, WindowBackendAccess, BackendResult, MeshHandle, MaterialHandle, ObjectResourceHandle};
+pub use resources::materials::ShaderConfig;
 pub use window::WindowHandle;
-pub use backend::{RenderBackend, WindowBackendAccess, BackendResult, MeshHandle, MaterialHandle, ObjectResourceHandle};
 
 // Core rendering types that applications need
-pub use mesh::{Mesh, Vertex};
-pub use material::{Material, MaterialType, MaterialId, PipelineType, AlphaMode};
-pub use lighting::{Light, LightType, LightingEnvironment};
-pub use coordinates::{CoordinateSystem, CoordinateConverter};
-pub use text::{
+pub use primitives::{Mesh, Vertex, CoordinateSystem, CoordinateConverter};
+pub use resources::materials::{Material, MaterialType, MaterialId, PipelineType, AlphaMode};
+pub use systems::lighting::{Light, LightType, LightingEnvironment};
+pub use systems::text::{
     FontAtlas, GlyphInfo, TextLayout, TextVertex, TextBounds, text_vertices_to_mesh,
     create_lit_text_material, create_unlit_text_material,
     WorldTextManager, WorldTextHandle, WorldTextConfig,
@@ -66,26 +60,26 @@ pub use text::{
 // - MaterialManager + TextureManager: Should be unified into ResourceManager
 // - SharedRenderingResources: Should be internal to backend, not exposed
 // - BatchRenderer: Should be integrated into core renderer, not separate
-pub use material::{
+pub use resources::materials::{
     StandardMaterialParams, UnlitMaterialParams,
     MaterialManager, TextureManager, MaterialTextures, TextureHandle, TextureType
 };
-pub use pipeline::{
+pub use resources::pipelines::{
     PipelineManager, PipelineConfig, CullMode,
     // Future rendering attributes (currently stubbed with FIXME)
     BlendMode, RenderPriority, PolygonMode, DepthBiasConfig,
 };
-pub use render_queue::{RenderQueue, RenderCommand, CommandType, RenderCommandId};
-pub use game_object::{GameObject, ObjectUBO, cleanup_game_object};
+pub use resources::shared::{RenderQueue, RenderCommand, CommandType, RenderCommandId};
+pub use resources::shared::{GameObject, ObjectUBO, cleanup_game_object};
 #[deprecated(since = "0.1.0", note = "SharedRenderingResources is now internal - use MeshHandle/MaterialHandle instead")]
-pub use shared_resources::{SharedRenderingResources, SharedRenderingResourcesBuilder};
-pub use batch_renderer::{BatchRenderer, RenderBatch, BatchError, BatchStats, BatchResult};
+pub use resources::shared::{SharedRenderingResources, SharedRenderingResourcesBuilder};
+pub use systems::batching::{BatchRenderer, RenderBatch, BatchError, BatchStats, BatchResult};
 
 use thiserror::Error;
 // REMOVED: Engine coupling for cleaner library abstraction
 // use crate::engine::{RendererConfig, WindowConfig}; 
 use crate::foundation::math::{Vec3, Mat4, Mat4Ext, utils};
-use crate::render::dynamic::{
+use crate::render::systems::dynamic::{
     MeshPoolManager, MeshType, DynamicObjectHandle,
     SpawnerError
 };
@@ -154,10 +148,10 @@ impl GraphicsEngine {
         // Safe downcast to Vulkan window using the RenderSurface trait
         let render_surface = window_handle.render_surface();
         let vulkan_window = render_surface.as_any_mut()
-            .downcast_mut::<crate::render::vulkan::Window>()
+            .downcast_mut::<crate::render::backends::vulkan::Window>()
             .expect("Expected Vulkan window backend");
         
-        let vulkan_renderer = crate::render::vulkan::VulkanRenderer::new(vulkan_window, config)
+        let vulkan_renderer = crate::render::backends::vulkan::VulkanRenderer::new(vulkan_window, config)
             .map_err(|e| RenderError::InitializationFailed(format!("Failed to create Vulkan renderer: {:?}", e)))?;
         
         Ok(Self {
@@ -271,7 +265,7 @@ impl GraphicsEngine {
     /// This method uses uniform buffer objects for lighting data (industry best practice),
     /// while push constants handle per-draw transform data for optimal performance.
     /// enabling support for multiple lights while maintaining identical visual output.
-    pub fn set_multi_light_environment(&mut self, multi_light_env: &lighting::MultiLightEnvironment) {
+    pub fn set_multi_light_environment(&mut self, multi_light_env: &systems::lighting::MultiLightEnvironment) {
         self.backend.set_multi_light_environment(multi_light_env);
     }
     
@@ -353,7 +347,7 @@ impl GraphicsEngine {
     
     /// Load a mesh and return an opaque handle for rendering
     /// This replaces create_shared_rendering_resources with a cleaner abstraction
-    pub fn load_mesh(&mut self, mesh: &Mesh, materials: &[Material]) -> Result<backend::MeshHandle, Box<dyn std::error::Error>> {
+    pub fn load_mesh(&mut self, mesh: &Mesh, materials: &[Material]) -> Result<api::MeshHandle, Box<dyn std::error::Error>> {
         let mesh_handle = self.backend.create_mesh_resource(mesh, materials)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         
@@ -363,7 +357,7 @@ impl GraphicsEngine {
     
     /// Render multiple objects with the same mesh using transforms
     /// This replaces the complex bind_shared_geometry + record_object_draw pattern
-    pub fn render_objects(&mut self, mesh_handle: backend::MeshHandle, transforms: &[Mat4]) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn render_objects(&mut self, mesh_handle: api::MeshHandle, transforms: &[Mat4]) -> Result<(), Box<dyn std::error::Error>> {
         self.backend.render_objects_with_mesh(mesh_handle, transforms)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         
@@ -465,9 +459,9 @@ impl GraphicsEngine {
     /// Create SharedRenderingResources for efficient multi-object rendering (DEPRECATED)
     /// This handles the complex Vulkan resource creation for shared geometry
     #[deprecated(since = "0.1.0", note = "Use load_mesh to get MeshHandle for cleaner API")]
-    pub fn create_shared_rendering_resources(&self, mesh: &Mesh, _materials: &[Material]) -> Result<shared_resources::SharedRenderingResources, Box<dyn std::error::Error>> {
+    pub fn create_shared_rendering_resources(&self, mesh: &Mesh, _materials: &[Material]) -> Result<resources::shared::SharedRenderingResources, Box<dyn std::error::Error>> {
         // Access VulkanContext through backend downcasting
-        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
+        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::backends::vulkan::VulkanRenderer>() {
             use ash::vk;
             
             log::info!("Creating SharedRenderingResources with {} vertices and {} indices", 
@@ -479,7 +473,7 @@ impl GraphicsEngine {
             let material_descriptor_set_layout = vulkan_backend.get_object_descriptor_set_layout();
             
             // Create shared vertex buffer
-            let vertex_buffer = crate::render::vulkan::buffer::Buffer::new(
+            let vertex_buffer = crate::render::backends::vulkan::Buffer::new(
                 context.raw_device(),
                 context.instance().clone(),
                 context.physical_device().device,
@@ -492,7 +486,7 @@ impl GraphicsEngine {
             vertex_buffer.write_data(&mesh.vertices)?;
             
             // Create shared index buffer
-            let index_buffer = crate::render::vulkan::buffer::Buffer::new(
+            let index_buffer = crate::render::backends::vulkan::Buffer::new(
                 context.raw_device(),
                 context.instance().clone(),
                 context.physical_device().device,
@@ -508,7 +502,7 @@ impl GraphicsEngine {
             let pipeline = vulkan_backend.get_graphics_pipeline();
             let pipeline_layout = vulkan_backend.get_pipeline_layout();
             
-            let shared_resources = shared_resources::SharedRenderingResources::new(
+            let shared_resources = resources::shared::SharedRenderingResources::new(
                 vertex_buffer,
                 index_buffer,
                 pipeline,
@@ -529,9 +523,9 @@ impl GraphicsEngine {
     /// Create SharedRenderingResources for instanced dynamic object rendering (DEPRECATED)
     /// This creates resources with an instanced pipeline for efficient batch rendering
     #[deprecated(since = "0.1.0", note = "Use load_mesh to get MeshHandle for cleaner API")]
-    pub fn create_instanced_rendering_resources(&self, mesh: &Mesh, _materials: &[Material]) -> Result<shared_resources::SharedRenderingResources, Box<dyn std::error::Error>> {
+    pub fn create_instanced_rendering_resources(&self, mesh: &Mesh, _materials: &[Material]) -> Result<resources::shared::SharedRenderingResources, Box<dyn std::error::Error>> {
         // Access VulkanContext through backend downcasting
-        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
+        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::backends::vulkan::VulkanRenderer>() {
             use ash::vk;
             
             log::info!("Creating InstancedRenderingResources with {} vertices and {} indices", 
@@ -541,7 +535,7 @@ impl GraphicsEngine {
             let material_descriptor_set_layout = vulkan_backend.get_object_descriptor_set_layout();
             
             // Create shared vertex buffer (same as regular)
-            let vertex_buffer = crate::render::vulkan::buffer::Buffer::new(
+            let vertex_buffer = crate::render::backends::vulkan::Buffer::new(
                 context.raw_device(),
                 context.instance().clone(),
                 context.physical_device().device,
@@ -554,7 +548,7 @@ impl GraphicsEngine {
             vertex_buffer.write_data(&mesh.vertices)?;
             
             // Create shared index buffer (same as regular)
-            let index_buffer = crate::render::vulkan::buffer::Buffer::new(
+            let index_buffer = crate::render::backends::vulkan::Buffer::new(
                 context.raw_device(),
                 context.instance().clone(),
                 context.physical_device().device,
@@ -573,7 +567,7 @@ impl GraphicsEngine {
             log::info!("Created instanced pipeline: {:?}", graphics_pipeline.handle());
             
             // Build SharedRenderingResources with instanced pipeline
-            let shared_resources = shared_resources::SharedRenderingResources::new_with_graphics_pipeline(
+            let shared_resources = resources::shared::SharedRenderingResources::new_with_graphics_pipeline(
                 vertex_buffer,
                 index_buffer,
                 graphics_pipeline,
@@ -592,8 +586,8 @@ impl GraphicsEngine {
     }
     
     /// Create instanced pipeline for dynamic object rendering
-    fn create_instanced_pipeline(&self, context: &crate::render::vulkan::VulkanContext, frame_layout: ash::vk::DescriptorSetLayout, material_layout: ash::vk::DescriptorSetLayout) -> Result<(crate::render::vulkan::shader::GraphicsPipeline, ash::vk::PipelineLayout), Box<dyn std::error::Error>> {
-        use crate::render::vulkan::{VulkanVertexLayout, shader::ShaderModule};
+    fn create_instanced_pipeline(&self, context: &crate::render::backends::vulkan::VulkanContext, frame_layout: ash::vk::DescriptorSetLayout, material_layout: ash::vk::DescriptorSetLayout) -> Result<(crate::render::backends::vulkan::GraphicsPipeline, ash::vk::PipelineLayout), Box<dyn std::error::Error>> {
+        use crate::render::backends::vulkan::{VulkanVertexLayout, ShaderModule};
         use ash::vk;
         
         // Validate push constants size against device limits (industry best practice)
@@ -640,11 +634,11 @@ impl GraphicsEngine {
         let descriptor_set_layouts = [frame_layout, material_layout];
         
         // Get render pass from VulkanRenderer (need to access it through backend)
-        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
+        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::backends::vulkan::VulkanRenderer>() {
             let render_pass = vulkan_backend.get_render_pass();
             
             // Create instanced graphics pipeline (it will create its own pipeline layout internally)
-            let pipeline = crate::render::vulkan::shader::GraphicsPipeline::new_with_descriptor_layouts(
+            let pipeline = crate::render::backends::vulkan::GraphicsPipeline::new_with_descriptor_layouts(
                 context.raw_device(),
                 render_pass,
                 &vertex_shader,
@@ -669,11 +663,11 @@ impl GraphicsEngine {
     }
     
     /// Helper method to convert lighting environment (temporary until lighting refactor)
-    fn convert_lighting_to_multi_light_environment(&self, _lighting: &LightingEnvironment) -> lighting::MultiLightEnvironment {
+    fn convert_lighting_to_multi_light_environment(&self, _lighting: &LightingEnvironment) -> systems::lighting::MultiLightEnvironment {
         // Convert from the old LightingEnvironment to the new MultiLightEnvironment
         // For now, create a simple environment with ambient lighting
         // TODO: Implement proper conversion when lighting system is refactored
-        lighting::MultiLightEnvironment::new()
+        systems::lighting::MultiLightEnvironment::new()
     }
 
     // ================================
@@ -710,7 +704,7 @@ impl GraphicsEngine {
         log::info!("Initializing mesh pool system with {} objects per pool", max_objects_per_pool);
         
         // Access VulkanContext through backend downcasting for pool system initialization
-        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::vulkan::VulkanRenderer>() {
+        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::backends::vulkan::VulkanRenderer>() {
             let context = vulkan_backend.get_context();
             
             // Create MeshPoolManager
@@ -748,7 +742,7 @@ impl GraphicsEngine {
     /// Result indicating successful pool creation or error
     pub fn create_mesh_pool(
         &mut self,
-        mesh_type: crate::render::dynamic::MeshType,
+        mesh_type: crate::render::systems::dynamic::MeshType,
         mesh: &Mesh,
         materials: &[Material],
         max_objects: usize,
@@ -768,7 +762,7 @@ impl GraphicsEngine {
         // Create the pool in the MeshPoolManager
         if let Some(ref mut pool_manager) = self.pool_manager {
             // Get VulkanRenderer from backend
-            if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::vulkan::VulkanRenderer>() {
+            if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
                 // Create per-pool descriptor set with texture binding
                 let material_descriptor_set = if let Some(tex_handle) = texture_handle {
                     log::info!("Creating descriptor set for pool {:?} with texture {:?}", mesh_type, tex_handle);
@@ -838,7 +832,7 @@ impl GraphicsEngine {
     ///
     /// # Example Usage
     /// ```rust
-    /// use crate::render::dynamic::MeshType;
+    /// use crate::render::systems::dynamic::MeshType;
     /// 
     /// // Spawn a temporary teapot that lasts 3 seconds
     /// let handle = graphics_engine.spawn_dynamic_object(
@@ -1142,7 +1136,7 @@ impl GraphicsEngine {
     ///              (stats.utilization_percentage * 100.0) as u32);
     /// }
     /// ```
-    pub fn get_dynamic_stats(&self) -> Option<crate::render::dynamic::PoolManagerStats> {
+    pub fn get_dynamic_stats(&self) -> Option<crate::render::systems::dynamic::PoolManagerStats> {
         self.pool_manager.as_ref().map(|manager| manager.get_stats())
     }
 
@@ -1204,10 +1198,10 @@ impl GraphicsEngine {
     pub fn upload_texture_from_image_data(
         &mut self,
         image_data: crate::assets::ImageData,
-        texture_type: material::TextureType,
-    ) -> Result<material::TextureHandle, Box<dyn std::error::Error>> {
+        texture_type: resources::materials::TextureType,
+    ) -> Result<resources::materials::TextureHandle, Box<dyn std::error::Error>> {
         // Delegate to backend's texture manager
-        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::vulkan::VulkanRenderer>() {
+        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
             let texture_handle = vulkan_backend.upload_texture_from_image_data(image_data, texture_type)?;
             log::debug!("Uploaded texture to GPU: {:?} (type: {:?})", texture_handle, texture_type);
             Ok(texture_handle)

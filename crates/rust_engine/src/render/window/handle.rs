@@ -90,7 +90,7 @@
 //! 4. **Performance**: Efficient event handling and resource management
 //! 5. **Platform Integration**: Native platform features (decorations, DPI, etc.)
 
-use crate::render::vulkan::Window as VulkanWindow;
+use crate::render::backends::vulkan::Window as VulkanWindow;
 use crate::render::window::backend::{WindowBackend, RenderSurface};
 use glfw::WindowEvent;
 

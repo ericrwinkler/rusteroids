@@ -129,7 +129,7 @@ impl RenderableCollector {
     }
     
     /// Get rendering statistics from the batch renderer
-    pub fn get_stats(&self) -> &crate::render::batch_renderer::BatchStats {
+    pub fn get_stats(&self) -> &crate::render::systems::batching::BatchStats {
         self.batch_renderer.stats()
     }
     
@@ -160,8 +160,8 @@ mod tests {
     use super::*;
     use crate::ecs::World;
     use crate::ecs::components::RenderableComponent;
-    use crate::render::material::MaterialId;
-    use crate::render::mesh::Mesh;
+    use crate::render::resources::materials::MaterialId;
+    use crate::render::primitives::Mesh;
     
     #[test]
     fn test_renderable_collector_creation() {

@@ -4,7 +4,7 @@
 
 use crate::ecs::{World, LightComponent, LightType};
 use crate::ecs::components::TransformComponent;
-use crate::render::lighting::{
+use crate::render::systems::lighting::{
     MultiLightEnvironment, DirectionalLightData, PointLightData, SpotLightData,
     MAX_DIRECTIONAL_LIGHTS, MAX_POINT_LIGHTS, MAX_SPOT_LIGHTS
 };

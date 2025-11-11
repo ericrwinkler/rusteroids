@@ -27,7 +27,7 @@ use rust_engine::render::{
     systems::dynamic::{DynamicObjectHandle, MeshType},
     FontAtlas,
     TextLayout,
-    systems::text::{create_lit_text_material, TextRenderer},
+    systems::text::{create_lit_text_material, create_unlit_text_material, TextRenderer},
 };
 use rust_engine::foundation::math::Vec3;
 use glfw::{Action, Key, WindowEvent};
@@ -138,6 +138,7 @@ pub struct DynamicTeapotApp {
     font_atlas: Option<FontAtlas>,
     text_layout: Option<TextLayout>,
     text_test_handle: Option<DynamicObjectHandle>,
+    unlit_text_handle: Option<DynamicObjectHandle>,
     text_renderer: Option<TextRenderer>,
     text_material: Option<Material>,
 }
@@ -243,6 +244,7 @@ impl DynamicTeapotApp {
             font_atlas: None,
             text_layout: None,
             text_test_handle: None,
+            unlit_text_handle: None,
             text_renderer: None,
             text_material: None,
         }
@@ -1019,11 +1021,11 @@ impl DynamicTeapotApp {
         
         log::info!("✓ Text rendering system initialized");
         
-        // Spawn static 3D text at origin using pool system
-        log::info!("Creating static 3D text 'HI BLAKE'...");
+        // Spawn static 3D LIT text at origin using pool system
+        log::info!("Creating static 3D text 'LIT TEXT'...");
         
         use rust_engine::render::systems::text::text_vertices_to_mesh;
-        let (test_vertices, test_indices) = self.text_layout.as_ref().unwrap().layout_text("HI BLAKE");
+        let (test_vertices, test_indices) = self.text_layout.as_ref().unwrap().layout_text("LIT TEXT");
         let test_mesh = text_vertices_to_mesh(test_vertices, test_indices);
         
         let test_text_material = self.text_material.as_ref().unwrap().clone();
@@ -1046,7 +1048,38 @@ impl DynamicTeapotApp {
         )?;
         
         self.text_test_handle = Some(test_text_handle);
-        log::info!("✓ Static 3D text spawned at origin");
+        log::info!("✓ Static lit text spawned at origin");
+        
+        // Create UNLIT text at a different location
+        log::info!("Creating unlit text 'UNLIT TEXT'...");
+        
+        let (unlit_vertices, unlit_indices) = self.text_layout.as_ref().unwrap().layout_text("UNLIT TEXT");
+        let unlit_mesh = text_vertices_to_mesh(unlit_vertices, unlit_indices);
+        
+        // Create UNLIT material - bright yellow color, always full brightness
+        let bright_yellow = Vec3::new(1.0, 1.0, 0.0);
+        let unlit_text_material = create_unlit_text_material(texture_handle, bright_yellow);
+        log::info!("Unlit text material created");
+        
+        // Create a separate pool for the unlit text (using Cube mesh type)
+        self.graphics_engine.create_mesh_pool(
+            MeshType::Cube,
+            &unlit_mesh,
+            &vec![unlit_text_material.clone()],
+            10
+        )?;
+        
+        // Position unlit text at (5, 2, 0) - to the right
+        let unlit_text_handle = self.graphics_engine.spawn_dynamic_object(
+            MeshType::Cube,
+            Vec3::new(5.0, 2.0, 0.0),
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.05, 0.05, 0.05),
+            unlit_text_material,
+        )?;
+        
+        self.unlit_text_handle = Some(unlit_text_handle);
+        log::info!("✓ Unlit text spawned at (5, 2, 0)");
         
         Ok(())
     }

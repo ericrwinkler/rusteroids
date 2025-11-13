@@ -315,6 +315,92 @@ impl FontAtlas {
         Ok(handle)
     }
     
+    /// Get image data for the atlas without uploading to GPU
+    /// 
+    /// This is useful for backends that want to handle texture upload themselves.
+    /// Rasterizes glyphs if not already done, and returns RGBA image data.
+    pub fn get_atlas_image_data(&mut self) -> FontResult<ImageData> {
+        // Ensure glyphs are rasterized
+        if self.glyph_cache.is_empty() {
+            self.rasterize_glyphs()?;
+        }
+        
+        // Get the atlas data
+        let atlas_data = self.get_raw_atlas_data()?;
+        
+        // Convert single-channel to RGBA
+        let mut rgba_data = Vec::with_capacity((self.atlas_width * self.atlas_height * 4) as usize);
+        for alpha in atlas_data {
+            rgba_data.push(255); // R
+            rgba_data.push(255); // G
+            rgba_data.push(255); // B
+            rgba_data.push(alpha); // A - glyph coverage
+        }
+        
+        Ok(ImageData {
+            width: self.atlas_width,
+            height: self.atlas_height,
+            data: rgba_data,
+            channels: 4,
+        })
+    }
+    
+    /// Set the texture handle after manual upload
+    pub fn set_texture_handle(&mut self, handle: TextureHandle) {
+        self.texture_handle = Some(handle);
+    }
+    
+    /// Get raw single-channel atlas data
+    fn get_raw_atlas_data(&self) -> FontResult<Vec<u8>> {
+        const ASCII_START: u32 = 32;
+        const ASCII_END: u32 = 126;
+        
+        // Create atlas texture
+        let mut atlas_data = vec![0u8; (self.atlas_width * self.atlas_height) as usize];
+        
+        let glyphs_per_row = 16;
+        let cell_width = self.atlas_width / glyphs_per_row;
+        
+        // Calculate max glyph height for cell sizing
+        let max_glyph_height = self.glyph_cache.values()
+            .map(|info| info.size.y as u32)
+            .max()
+            .unwrap_or(0);
+        let cell_height = (max_glyph_height * 3) / 2;
+        
+        let mut current_x = 0u32;
+        let mut current_y = 0u32;
+        
+        // Re-rasterize and pack glyphs into atlas
+        for code_point in ASCII_START..=ASCII_END {
+            let ch = char::from_u32(code_point).unwrap();
+            let (metrics, bitmap) = self.font.rasterize(ch, self.font_size);
+            
+            // Copy glyph bitmap into atlas
+            for y in 0..metrics.height {
+                for x in 0..metrics.width {
+                    let src_idx = y * metrics.width + x;
+                    let dst_x = current_x + x as u32;
+                    let dst_y = current_y + y as u32;
+                    let dst_idx = (dst_y * self.atlas_width + dst_x) as usize;
+                    
+                    if dst_idx < atlas_data.len() && src_idx < bitmap.len() {
+                        atlas_data[dst_idx] = bitmap[src_idx];
+                    }
+                }
+            }
+            
+            // Move to next cell
+            current_x += cell_width;
+            if current_x + cell_width > self.atlas_width {
+                current_x = 0;
+                current_y += cell_height;
+            }
+        }
+        
+        Ok(atlas_data)
+    }
+    
     /// Get glyph information for a character
     pub fn get_glyph(&self, ch: char) -> FontResult<&GlyphInfo> {
         self.glyph_cache

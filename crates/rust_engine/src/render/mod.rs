@@ -166,6 +166,21 @@ impl GraphicsEngine {
         })
     }
     
+    /// Initialize UI text rendering system
+    ///
+    /// Loads fonts, creates font atlas, uploads to GPU, and initializes text rendering pipeline.
+    /// Should be called once during application initialization if text rendering is needed.
+    pub fn initialize_ui_text_system(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Downcast to VulkanRenderer to call the initialization method
+        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
+            vulkan_backend.initialize_ui_text_system_internal()
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+            Ok(())
+        } else {
+            Err("Backend doesn't support UI text rendering".into())
+        }
+    }
+    
     /// Begin a new frame
     ///
     /// Prepares the renderer for a new frame of rendering. Currently this is
@@ -891,6 +906,57 @@ impl GraphicsEngine {
         self.submit_commands_and_present(window)?;
         
         log::trace!("Dynamic frame {} completed", self.frame_count);
+        Ok(())
+    }
+
+    /// Record UI overlay rendering commands (Chapter 11.4.4)
+    ///
+    /// **CRITICAL ARCHITECTURAL IMPLEMENTATION:**
+    /// This method implements the UI overlay rendering strategy described in Chapter 11.4.4:
+    /// "Overlays are generally rendered after the primary scene, with z-testing disabled to
+    /// ensure that they appear on top of the three-dimensional scene."
+    ///
+    /// This method MUST be called AFTER `record_dynamic_draws()` and BEFORE `end_dynamic_frame()`.
+    /// The render pass remains OPEN during this call - we switch pipeline state but stay within
+    /// the same render pass (single render pass approach per the book's guidance).
+    ///
+    /// # Implementation Strategy (Step 1: Proof of Concept)
+    /// For Step 1, this renders a simple semi-transparent red quad in the corner to validate:
+    /// 1. UI renders after 3D scene (command order)
+    /// 2. Z-testing is disabled (UI not occluded by 3D geometry)
+    /// 3. Alpha blending works (semi-transparency visible)
+    /// 4. Screen-space positioning works (fixed position regardless of camera)
+    ///
+    /// # Future Expansion
+    /// - Step 2: Proper orthographic projection for screen-space quads
+    /// - Step 3: Text rendering with screen-space mode
+    /// - Step 4: Button input handling
+    /// - Step 5: Full UI hierarchy system
+    ///
+    /// # Example Usage
+    /// ```rust
+    /// graphics_engine.begin_dynamic_frame(delta_time)?;
+    /// graphics_engine.record_dynamic_draws()?;      // 3D scene (depth test ON)
+    /// graphics_engine.record_ui_draws()?;           // UI overlays (depth test OFF) ← NEW
+    /// graphics_engine.end_dynamic_frame(&mut window)?; // Close render pass, submit
+    /// ```
+    pub fn record_ui_draws(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.record_ui_draws_with_text(None)
+    }
+    
+    /// Record UI overlay rendering commands with optional FPS text
+    ///
+    /// Extended version that allows passing FPS text for rendering in the UI overlay.
+    ///
+    /// # Arguments
+    /// * `fps_text` - Optional FPS text to display (e.g., "FPS: 60.2")
+    pub fn record_ui_draws_with_text(&mut self, fps_text: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        log::debug!("Recording UI overlay commands");
+        
+        // Delegate to backend for UI rendering
+        self.backend.record_ui_overlay_test(fps_text)?;
+        
+        log::trace!("UI overlay recording complete");
         Ok(())
     }
 

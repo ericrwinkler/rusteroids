@@ -2,19 +2,21 @@
 
 ## ⚠️ **CURRENT STATUS** 
 
-**Architecture State**: Core systems working, single-mesh dynamic system architecture finalized
-**Performance**: 60+ FPS single object, implementing high-performance single-mesh pools
-**Priority**: Implement Single-Mesh Pool System for optimal batching performance
+**Architecture State**: Core systems working, two-phase rendering architecture defined
+**Performance**: 60+ FPS with 3D rendering, UI/Overlay system designed
+**Priority**: 
+1. Implement Single-Mesh Pool System for optimal 3D batching
+2. Implement UI/Overlay System following Chapter 11.4 principles
 
 ## Overview
 
-Rusteroids is a modular ECS-based Vulkan rendering engine designed for 2D/3D games. The engine follows separation of concerns with distinct modules for ECS, rendering, input, audio, and asset management. The architecture supports both static scene objects and dynamic temporary objects through separate but integrated rendering pathways.
+Rusteroids is a modular ECS-based Vulkan rendering engine designed for 2D/3D games. The engine follows separation of concerns with distinct modules for ECS, rendering, input, audio, and asset management. The architecture uses a **two-phase rendering pipeline**: Phase 1 renders all 3D geometry (static and dynamic objects), then Phase 2 renders UI overlays on top (following Game Engine Architecture Chapter 11.4).
 
 ## Core Design Principles
 
 ### 1. **Separation of Concerns**
 - **ECS Layer**: Entity management, component storage, system execution
-- **Rendering Layer**: Dual-path rendering (static objects + dynamic objects)
+- **Rendering Layer**: Two-phase rendering (3D scene → UI overlays)
 - **Foundation Layer**: Math utilities, coordinate systems, transforms
 - **Platform Layer**: Window management, input handling, file I/O
 
@@ -38,13 +40,24 @@ rusteroids/
 │   ├── rust_engine/                 # Core engine library
 │   │   └── src/
 │   │       ├── ecs/                 # Entity-Component-System
-│   │       ├── render/              # Dual-path Vulkan rendering
-│   │       │   ├── dynamic/         # Single-mesh pool rendering system
+│   │       ├── render/              # Two-phase Vulkan rendering
+│   │       │   ├── dynamic/         # Dynamic 3D object pools
 │   │       │   │   ├── pool_manager.rs      # MeshPoolManager - coordinates multiple pools
 │   │       │   │   ├── object_manager.rs    # DynamicObjectManager - single mesh type
 │   │       │   │   ├── instance_renderer.rs # Batch rendering pipeline
 │   │       │   │   ├── resource_pool.rs     # Memory pools
 │   │       │   │   └── mod.rs              # Public interface
+│   │       │   ├── systems/         # Rendering subsystems
+│   │       │   │   ├── ui/          # UI/Overlay rendering (NEW - Chapter 11.4)
+│   │       │   │   │   ├── components.rs    # UI element components
+│   │       │   │   │   ├── layout.rs        # Screen-space layout
+│   │       │   │   │   ├── renderer.rs      # Orthographic overlay rendering
+│   │       │   │   │   ├── input.rs         # Mouse/keyboard input
+│   │       │   │   │   └── mod.rs
+│   │       │   │   └── text/        # Text/font rendering
+│   │       │   │       ├── font_atlas.rs    # Glyph atlas generation
+│   │       │   │       ├── text_layout.rs   # Text shaping & kerning
+│   │       │   │       └── sdf.rs           # Signed distance fields (future)
 │   │       │   ├── game_object.rs   # Static object system
 │   │       │   ├── shared_resources.rs     # Common rendering resources
 │   │       │   └── material/        # Material management
@@ -59,9 +72,15 @@ rusteroids/
 ├── resources/                       # Game assets
 │   ├── models/                      # 3D models (.obj)
 │   ├── shaders/                     # GLSL shaders
-│   └── textures/                    # Image assets
+│   │   ├── ui_solid.vert/.frag      # Solid color UI shader
+│   │   ├── ui_textured.vert/.frag   # Textured UI shader
+│   │   ├── ui_glyph.vert/.frag      # Glyph atlas text shader
+│   │   └── ui_sdf.vert/.frag        # SDF text shader (future)
+│   ├── textures/                    # Image assets
+│   └── fonts/                       # Font files and glyph atlases
 └── docs/                           # Documentation
     ├── ARCHITECTURE.md              # This document
+    ├── UI_SYSTEM_DESIGN.md          # UI system design document (NEW)
     ├── TODO.md                      # Implementation roadmap
     └── TROUBLESHOOTING.md           # Known issues and solutions
 ```
@@ -94,13 +113,30 @@ pub trait System {
 - **LightComponent**: Light properties (directional, point, spot)
 - **DynamicRenderComponent**: Handle to dynamic object in pool system
 - **RenderableComponent**: Mesh and material references for static objects
+- **UIElement** (NEW): Base UI layout properties (position, size, anchor, z-order)
+- **UIPanel** (NEW): Colored rectangle backgrounds for UI
+- **UIText** (NEW): Text labels with glyph atlas rendering
+- **UIButton** (NEW): Interactive buttons with hover/click states
 
 #### Working Systems
 - **LightingSystem**: Processes light entities, sends data to renderer
 - **DynamicRenderSystem**: Updates dynamic objects and manages lifecycle
 - **CoordinateValidation**: Ensures coordinate system consistency
+- **UIInputSystem** (NEW): Processes mouse/keyboard input for UI elements
+- **UILayoutSystem** (NEW): Calculates screen-space positions from anchors
+- **UIRenderSystem** (NEW): Generates overlay render commands after 3D scene
 
-### Dual-Path Rendering Architecture
+### Rendering Architecture
+
+The engine employs a **two-phase rendering pipeline** following Game Engine Architecture Chapter 11.4 principles:
+
+**Phase 1: 3D Scene Rendering** (depth testing enabled)
+- Static objects (GameObject System) - Permanent 3D scene geometry
+- Dynamic objects (Pool System) - Temporary 3D objects with lifecycle management
+
+**Phase 2: UI Overlay Rendering** (depth testing disabled)
+- Screen-space 2D elements rendered after 3D scene
+- Always visible on top of 3D geometry
 
 #### Static Object Rendering (GameObject System)
 
@@ -393,6 +429,174 @@ graphics_engine.record_dynamic_draws()?;
 graphics_engine.end_dynamic_frame()?;
 ```
 
+#### UI/Overlay Rendering System (NEW - Chapter 11.4)
+
+**Purpose**: Screen-space 2D overlays rendered after 3D scene
+
+**"Overlays are generally rendered after the primary scene, with z-testing disabled to ensure that they appear on top of the three-dimensional scene."** - Game Engine Architecture, Section 11.4.4
+
+```rust
+pub struct UIOverlayRenderer {
+    // Orthographic projection for screen space
+    projection: Mat4,
+    
+    // Shader pipelines (z-testing disabled)
+    solid_color_pipeline: Pipeline,    // Panels, backgrounds
+    textured_pipeline: Pipeline,       // Icons, sprites
+    glyph_atlas_pipeline: Pipeline,    // Text rendering
+    sdf_pipeline: Pipeline,            // Scalable text (future)
+    
+    // Font/texture resources
+    glyph_atlas: TextureHandle,        // Alpha channel glyph atlas
+    sdf_atlas: TextureHandle,          // Signed distance field atlas (future)
+    ui_texture_atlas: TextureHandle,   // UI icons/sprites
+    
+    // Batched render data
+    render_batches: Vec<UIRenderBatch>,
+}
+```
+
+**Characteristics**:
+- ✅ Renders **AFTER** 3D scene completion (critical!)
+- ✅ **Z-testing DISABLED** - overlays always visible
+- ✅ Orthographic projection for 2D screen space
+- ✅ Glyph atlas for text rendering (Chapter 11.4.4.1)
+- ✅ Batched rendering: <10 draw calls for typical UI
+- ✅ Gamma-aware color pipeline (Chapter 11.4.5)
+- ✅ Support for SDF text (future scalable high-quality text)
+
+**Rendering Sequence**:
+```rust
+fn render_frame() {
+    // 1. Render 3D scene (depth testing enabled)
+    render_static_objects();
+    render_dynamic_objects();
+    
+    // 2. Render UI overlays (depth testing disabled)
+    render_ui_overlays();  // <-- NEW: Always renders last
+}
+
+fn render_ui_overlays() {
+    // Sort UI elements by z-order (back-to-front)
+    sort_by_z_order();
+    
+    // Batch by shader type for minimal state changes
+    let batches = batch_ui_elements();
+    
+    // Render each batch with appropriate shader
+    for batch in batches {
+        match batch.shader_type {
+            SolidColor => render_solid_panels(batch),      // 1 draw call
+            Textured => render_textured_elements(batch),   // 1 draw call per atlas
+            GlyphAtlas => render_text(batch),              // 1 draw call
+            SDF => render_sdf_text(batch),                 // 1 draw call (future)
+        }
+    }
+}
+```
+
+**Text Rendering Pipeline** (Chapter 11.4.4.1):
+
+```rust
+// Glyph Atlas Approach (MVP)
+pub struct GlyphAtlas {
+    texture: TextureHandle,              // Single-channel alpha texture
+    glyph_metadata: HashMap<char, GlyphInfo>,
+    atlas_dimensions: (u32, u32),
+}
+
+pub struct GlyphInfo {
+    uv_min: Vec2,     // Atlas UV coordinates (normalized)
+    uv_max: Vec2,
+    bearing: Vec2,    // Offset from baseline
+    advance: f32,     // Horizontal advance for next char
+    size: Vec2,       // Glyph dimensions in pixels
+}
+
+// Text rendering workflow
+fn render_text(text: &str, position: Vec2, font_size: f32, color: Vec4) {
+    let shaped_glyphs = shape_text(text, font_size);  // Apply kerning, layout
+    let quads = generate_quad_geometry(shaped_glyphs);
+    batch_and_render(quads);  // Single instanced draw call
+}
+```
+
+**API Usage**:
+```rust
+// Create UI panel
+let panel = world.create_entity();
+world.add_component(panel, UIPanel {
+    element: UIElement {
+        position: (100.0, 50.0),      // Pixels from anchor
+        size: (300.0, 200.0),          // Width, height in pixels
+        anchor: Anchor::TopLeft,
+        z_order: 0,
+        visible: true,
+    },
+    color: Vec4::new(0.2, 0.2, 0.2, 0.9),  // Gamma-aware RGBA
+    border_width: 2.0,
+    border_color: Vec4::new(0.6, 0.6, 0.6, 1.0),
+});
+
+// Create text label
+let label = world.create_entity();
+world.add_component(label, UIText {
+    element: UIElement {
+        position: (10.0, 10.0),
+        anchor: Anchor::TopLeft,
+        z_order: 1,  // Above panel
+        ..Default::default()
+    },
+    text: "Score: 1000".to_string(),
+    font_size: 24.0,
+    color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+    h_align: HorizontalAlign::Left,
+    v_align: VerticalAlign::Top,
+});
+
+// Create button
+let button = world.create_entity();
+world.add_component(button, UIButton {
+    element: UIElement {
+        position: (0.0, -50.0),        // Offset from anchor
+        size: (200.0, 50.0),
+        anchor: Anchor::Center,        // Centered on screen
+        z_order: 2,
+        ..Default::default()
+    },
+    text: "Click Me".to_string(),
+    font_size: 20.0,
+    normal_color: Vec4::new(0.3, 0.3, 0.3, 0.9),
+    hover_color: Vec4::new(0.4, 0.4, 0.5, 1.0),
+    pressed_color: Vec4::new(0.5, 0.5, 0.6, 1.0),
+    on_click_id: Some(1),
+    ..Default::default()
+});
+
+// Process UI events
+for event in ui_system.poll_events() {
+    match event {
+        UIEvent::ButtonClicked { button_id: 1 } => {
+            println!("Button clicked!");
+        }
+        _ => {}
+    }
+}
+```
+
+**Performance Characteristics**:
+- Typical UI: <10 draw calls (panels + buttons + text)
+- Overhead: <3ms per frame for 50+ UI elements
+- Memory: <5MB for 100 UI elements
+- Zero depth buffer overhead (no z-testing)
+
+**Future Enhancements**:
+- Signed Distance Fields (SDF) for scalable text
+- FreeType integration for dynamic glyph generation
+- Multi-language support with proper text shaping
+- Animations and transitions
+- Advanced layout constraints
+
 ### Memory Management Strategy
 
 #### Static Objects (GameObject System)
@@ -415,6 +619,17 @@ Runtime: Handle-based allocation from pools
 Cleanup: Automatic return to pool on lifetime expiration
 ```
 
+#### UI/Overlay System (NEW)
+```rust
+// Memory allocation pattern
+Startup: Create glyph atlas and UI texture atlases
+    ↓
+Runtime: UI components stored in ECS (standard allocation)
+         Render batches built each frame (pre-allocated Vec reused)
+    ↓
+Rendering: Batched instance data (minimal GPU memory)
+```
+
 **Pool Configuration**:
 ```rust
 pub struct PoolConfiguration {
@@ -425,6 +640,17 @@ pub struct PoolConfiguration {
     // Calculated buffer sizes per pool
     instance_buffer_size: usize = max_dynamic_objects * size_of::<DynamicInstanceData>(),
     uniform_buffer_size: usize = max_dynamic_objects * MAX_UNIFORM_SIZE,
+}
+```
+
+**UI Configuration**:
+```rust
+pub struct UIConfiguration {
+    max_ui_elements: usize = 200,        // Concurrent UI elements
+    max_text_glyphs: usize = 2000,       // Glyph quads per frame
+    glyph_atlas_size: (u32, u32) = (1024, 1024),  // Atlas texture dimensions
+    sdf_atlas_size: (u32, u32) = (2048, 2048),    // SDF atlas (future)
+    ui_atlas_size: (u32, u32) = (2048, 2048),     // UI icons/sprites
 }
 ```
 
@@ -628,9 +854,9 @@ fn render_all_pools() -> VulkanResult<()> {
 - **Descriptor Sets**: Only when complex materials needed (PBR textures, etc.)
 - **Memory Efficiency**: No redundant uniform buffers for transform data
 
-### Coordinate System
+### Coordinate Systems
 
-#### World Space: Y-Up Right-Handed
+#### World Space: Y-Up Right-Handed (3D Scene)
 ```
 Y (up)
 |
@@ -640,15 +866,120 @@ Y (up)
 Z (toward viewer)
 ```
 
-#### Transformation Pipeline
+#### Screen Space: Top-Left Origin (UI/2D Overlays)
 ```
-Local → World → View → Vulkan Clip → NDC
-  ↓       ↓       ↓         ↓        ↓
-Model   World   View   Projection  Screen
-Matrix  Matrix  Matrix   Matrix    Coords
+(0,0) ────────────> X (right)
+  |
+  |
+  |
+  v
+  Y (down)
 ```
 
-**Mathematical Implementation**: Follows Johannes Unterguggenberger's academic approach for Vulkan coordinate transformation.
+**Source**: Game Engine Architecture, Section 11.1.4.5, page 664:
+> "Screen space is a two-dimensional coordinate system whose axes are measured in terms of screen pixels. The x-axis typically points to the right, with the origin at the top-left corner of the screen and y pointing down."
+
+**Screen Space to NDC Conversion (SOURCE OF TRUTH)**:
+```rust
+// Standard formula used by blue panel and all UI elements
+x_ndc = (x_screen / screen_width) * 2.0 - 1.0
+y_ndc = (y_screen / screen_height) * 2.0 - 1.0
+
+// Where:
+// - x_screen ∈ [0, screen_width], y_screen ∈ [0, screen_height]
+// - (0, 0) is top-left in screen space
+// - (-1, -1) is top-left in NDC (with positive viewport)
+// - (+1, +1) is bottom-right in NDC (with positive viewport)
+```
+
+**CRITICAL: Text Rendering Coordinate Transformation**
+
+Text uses `TextLayout` which outputs vertices in **font-space** (Y-up, OpenGL convention):
+- Origin at baseline
+- +X = right
+- +Y = up (ascenders go positive)
+
+**Transformation for 2D Screen-Space Text**:
+```rust
+// Step 1: Font-space to pixel offset (Y-up)
+let local_x = vertex.position.x * text_scale;  // Horizontal offset
+let local_y = vertex.position.y * text_scale;  // Vertical offset (positive = up)
+
+// Step 2: Convert to screen-space (Y-down)
+// CRITICAL: Font Y-up → Screen Y-down requires SUBTRACTION
+let screen_x = text_x_pixels + local_x;        // Add horizontal offset
+let screen_y = text_y_pixels - local_y;        // SUBTRACT vertical (flips Y axis)
+
+// Step 3: Convert to NDC using standard formula
+let ndc_x = (screen_x / screen_width) * 2.0 - 1.0;
+let ndc_y = (screen_y / screen_height) * 2.0 - 1.0;
+
+// UV coordinates: Use as-is from TextLayout (already correct)
+let uv = (vertex.uv.x, vertex.uv.y);  // NO FLIP NEEDED
+```
+
+**Why This Works**:
+- Font baseline at y=0, top of 'F' at y=+18 (font-space Y-up)
+- For text at screen position (10, 30):
+  - Baseline: screen_y = 30 - 0 = 30 pixels from top ✓
+  - Top of 'F': screen_y = 30 - 18 = 12 pixels from top ✓
+  - Text extends UPWARD from baseline in screen-space
+
+**Common Mistakes**:
+1. ❌ Adding `local_y` instead of subtracting → text upside-down
+2. ❌ Using different NDC formula → position mismatch with UI elements
+3. ❌ Flipping UV coordinates → garbled texture sampling
+
+#### Vulkan NDC (Normalized Device Coordinates)
+
+**With Standard Positive-Height Viewport** (our configuration):
+```
+(-1,+1) ──────────> (+1,+1)   ← Top edge
+   |                    |
+   |     (0, 0)         |      ← Center
+   |                    |
+   v                    v
+(-1,-1) ──────────> (+1,-1)   ← Bottom edge
+```
+
+**Key Points**:
+- X axis: -1 (left) to +1 (right)
+- Y axis: **+1 (top) to -1 (bottom)** ← Note: Y+ is UP in standard NDC, but our viewport maps it to screen top
+- Viewport configuration: `y: 0.0, height: positive` (standard Vulkan)
+- This means NDC Y-axis is **inverted** relative to screen space
+
+#### Transformation Pipeline
+```
+3D RENDERING:
+Local → World → View → Vulkan Clip → NDC → Screen
+  ↓       ↓       ↓         ↓        ↓       ↓
+Model   World   View   Projection  Viewport Screen
+Matrix  Matrix  Matrix   Matrix    Transform Coords
+
+UI RENDERING:
+Screen Space → NDC (direct conversion, no matrices)
+```
+
+#### Coordinate Conversion Formulas
+
+**Screen Space to Vulkan NDC** (for UI elements):
+```rust
+// X axis: straightforward mapping
+x_ndc = (x_screen / screen_width) * 2.0 - 1.0
+
+// Y axis: direct mapping (NO flip needed with positive viewport)
+y_ndc = (y_screen / screen_height) * 2.0 - 1.0
+
+// Where:
+// - x_screen ∈ [0, screen_width], y_screen ∈ [0, screen_height]
+// - (0, 0) is top-left in screen space
+// - (-1, -1) is top-left in NDC (with positive viewport)
+// - (+1, +1) is bottom-right in NDC (with positive viewport)
+```
+
+**Reference Implementation**: `crates/rust_engine/src/render/systems/ui/layout.rs::screen_to_ndc()`
+
+**Mathematical Implementation** (3D): Follows Johannes Unterguggenberger's academic approach for Vulkan coordinate transformation via the X-matrix that flips Y and Z axes.
 
 ### Material System
 

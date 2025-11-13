@@ -69,6 +69,22 @@ pub struct VulkanRenderer {
     
     // Dynamic object instanced rendering system
     instance_renderer: Option<crate::render::systems::dynamic::InstanceRenderer>,
+    
+    // UI overlay rendering (Step 1: Simple quad proof of concept)
+    ui_pipeline: Option<vk::Pipeline>,
+    ui_pipeline_layout: Option<vk::PipelineLayout>,
+    ui_vertex_buffer: Option<vk::Buffer>,
+    ui_vertex_buffer_memory: Option<vk::DeviceMemory>,
+    
+    // UI text rendering (Step 3: Screen-space text with glyph atlas)
+    ui_text_pipeline: Option<vk::Pipeline>,
+    ui_text_pipeline_layout: Option<vk::PipelineLayout>,
+    ui_text_descriptor_set_layout: Option<vk::DescriptorSetLayout>,
+    ui_text_descriptor_set: Option<vk::DescriptorSet>,
+    font_atlas: Option<crate::render::systems::text::FontAtlas>,
+    ui_text_vertex_buffer: Option<vk::Buffer>,
+    ui_text_vertex_buffer_memory: Option<vk::DeviceMemory>,
+    ui_text_vertex_buffer_size: vk::DeviceSize,
 }
 
 /// State for recording multiple objects in a single command buffer
@@ -133,6 +149,18 @@ impl VulkanRenderer {
             object_resources: HashMap::new(),
             next_object_id: 1,
             instance_renderer: None, // Will be initialized when dynamic system is enabled
+            ui_pipeline: None, // Lazy initialization on first UI render
+            ui_pipeline_layout: None,
+            ui_vertex_buffer: None,
+            ui_vertex_buffer_memory: None,
+            ui_text_pipeline: None, // Lazy initialization on first text render
+            ui_text_pipeline_layout: None,
+            ui_text_descriptor_set_layout: None,
+            ui_text_descriptor_set: None,
+            font_atlas: None,
+            ui_text_vertex_buffer: None,
+            ui_text_vertex_buffer_memory: None,
+            ui_text_vertex_buffer_size: 0,
         })
     }
     
@@ -935,6 +963,113 @@ impl crate::render::RenderBackend for VulkanRenderer {
         
         Ok(())
     }
+    
+    fn record_ui_overlay_test(&mut self, fps_text: Option<&str>) -> crate::render::BackendResult<()> {
+        // Ensure UI pipeline is initialized (lazy init)
+        self.ensure_ui_pipeline_initialized()
+            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+        
+        // If we have text to render, ensure text pipeline is initialized
+        if fps_text.is_some() {
+            self.ensure_ui_text_pipeline_initialized()
+                .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+        }
+        
+        // Validate we have an active recording session
+        let recording_state = self.command_recording_state.as_ref()
+            .ok_or_else(|| crate::render::RenderError::BackendError(
+                "No active command recording. UI rendering must happen during dynamic frame.".to_string()
+            ))?;
+        
+        let command_buffer = recording_state.command_buffer;
+        let device = self.context.raw_device();
+        
+        // Get UI rendering resources
+        let pipeline = self.ui_pipeline.unwrap();
+        let pipeline_layout = self.ui_pipeline_layout.unwrap();
+        let vertex_buffer = self.ui_vertex_buffer.unwrap();
+        
+        unsafe {
+            // Bind UI pipeline
+            device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
+            
+            // Bind vertex buffer
+            device.cmd_bind_vertex_buffers(command_buffer, 0, &[vertex_buffer], &[0]);
+            
+            // STEP 2: Push blue color constant (RGBA: semi-transparent blue)
+            let color = [0.0f32, 0.0f32, 1.0f32, 0.7f32]; // Blue with 70% alpha
+            let color_bytes = std::slice::from_raw_parts(
+                color.as_ptr() as *const u8,
+                std::mem::size_of_val(&color),
+            );
+            device.cmd_push_constants(
+                command_buffer,
+                pipeline_layout,
+                vk::ShaderStageFlags::FRAGMENT,
+                0,
+                color_bytes,
+            );
+            
+            // Draw the quad (6 vertices = 2 triangles)
+            device.cmd_draw(command_buffer, 6, 1, 0, 0);
+        }
+        
+        // STEP 3: Render FPS text using screen-space projection mode
+        if let Some(text) = fps_text {
+            // Generate text vertices from font atlas
+            if let Some(ref font_atlas) = self.font_atlas {
+                // Use TextLayout to generate vertices for the FPS text
+                let text_layout = crate::render::systems::text::TextLayout::new(font_atlas.clone());
+                let (text_vertices, text_indices) = text_layout.layout_text(text);
+                
+                if !text_vertices.is_empty() && !text_indices.is_empty() {
+                    // Get screen dimensions for NDC conversion
+                    let (screen_width, screen_height) = self.get_swapchain_extent();
+                    
+                    // Text position in screen space (top-left corner)
+                    let text_x_pixels = 10.0f32;
+                    let text_y_pixels = 30.0f32;  // Offset from top to avoid window chrome
+                    let text_scale = 1.0f32;      // 1:1 scale = 24px font height
+                    
+                    // Convert indexed geometry to triangle list with proper vertex order
+                    let mut screen_vertices: Vec<f32> = Vec::with_capacity(text_indices.len() * 4);
+                    
+                    for &index in &text_indices {
+                        let vertex = &text_vertices[index as usize];
+                        
+                        // Font-space coordinates (Y-up, origin at baseline)
+                        let local_x = vertex.position.x * text_scale;
+                        let local_y = vertex.position.y * text_scale;
+                        
+                        // Convert to screen-space (Y-down from top-left, per ARCHITECTURE.md)
+                        // Origin at top-left, Y+ goes down, measured in pixels
+                        let screen_x = text_x_pixels + local_x;
+                        let screen_y = text_y_pixels - local_y; // Font Y-up → Screen Y-down
+                        
+                        // Convert to NDC using SAME formula as blue panel (SOURCE OF TRUTH)
+                        // x_ndc = (x_screen / screen_width) * 2.0 - 1.0
+                        // y_ndc = (y_screen / screen_height) * 2.0 - 1.0
+                        let ndc_x = (screen_x / screen_width as f32) * 2.0 - 1.0;
+                        let ndc_y = (screen_y / screen_height as f32) * 2.0 - 1.0;
+                        
+                        // Pack as [pos_x, pos_y, uv_x, uv_y]
+                        screen_vertices.push(ndc_x);
+                        screen_vertices.push(ndc_y);
+                        screen_vertices.push(vertex.uv.x);
+                        screen_vertices.push(vertex.uv.y);
+                    }
+                    
+                    // Upload vertices and render text
+                    self.render_text_vertices(command_buffer, &screen_vertices)
+                        .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+                }
+            } else {
+                log::warn!("Font atlas not initialized, cannot render text");
+            }
+        }
+        
+        Ok(())
+    }
 }
 
 impl VulkanRenderer {
@@ -1580,4 +1715,804 @@ impl VulkanRenderer {
             })
         }
     }
+    
+    /// Initialize UI pipeline and resources (lazy initialization)
+    /// Creates a simple pipeline for rendering UI overlays with:
+    /// - Depth test DISABLED
+    /// - Alpha blending ENABLED  
+    /// - Push constants for color
+    fn ensure_ui_pipeline_initialized(&mut self) -> VulkanResult<()> {
+        // Already initialized?
+        if self.ui_pipeline.is_some() {
+            return Ok(());
+        }
+        
+        log::info!("Initializing UI overlay pipeline...");
+        
+        let device = self.context.raw_device();
+        
+        // Load shader SPIR-V files from disk
+        let vert_code = std::fs::read("target/shaders/ui_simple_vert.spv")
+            .map_err(|e| VulkanError::InvalidOperation {
+                reason: format!("Failed to load UI vertex shader: {}", e)
+            })?;
+        let frag_code = std::fs::read("target/shaders/ui_simple_frag.spv")
+            .map_err(|e| VulkanError::InvalidOperation {
+                reason: format!("Failed to load UI fragment shader: {}", e)
+            })?;
+        
+        // Create shader modules
+        let vert_module = unsafe {
+            let create_info = vk::ShaderModuleCreateInfo::builder()
+                .code(std::slice::from_raw_parts(
+                    vert_code.as_ptr() as *const u32,
+                    vert_code.len() / 4,
+                ));
+            device.create_shader_module(&create_info, None)
+                .map_err(VulkanError::Api)?
+        };
+        
+        let frag_module = unsafe {
+            let create_info = vk::ShaderModuleCreateInfo::builder()
+                .code(std::slice::from_raw_parts(
+                    frag_code.as_ptr() as *const u32,
+                    frag_code.len() / 4,
+                ));
+            device.create_shader_module(&create_info, None)
+                .map_err(VulkanError::Api)?
+        };
+        
+        let entry_point = std::ffi::CString::new("main").unwrap();
+        let shader_stages = [
+            vk::PipelineShaderStageCreateInfo::builder()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(vert_module)
+                .name(&entry_point)
+                .build(),
+            vk::PipelineShaderStageCreateInfo::builder()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(frag_module)
+                .name(&entry_point)
+                .build(),
+        ];
+        
+        // Vertex input: vec2 position
+        let binding_description = vk::VertexInputBindingDescription::builder()
+            .binding(0)
+            .stride(8) // 2 * f32
+            .input_rate(vk::VertexInputRate::VERTEX)
+            .build();
+        
+        let attribute_description = vk::VertexInputAttributeDescription::builder()
+            .location(0)
+            .binding(0)
+            .format(vk::Format::R32G32_SFLOAT)
+            .offset(0)
+            .build();
+        
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder()
+            .vertex_binding_descriptions(std::slice::from_ref(&binding_description))
+            .vertex_attribute_descriptions(std::slice::from_ref(&attribute_description));
+        
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::builder()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false);
+        
+        // Viewport and scissor (dynamic)
+        let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
+            .viewport_count(1)
+            .scissor_count(1);
+        
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
+            .dynamic_states(&dynamic_states);
+        
+        // Rasterization
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo::builder()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0)
+            .cull_mode(vk::CullModeFlags::NONE) // UI rendered from both sides
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE);
+        
+        // Multisampling (disabled for UI)
+        let multisampling = vk::PipelineMultisampleStateCreateInfo::builder()
+            .sample_shading_enable(false)
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        
+        // Depth/stencil: DISABLED for UI overlays
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::builder()
+            .depth_test_enable(false)  // UI always on top
+            .depth_write_enable(false) // Don't write to depth buffer
+            .depth_compare_op(vk::CompareOp::ALWAYS);
+        
+        // Color blending: ENABLED with alpha
+        let color_blend_attachment = vk::PipelineColorBlendAttachmentState::builder()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD)
+            .build();
+        
+        let color_blend_attachments = [color_blend_attachment];
+        let color_blending = vk::PipelineColorBlendStateCreateInfo::builder()
+            .logic_op_enable(false)
+            .attachments(&color_blend_attachments);
+        
+        // Pipeline layout with push constants for color
+        let push_constant_range = vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::FRAGMENT,
+            offset: 0,
+            size: 16, // vec4 color = 4 * f32 = 16 bytes
+        };
+        
+        let layout_info = vk::PipelineLayoutCreateInfo::builder()
+            .push_constant_ranges(std::slice::from_ref(&push_constant_range));
+        
+        let layout = unsafe {
+            device.create_pipeline_layout(&layout_info, None)
+                .map_err(VulkanError::Api)?
+        };
+        
+        // Create graphics pipeline
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
+            .stages(&shader_stages)
+            .vertex_input_state(&vertex_input_info)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blending)
+            .dynamic_state(&dynamic_state)
+            .layout(layout)
+            .render_pass(self.render_pass.handle())
+            .subpass(0);
+        
+        let pipeline = unsafe {
+            device.create_graphics_pipelines(
+                vk::PipelineCache::null(),
+                &[pipeline_info.build()],
+                None
+            ).map_err(|(_, err)| VulkanError::Api(err))?[0]
+        };
+        
+        // Clean up shader modules
+        unsafe {
+            device.destroy_shader_module(vert_module, None);
+            device.destroy_shader_module(frag_module, None);
+        }
+        
+        // Create vertex buffer with a quad in screen-space
+        // STEP 2: Using pixel coordinates converted to NDC
+        // Get screen dimensions
+        let (screen_width, screen_height) = self.get_swapchain_extent();
+        
+        // TODO: KNOWN ISSUE - Aspect ratio on resize
+        // The vertex buffer is created once at initialization. When window resizes,
+        // the quad becomes distorted (square -> rectangle) because NDC coordinates
+        // are based on initial screen size.
+        // 
+        // Solutions:
+        // 1. Recreate vertex buffer on resize (detect swapchain recreation)
+        // 2. Use orthographic projection matrix in uniform buffer (proper solution)
+        // 3. Use screen dimensions in push constants and convert in vertex shader
+        //
+        // For Step 2 MVP, this is acceptable. Will be fixed in Step 3+ with proper UI system.
+        
+        // Define quad in SCREEN SPACE: 50x50 pixels at bottom-left (10 pixels from edges)
+        // 
+        // COORDINATE SYSTEM (per ARCHITECTURE.md "Coordinate Systems" section):
+        // - SCREEN SPACE: Origin at TOP-LEFT (0,0), Y+ goes DOWN, measured in pixels
+        // - VULKAN NDC: With positive-height viewport, (-1,-1) is TOP-LEFT, (+1,+1) is BOTTOM-RIGHT
+        //
+        // For a bottom-left panel (10 pixels from left edge, 10 pixels from bottom edge):
+        let x_pixels = 10.0f32;
+        let y_pixels = screen_height as f32 - 50.0f32 - 10.0f32;  // Near bottom in screen space
+        let width_pixels = 50.0f32;
+        let height_pixels = 50.0f32;
+        
+        // Convert to NDC using standard formula (per ui/layout.rs::screen_to_ndc)
+        // This is the SOURCE OF TRUTH conversion:
+        // x_ndc = (x_screen / screen_width) * 2.0 - 1.0
+        // y_ndc = (y_screen / screen_height) * 2.0 - 1.0
+        //
+        // With positive viewport: screen (0,0) → NDC (-1,-1) [both top-left]
+        let x_ndc = (x_pixels / screen_width as f32) * 2.0 - 1.0;
+        let x2_ndc = ((x_pixels + width_pixels) / screen_width as f32) * 2.0 - 1.0;
+        
+        let y_ndc = (y_pixels / screen_height as f32) * 2.0 - 1.0;  // Top edge of panel
+        let y2_ndc = ((y_pixels + height_pixels) / screen_height as f32) * 2.0 - 1.0;  // Bottom edge
+        
+        #[repr(C)]
+        struct Vertex {
+            pos: [f32; 2],
+        }
+        
+        let vertices = [
+            // Triangle 1
+            Vertex { pos: [x_ndc, y_ndc] },      // Bottom-left
+            Vertex { pos: [x2_ndc, y_ndc] },     // Bottom-right
+            Vertex { pos: [x_ndc, y2_ndc] },     // Top-left
+            // Triangle 2
+            Vertex { pos: [x_ndc, y2_ndc] },     // Top-left
+            Vertex { pos: [x2_ndc, y_ndc] },     // Bottom-right
+            Vertex { pos: [x2_ndc, y2_ndc] },    // Top-right
+        ];
+        
+        let buffer_size = (std::mem::size_of::<Vertex>() * vertices.len()) as vk::DeviceSize;
+        
+        // Create vertex buffer
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size(buffer_size)
+            .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        
+        let vertex_buffer = unsafe {
+            device.create_buffer(&buffer_info, None)
+                .map_err(VulkanError::Api)?
+        };
+        
+        let mem_requirements = unsafe { device.get_buffer_memory_requirements(vertex_buffer) };
+        
+        // Find memory type
+        let memory_properties = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let mem_props = unsafe {
+            self.context.instance().get_physical_device_memory_properties(self.context.physical_device().device)
+        };
+        
+        let mut memory_type_index = None;
+        for i in 0..mem_props.memory_type_count {
+            if (mem_requirements.memory_type_bits & (1 << i)) != 0 
+                && (mem_props.memory_types[i as usize].property_flags & memory_properties) == memory_properties 
+            {
+                memory_type_index = Some(i);
+                break;
+            }
+        }
+        
+        let memory_type_index = memory_type_index.ok_or(VulkanError::NoSuitableMemoryType)?;
+        
+        let alloc_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(mem_requirements.size)
+            .memory_type_index(memory_type_index);
+        
+        let vertex_buffer_memory = unsafe {
+            device.allocate_memory(&alloc_info, None)
+                .map_err(VulkanError::Api)?
+        };
+        
+        unsafe {
+            device.bind_buffer_memory(vertex_buffer, vertex_buffer_memory, 0)
+                .map_err(VulkanError::Api)?;
+            
+            // Copy vertex data
+            let data_ptr = device.map_memory(
+                vertex_buffer_memory,
+                0,
+                buffer_size,
+                vk::MemoryMapFlags::empty(),
+            ).map_err(VulkanError::Api)?;
+            
+            std::ptr::copy_nonoverlapping(
+                vertices.as_ptr(),
+                data_ptr as *mut Vertex,
+                vertices.len(),
+            );
+            
+            device.unmap_memory(vertex_buffer_memory);
+        }
+        
+        // Store in renderer
+        self.ui_pipeline = Some(pipeline);
+        self.ui_pipeline_layout = Some(layout);
+        self.ui_vertex_buffer = Some(vertex_buffer);
+        self.ui_vertex_buffer_memory = Some(vertex_buffer_memory);
+        
+        log::debug!("UI overlay pipeline initialized");
+        
+        Ok(())
+    }
+    
+    /// Initialize the UI text pipeline for screen-space text rendering
+    /// 
+    /// Similar to ensure_ui_pipeline_initialized() but with texture sampling support
+    /// for font atlas rendering. Vertex format: [x, y, u, v] (4 floats per vertex).
+    fn ensure_ui_text_pipeline_initialized(&mut self) -> VulkanResult<()> {
+        // Already initialized?
+        if self.ui_text_pipeline.is_some() {
+            return Ok(());
+        }
+        
+        log::info!("Initializing UI text pipeline...");
+        
+        let device = self.context.raw_device();
+        
+        // Step 1: Create descriptor set layout for font atlas texture
+        let sampler_binding = vk::DescriptorSetLayoutBinding::builder()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+            .build();
+        
+        let descriptor_set_layout_info = vk::DescriptorSetLayoutCreateInfo::builder()
+            .bindings(std::slice::from_ref(&sampler_binding));
+        
+        let descriptor_set_layout = unsafe {
+            device.create_descriptor_set_layout(&descriptor_set_layout_info, None)
+                .map_err(VulkanError::Api)?
+        };
+        
+        // Step 2: Load text shaders
+        let vert_code = std::fs::read("target/shaders/ui_text_vert.spv")
+            .map_err(|e| VulkanError::InvalidOperation {
+                reason: format!("Failed to load UI text vertex shader: {}", e)
+            })?;
+        let frag_code = std::fs::read("target/shaders/ui_text_frag.spv")
+            .map_err(|e| VulkanError::InvalidOperation {
+                reason: format!("Failed to load UI text fragment shader: {}", e)
+            })?;
+        
+        // Create shader modules
+        let vert_module = unsafe {
+            let create_info = vk::ShaderModuleCreateInfo::builder()
+                .code(std::slice::from_raw_parts(
+                    vert_code.as_ptr() as *const u32,
+                    vert_code.len() / 4,
+                ));
+            device.create_shader_module(&create_info, None)
+                .map_err(VulkanError::Api)?
+        };
+        
+        let frag_module = unsafe {
+            let create_info = vk::ShaderModuleCreateInfo::builder()
+                .code(std::slice::from_raw_parts(
+                    frag_code.as_ptr() as *const u32,
+                    frag_code.len() / 4,
+                ));
+            device.create_shader_module(&create_info, None)
+                .map_err(VulkanError::Api)?
+        };
+        
+        let entry_point = std::ffi::CString::new("main").unwrap();
+        let shader_stages = [
+            vk::PipelineShaderStageCreateInfo::builder()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(vert_module)
+                .name(&entry_point)
+                .build(),
+            vk::PipelineShaderStageCreateInfo::builder()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(frag_module)
+                .name(&entry_point)
+                .build(),
+        ];
+        
+        // Step 3: Vertex input: vec2 position + vec2 texCoord (16 bytes stride)
+        let binding_description = vk::VertexInputBindingDescription::builder()
+            .binding(0)
+            .stride(16) // 4 * f32 (x, y, u, v)
+            .input_rate(vk::VertexInputRate::VERTEX)
+            .build();
+        
+        let attribute_descriptions = [
+            // Position attribute (location 0)
+            vk::VertexInputAttributeDescription::builder()
+                .location(0)
+                .binding(0)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(0)
+                .build(),
+            // TexCoord attribute (location 1)
+            vk::VertexInputAttributeDescription::builder()
+                .location(1)
+                .binding(0)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(8) // After position (2 * 4 bytes)
+                .build(),
+        ];
+        
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder()
+            .vertex_binding_descriptions(std::slice::from_ref(&binding_description))
+            .vertex_attribute_descriptions(&attribute_descriptions);
+        
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::builder()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false);
+        
+        // Viewport and scissor (dynamic)
+        let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
+            .viewport_count(1)
+            .scissor_count(1);
+        
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
+            .dynamic_states(&dynamic_states);
+        
+        // Rasterization
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo::builder()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE);
+        
+        // Multisampling (disabled)
+        let multisampling = vk::PipelineMultisampleStateCreateInfo::builder()
+            .sample_shading_enable(false)
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        
+        // Depth/stencil: DISABLED for UI text
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::builder()
+            .depth_test_enable(false)
+            .depth_write_enable(false)
+            .depth_compare_op(vk::CompareOp::ALWAYS);
+        
+        // Color blending: ENABLED with alpha (for text transparency)
+        let color_blend_attachment = vk::PipelineColorBlendAttachmentState::builder()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD)
+            .build();
+        
+        let color_blend_attachments = [color_blend_attachment];
+        let color_blending = vk::PipelineColorBlendStateCreateInfo::builder()
+            .logic_op_enable(false)
+            .attachments(&color_blend_attachments);
+        
+        // Step 4: Pipeline layout with descriptor set and push constants
+        let push_constant_range = vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::FRAGMENT,
+            offset: 0,
+            size: 16, // vec4 textColor = 4 * f32 = 16 bytes
+        };
+        
+        let descriptor_set_layouts = [descriptor_set_layout];
+        let layout_info = vk::PipelineLayoutCreateInfo::builder()
+            .set_layouts(&descriptor_set_layouts)
+            .push_constant_ranges(std::slice::from_ref(&push_constant_range));
+        
+        let layout = unsafe {
+            device.create_pipeline_layout(&layout_info, None)
+                .map_err(VulkanError::Api)?
+        };
+        
+        // Create graphics pipeline
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
+            .stages(&shader_stages)
+            .vertex_input_state(&vertex_input_info)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blending)
+            .dynamic_state(&dynamic_state)
+            .layout(layout)
+            .render_pass(self.render_pass.handle())
+            .subpass(0);
+        
+        let pipeline = unsafe {
+            device.create_graphics_pipelines(
+                vk::PipelineCache::null(),
+                &[pipeline_info.build()],
+                None
+            ).map_err(|(_, err)| VulkanError::Api(err))?[0]
+        };
+        
+        // Clean up shader modules
+        unsafe {
+            device.destroy_shader_module(vert_module, None);
+            device.destroy_shader_module(frag_module, None);
+        }
+        
+        // Store resources
+        self.ui_text_pipeline = Some(pipeline);
+        self.ui_text_pipeline_layout = Some(layout);
+        self.ui_text_descriptor_set_layout = Some(descriptor_set_layout);
+        
+        log::info!("UI text pipeline initialized successfully");
+        
+        Ok(())
+    }
+    
+    /// Public API to initialize UI text rendering system
+    /// 
+    /// Should be called once during initialization. Loads font, rasterizes glyphs,
+    /// uploads atlas to GPU, and creates all necessary pipelines and descriptor sets.
+    /// 
+    /// This is the internal implementation that doesn't require GraphicsEngine reference.
+    pub fn initialize_ui_text_system_internal(&mut self) -> VulkanResult<()> {
+        // Initialize text pipeline
+        self.ensure_ui_text_pipeline_initialized()?;
+        
+        // Initialize font atlas and upload to GPU (self-contained)
+        self.ensure_font_atlas_initialized_internal()?;
+        
+        log::info!("UI text rendering system initialized successfully");
+        Ok(())
+    }
+    
+    /// Initialize font atlas for text rendering (Step 3) - Internal version
+    /// 
+    /// Loads font, rasterizes glyphs, uploads atlas texture to GPU, and creates descriptor set.
+    /// This version is self-contained and doesn't require GraphicsEngine.
+    fn ensure_font_atlas_initialized_internal(&mut self) -> VulkanResult<()> {
+        if self.font_atlas.is_some() && self.ui_text_descriptor_set.is_some() {
+            return Ok(());
+        }
+        
+        log::info!("Initializing font atlas for UI text rendering...");
+        
+        // Load font from resources
+        let font_path = "resources/fonts/default.ttf";
+        let font_data = std::fs::read(font_path)
+            .map_err(|e| VulkanError::InitializationFailed(format!("Failed to load font: {}", e)))?;
+        
+        // Create font atlas
+        let mut font_atlas = crate::render::systems::text::FontAtlas::new(&font_data, 24.0)
+            .map_err(|e| VulkanError::InitializationFailed(format!("Failed to create font atlas: {}", e)))?;
+        
+        // Rasterize ASCII glyphs
+        font_atlas.rasterize_glyphs()
+            .map_err(|e| VulkanError::InitializationFailed(format!("Failed to rasterize glyphs: {}", e)))?;
+        
+        // Upload font atlas to GPU directly using our internal upload method
+        let image_data = font_atlas.get_atlas_image_data()
+            .map_err(|e| VulkanError::InitializationFailed(format!("Failed to get atlas image data: {}", e)))?;
+        
+        let texture_handle = self.upload_texture_from_image_data(
+            image_data,
+            crate::render::resources::materials::TextureType::BaseColor,
+        ).map_err(|e| VulkanError::InitializationFailed(format!("Failed to upload font atlas: {}", e)))?;
+        
+        log::info!("Font atlas uploaded to GPU: {:?}", texture_handle);
+        
+        // Store the texture handle in the font atlas
+        font_atlas.set_texture_handle(texture_handle);
+        
+        self.font_atlas = Some(font_atlas);
+        
+        // Create descriptor set for font atlas texture
+        self.create_text_descriptor_set(texture_handle)?;
+        
+        log::info!("Font atlas initialized successfully");
+        Ok(())
+    }
+    
+    /// Create descriptor set binding the font atlas texture
+    fn create_text_descriptor_set(&mut self, texture_handle: crate::render::resources::materials::TextureHandle) -> VulkanResult<()> {
+        let device = self.context.raw_device();
+        
+        // Get descriptor set layout
+        let descriptor_set_layout = self.ui_text_descriptor_set_layout
+            .ok_or_else(|| VulkanError::InitializationFailed("Text descriptor set layout not initialized".to_string()))?;
+        
+        // Allocate descriptor set from pool
+        let layouts = [descriptor_set_layout];
+        let alloc_info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(self.get_descriptor_pool())
+            .set_layouts(&layouts);
+        
+        let descriptor_sets = unsafe {
+            device.allocate_descriptor_sets(&alloc_info)
+                .map_err(VulkanError::Api)?
+        };
+        
+        let descriptor_set = descriptor_sets[0];
+        
+        // Get texture from resource manager
+        let texture = self.resource_manager.get_loaded_texture(texture_handle.0 as usize)
+            .ok_or_else(|| VulkanError::InitializationFailed(format!("Font atlas texture {:?} not found", texture_handle)))?;
+        
+        // Update descriptor set with font atlas texture
+        let image_info = vk::DescriptorImageInfo::builder()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(texture.image_view())
+            .sampler(texture.sampler())
+            .build();
+        
+        let descriptor_write = vk::WriteDescriptorSet::builder()
+            .dst_set(descriptor_set)
+            .dst_binding(0)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(std::slice::from_ref(&image_info))
+            .build();
+        
+        unsafe {
+            device.update_descriptor_sets(&[descriptor_write], &[]);
+        }
+        
+        self.ui_text_descriptor_set = Some(descriptor_set);
+        
+        log::info!("Text descriptor set created with font atlas texture");
+        Ok(())
+    }
+    
+    /// Render text vertices using the text pipeline
+    /// 
+    /// Creates/updates dynamic vertex buffer and records draw commands
+    fn render_text_vertices(&mut self, command_buffer: vk::CommandBuffer, vertices: &[f32]) -> VulkanResult<()> {
+        if vertices.is_empty() {
+            return Ok(());
+        }
+        
+        let device = self.context.raw_device();
+        let buffer_size = (vertices.len() * std::mem::size_of::<f32>()) as vk::DeviceSize;
+        
+        // Create or resize vertex buffer if needed
+        if self.ui_text_vertex_buffer.is_none() || self.ui_text_vertex_buffer_size < buffer_size {
+            // Clean up old buffer if exists
+            if let Some(old_buffer) = self.ui_text_vertex_buffer.take() {
+                unsafe {
+                    device.destroy_buffer(old_buffer, None);
+                }
+            }
+            if let Some(old_memory) = self.ui_text_vertex_buffer_memory.take() {
+                unsafe {
+                    device.free_memory(old_memory, None);
+                }
+            }
+            
+            // Create new buffer (allocate 2x for headroom)
+            let alloc_size = buffer_size * 2;
+            
+            let buffer_info = vk::BufferCreateInfo::builder()
+                .size(alloc_size)
+                .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            
+            let buffer = unsafe {
+                device.create_buffer(&buffer_info, None)
+                    .map_err(VulkanError::Api)?
+            };
+            
+            let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+            
+            // Find HOST_VISIBLE | HOST_COHERENT memory
+            let memory_properties = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+            let mem_props = unsafe {
+                self.context.instance().get_physical_device_memory_properties(self.context.physical_device().device)
+            };
+            
+            let mut memory_type_index = None;
+            for i in 0..mem_props.memory_type_count {
+                if (mem_requirements.memory_type_bits & (1 << i)) != 0 
+                    && (mem_props.memory_types[i as usize].property_flags & memory_properties) == memory_properties 
+                {
+                    memory_type_index = Some(i);
+                    break;
+                }
+            }
+            
+            let memory_type_index = memory_type_index.ok_or(VulkanError::NoSuitableMemoryType)?;
+            
+            let alloc_info = vk::MemoryAllocateInfo::builder()
+                .allocation_size(mem_requirements.size)
+                .memory_type_index(memory_type_index);
+            
+            let memory = unsafe {
+                device.allocate_memory(&alloc_info, None)
+                    .map_err(VulkanError::Api)?
+            };
+            
+            unsafe {
+                device.bind_buffer_memory(buffer, memory, 0)
+                    .map_err(VulkanError::Api)?;
+            }
+            
+            self.ui_text_vertex_buffer = Some(buffer);
+            self.ui_text_vertex_buffer_memory = Some(memory);
+            self.ui_text_vertex_buffer_size = alloc_size;
+            
+            log::debug!("Created text vertex buffer: {} bytes", alloc_size);
+        }
+        
+        // Upload vertex data
+        let buffer = self.ui_text_vertex_buffer.unwrap();
+        let memory = self.ui_text_vertex_buffer_memory.unwrap();
+        
+        unsafe {
+            let data_ptr = device.map_memory(memory, 0, buffer_size, vk::MemoryMapFlags::empty())
+                .map_err(VulkanError::Api)?;
+            
+            std::ptr::copy_nonoverlapping(
+                vertices.as_ptr(),
+                data_ptr as *mut f32,
+                vertices.len(),
+            );
+            
+            device.unmap_memory(memory);
+        }
+        
+        // Get text rendering resources
+        let pipeline = self.ui_text_pipeline
+            .ok_or_else(|| VulkanError::InitializationFailed("Text pipeline not initialized".to_string()))?;
+        let pipeline_layout = self.ui_text_pipeline_layout
+            .ok_or_else(|| VulkanError::InitializationFailed("Text pipeline layout not initialized".to_string()))?;
+        let descriptor_set = self.ui_text_descriptor_set
+            .ok_or_else(|| VulkanError::InitializationFailed("Text descriptor set not initialized".to_string()))?;
+        
+        unsafe {
+            // Bind text pipeline
+            device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
+            
+            // Bind descriptor set (font atlas texture)
+            device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline_layout,
+                0, // Set 0
+                &[descriptor_set],
+                &[],
+            );
+            
+            // Push text color constant (white)
+            let text_color = [1.0f32, 1.0f32, 1.0f32, 1.0f32];
+            let color_bytes = std::slice::from_raw_parts(
+                text_color.as_ptr() as *const u8,
+                std::mem::size_of_val(&text_color),
+            );
+            device.cmd_push_constants(
+                command_buffer,
+                pipeline_layout,
+                vk::ShaderStageFlags::FRAGMENT,
+                0,
+                color_bytes,
+            );
+            
+            // Bind vertex buffer
+            device.cmd_bind_vertex_buffers(command_buffer, 0, &[buffer], &[0]);
+            
+            // Draw vertices (vertices array has 4 floats per vertex: x, y, u, v)
+            let vertex_count = (vertices.len() / 4) as u32;
+            device.cmd_draw(command_buffer, vertex_count, 1, 0, 0);
+        }
+        
+        Ok(())
+    }
 }
+
+// TODO: Proper cleanup - need to coordinate with other VulkanRenderer resource cleanup
+// For now, relying on OS cleanup on process exit
+/* 
+impl Drop for VulkanRenderer {
+    fn drop(&mut self) {
+        let device = self.context.raw_device();
+        
+        // Wait for device to be idle before destroying resources
+        unsafe {
+            let _ = device.device_wait_idle();
+        }
+        
+        unsafe {
+            // Clean up UI resources
+            if let Some(pipeline) = self.ui_pipeline.take() {
+                device.destroy_pipeline(pipeline, None);
+            }
+            if let Some(layout) = self.ui_pipeline_layout.take() {
+                device.destroy_pipeline_layout(layout, None);
+            }
+            if let Some(buffer) = self.ui_vertex_buffer.take() {
+                device.destroy_buffer(buffer, None);
+            }
+            if let Some(memory) = self.ui_vertex_buffer_memory.take() {
+                device.free_memory(memory, None);
+            }
+        }
+    }
+}
+*/

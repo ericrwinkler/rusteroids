@@ -141,6 +141,11 @@ pub struct DynamicTeapotApp {
     unlit_text_handle: Option<DynamicObjectHandle>,
     text_renderer: Option<TextRenderer>,
     text_material: Option<Material>,
+    
+    // FPS tracking for Step 3
+    fps_update_timer: Instant,
+    frame_count: u32,
+    current_fps: f32,
 }
 
 impl DynamicTeapotApp {
@@ -163,6 +168,11 @@ impl DynamicTeapotApp {
         let mut graphics_engine = GraphicsEngine::new_from_window(&mut window, &renderer_config)
             .expect("Failed to create graphics engine");
         log::info!("Graphics engine created successfully");
+        
+        // Initialize UI text rendering system
+        graphics_engine.initialize_ui_text_system()
+            .expect("Failed to initialize UI text system");
+        log::info!("UI text rendering system initialized");
         
         // Initialize dynamic object system with pool for 50 objects
         log::info!("Initializing dynamic object system...");
@@ -247,6 +257,11 @@ impl DynamicTeapotApp {
             unlit_text_handle: None,
             text_renderer: None,
             text_material: None,
+            
+            // FPS tracking
+            fps_update_timer: Instant::now(),
+            frame_count: 0,
+            current_fps: 60.0,
         }
     }
     
@@ -1279,6 +1294,16 @@ impl DynamicTeapotApp {
     
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let elapsed_seconds = self.start_time.elapsed().as_secs_f32();
+        
+        // Update FPS counter
+        self.frame_count += 1;
+        let fps_elapsed = self.fps_update_timer.elapsed();
+        if fps_elapsed.as_secs_f32() >= 0.5 {  // Update FPS every 0.5 seconds
+            self.current_fps = self.frame_count as f32 / fps_elapsed.as_secs_f32();
+            self.frame_count = 0;
+            self.fps_update_timer = Instant::now();
+        }
+        
         let delta_time = 0.016; // Approximate 60 FPS delta time
         
         // BEGIN DYNAMIC FRAME: Setup and lifecycle updates
@@ -1299,7 +1324,16 @@ impl DynamicTeapotApp {
         self.graphics_engine.record_dynamic_draws()?;
         log::debug!("Dynamic draw commands recorded successfully");
         
-        // END DYNAMIC FRAME: Submit and present
+        // RECORD UI DRAWS: Record UI overlays AFTER 3D scene (Chapter 11.4.4)
+        // Render pass stays OPEN - we switch pipeline state within same render pass
+        log::debug!("Recording UI overlay commands...");
+        
+        // Step 3: Display FPS text using screen-space projection mode
+        let fps_text = format!("FPS: {:.1}", self.current_fps);
+        self.graphics_engine.record_ui_draws_with_text(Some(&fps_text))?;
+        log::debug!("UI overlay commands recorded successfully");
+        
+        // END DYNAMIC FRAME: Close render pass, submit and present
         log::debug!("Ending dynamic frame...");
         self.graphics_engine.end_dynamic_frame(&mut self.window)?;
         log::debug!("Dynamic frame ended successfully");

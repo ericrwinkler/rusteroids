@@ -79,8 +79,6 @@ struct WorldTextInstance {
 pub struct WorldTextManager {
     /// Font atlas for text rendering
     font_atlas: FontAtlas,
-    /// Text layout engine
-    text_layout: TextLayout,
     /// Active text instances
     instances: HashMap<WorldTextHandle, WorldTextInstance>,
     /// Next available handle ID
@@ -93,11 +91,9 @@ impl WorldTextManager {
     /// # Arguments
     ///
     /// * `font_atlas` - Font atlas with rasterized glyphs
-    /// * `text_layout` - Text layout engine
-    pub fn new(font_atlas: FontAtlas, text_layout: TextLayout) -> Self {
+    pub fn new(font_atlas: FontAtlas) -> Self {
         Self {
             font_atlas,
-            text_layout,
             instances: HashMap::new(),
             next_handle: 1,
         }
@@ -135,7 +131,8 @@ impl WorldTextManager {
         _graphics_engine: &mut GraphicsEngine,
     ) -> Result<WorldTextHandle, String> {
         // Generate text mesh
-        let (text_vertices, text_indices) = self.text_layout.layout_text(text);
+        let text_layout = TextLayout::new(&self.font_atlas);
+        let (text_vertices, text_indices) = text_layout.layout_text(text);
         
         if text_vertices.is_empty() {
             return Err(format!("Failed to generate mesh for text '{}'", text));

@@ -19,9 +19,9 @@ pub struct TextVertex {
 }
 
 /// Text layout engine that converts strings to mesh geometry
-pub struct TextLayout {
+pub struct TextLayout<'a> {
     /// Font atlas for glyph lookup
-    font_atlas: FontAtlas,
+    font_atlas: &'a FontAtlas,
 }
 
 /// Bounding box for text layout
@@ -49,9 +49,9 @@ impl TextBounds {
     }
 }
 
-impl TextLayout {
-    /// Create a new text layout engine
-    pub fn new(font_atlas: FontAtlas) -> Self {
+impl<'a> TextLayout<'a> {
+    /// Create a new text layout engine with a reference to a font atlas
+    pub fn new(font_atlas: &'a FontAtlas) -> Self {
         Self { font_atlas }
     }
     

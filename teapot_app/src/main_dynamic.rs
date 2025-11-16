@@ -136,7 +136,6 @@ pub struct DynamicTeapotApp {
     
     // Text rendering test
     font_atlas: Option<FontAtlas>,
-    text_layout: Option<TextLayout>,
     text_test_handle: Option<DynamicObjectHandle>,
     unlit_text_handle: Option<DynamicObjectHandle>,
     text_renderer: Option<TextRenderer>,
@@ -294,7 +293,6 @@ impl EventHandler for HoverHandler {
             max_lights: 10,
             sunlight_entity: Some(sunlight_entity),
             font_atlas: None,
-            text_layout: None,
             text_test_handle: None,
             unlit_text_handle: None,
             text_renderer: None,
@@ -1062,9 +1060,6 @@ impl EventHandler for HoverHandler {
         let texture_handle = font_atlas.upload_to_gpu(&mut self.graphics_engine)?;
         log::info!("Font atlas uploaded successfully: {:?}", texture_handle);
         
-        // Create text layout engine
-        let text_layout = TextLayout::new(font_atlas.clone());
-        
         // Create text material - using lit text so it participates in scene lighting
         // This makes text behave like other world objects (monkeys, etc.)
         let bright_cyan = Vec3::new(0.0, 1.0, 1.0);
@@ -1076,7 +1071,6 @@ impl EventHandler for HoverHandler {
         
         // Store state
         self.font_atlas = Some(font_atlas);
-        self.text_layout = Some(text_layout);
         self.text_renderer = Some(text_renderer);
         self.text_material = Some(text_material.clone());
         
@@ -1086,7 +1080,8 @@ impl EventHandler for HoverHandler {
         log::info!("Creating static 3D text 'LIT TEXT'...");
         
         use rust_engine::render::systems::text::text_vertices_to_mesh;
-        let (test_vertices, test_indices) = self.text_layout.as_ref().unwrap().layout_text("HI SCOTT LIT TEXT");
+        let text_layout = TextLayout::new(self.font_atlas.as_ref().unwrap());
+        let (test_vertices, test_indices) = text_layout.layout_text("HI SCOTT LIT TEXT");
         let test_mesh = text_vertices_to_mesh(test_vertices, test_indices);
         
         let test_text_material = self.text_material.as_ref().unwrap().clone();
@@ -1114,7 +1109,8 @@ impl EventHandler for HoverHandler {
         // Create UNLIT text at a different location
         log::info!("Creating unlit text 'UNLIT TEXT'...");
         
-        let (unlit_vertices, unlit_indices) = self.text_layout.as_ref().unwrap().layout_text("UNLIT TEXT");
+        let text_layout = TextLayout::new(self.font_atlas.as_ref().unwrap());
+        let (unlit_vertices, unlit_indices) = text_layout.layout_text("UNLIT TEXT");
         let unlit_mesh = text_vertices_to_mesh(unlit_vertices, unlit_indices);
         
         // Create UNLIT material - bright yellow color, always full brightness

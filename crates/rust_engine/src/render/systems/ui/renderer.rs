@@ -159,7 +159,7 @@ impl UIRenderer {
     ) {
         use crate::render::systems::text::TextLayout;
         
-        let text_layout = TextLayout::new(font_atlas.clone());
+        let text_layout = TextLayout::new(font_atlas);
         let (text_vertices, text_indices) = text_layout.layout_text(&text.text);
         
         if text_vertices.is_empty() || text_indices.is_empty() {

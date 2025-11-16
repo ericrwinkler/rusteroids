@@ -12,6 +12,7 @@ use crate::render::primitives::Vertex;
 use crate::foundation::math::{Mat4, Vec3};
 use ash::vk;
 use std::collections::HashMap;
+use std::time::{Instant, Duration};
 
 /// Per-object GPU resources (internal to VulkanRenderer)
 /// This replaces the descriptor_sets in GameObject
@@ -95,6 +96,10 @@ pub struct VulkanRenderer {
     ui_text_vertex_buffer: Option<vk::Buffer>,
     ui_text_vertex_buffer_memory: Option<vk::DeviceMemory>,
     ui_text_vertex_buffer_size: vk::DeviceSize,
+    
+    // Phase 1: Performance metrics (aggregated logging)
+    ui_timing_samples: Vec<Duration>,
+    ui_timing_last_log: Instant,
 }
 
 /// State for recording multiple objects in a single command buffer
@@ -183,6 +188,8 @@ impl VulkanRenderer {
             ui_text_vertex_buffer: None,
             ui_text_vertex_buffer_memory: None,
             ui_text_vertex_buffer_size: 0,
+            ui_timing_samples: Vec::with_capacity(60), // ~60 FPS = 1 second
+            ui_timing_last_log: Instant::now(),
         })
     }
     
@@ -1027,6 +1034,9 @@ impl crate::render::RenderBackend for VulkanRenderer {
         use crate::render::systems::ui::{UIPanel, UIElement, Anchor, UIRenderCommand, UIText, UIButton, ButtonState, HorizontalAlign, VerticalAlign};
         use crate::foundation::math::Vec4;
         
+        // === Phase 1: Performance Metrics ===
+        let ui_start = Instant::now();
+        
         // Ensure UI pipeline is initialized (lazy init)
         self.ensure_ui_pipeline_initialized()
             .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
@@ -1193,6 +1203,31 @@ impl crate::render::RenderBackend for VulkanRenderer {
         
         // Mark UI rendering complete (resets dirty flag)
         self.ui_renderer.end_frame();
+        
+        // === Phase 1: Record timing and log once per second ===
+        let ui_duration = ui_start.elapsed();
+        self.ui_timing_samples.push(ui_duration);
+        
+        // Log aggregated metrics once per second
+        let elapsed_since_log = self.ui_timing_last_log.elapsed();
+        if elapsed_since_log >= Duration::from_secs(1) && !self.ui_timing_samples.is_empty() {
+            let count = self.ui_timing_samples.len();
+            let total: Duration = self.ui_timing_samples.iter().sum();
+            let avg = total / count as u32;
+            let min = self.ui_timing_samples.iter().min().copied().unwrap();
+            let max = self.ui_timing_samples.iter().max().copied().unwrap();
+            
+            log::info!("[UI_PERF] {} frames - Avg: {:.2}ms, Min: {:.2}ms, Max: {:.2}ms",
+                count,
+                avg.as_secs_f64() * 1000.0,
+                min.as_secs_f64() * 1000.0,
+                max.as_secs_f64() * 1000.0
+            );
+            
+            // Reset for next second
+            self.ui_timing_samples.clear();
+            self.ui_timing_last_log = Instant::now();
+        }
         
         Ok(())
     }

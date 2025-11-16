@@ -11,17 +11,12 @@ use super::{FontAtlas, TextLayout};
 /// the pool system (MeshType::TextQuad).
 pub struct TextRenderer {
     font_atlas: FontAtlas,
-    text_layout: TextLayout,
 }
 
 impl TextRenderer {
     /// Create a new text renderer
     pub fn new(font_atlas: FontAtlas) -> Self {
-        let text_layout = TextLayout::new(font_atlas.clone());
-        Self {
-            font_atlas,
-            text_layout,
-        }
+        Self { font_atlas }
     }
     
     /// Get the font atlas
@@ -29,8 +24,10 @@ impl TextRenderer {
         &self.font_atlas
     }
     
-    /// Get the text layout engine
-    pub fn text_layout(&self) -> &TextLayout {
-        &self.text_layout
+    /// Create a text layout engine for this renderer's font atlas
+    /// 
+    /// TextLayout is cheap to create - it just holds a reference to the FontAtlas
+    pub fn create_text_layout(&self) -> TextLayout {
+        TextLayout::new(&self.font_atlas)
     }
 }

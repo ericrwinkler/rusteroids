@@ -41,6 +41,8 @@ slotmap = "1.0"
 # Memory management
 vk-mem = "0.3"
 
+[profile.release]
+debug = true  # Enable debug symbols for profiling while keeping optimizations
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

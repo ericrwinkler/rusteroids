@@ -271,6 +271,10 @@ impl UboManager {
                 .offset(0)
                 .range(lighting_ubo_size)
                 .build();
+            
+            // Keep buffer info arrays alive - CRITICAL for avoiding dangling pointers!
+            let camera_infos = [camera_buffer_info];
+            let lighting_infos = [lighting_buffer_info];
                 
             let descriptor_writes = [
                 vk::WriteDescriptorSet::builder()
@@ -278,14 +282,14 @@ impl UboManager {
                     .dst_binding(0)
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                    .buffer_info(&[camera_buffer_info])
+                    .buffer_info(&camera_infos)
                     .build(),
                 vk::WriteDescriptorSet::builder()
                     .dst_set(descriptor_set)
                     .dst_binding(1)
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                    .buffer_info(&[lighting_buffer_info])
+                    .buffer_info(&lighting_infos)
                     .build(),
             ];
             
@@ -509,61 +513,76 @@ impl UboManager {
                 .sampler(resource_manager.default_white_texture().sampler())
                 .build();
             
+            // Keep image/buffer info arrays alive - CRITICAL for avoiding dangling pointers!
+            let material_buffer_infos = [material_buffer_info];
+            let base_color_infos = [base_color_image_info];
+            let normal_infos = [normal_image_info];
+            let metallic_roughness_infos = [metallic_roughness_image_info];
+            let ao_infos = [ao_image_info];
+            let emission_infos = [emission_image_info];
+            let opacity_infos = [opacity_image_info];
+            
             let descriptor_writes = vec![
                 vk::WriteDescriptorSet::builder()
                     .dst_set(descriptor_set)
                     .dst_binding(0)
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                    .buffer_info(&[material_buffer_info])
+                    .buffer_info(&material_buffer_infos)
                     .build(),
                 vk::WriteDescriptorSet::builder()
                     .dst_set(descriptor_set)
                     .dst_binding(1)
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&[base_color_image_info])
+                    .image_info(&base_color_infos)
                     .build(),
                 vk::WriteDescriptorSet::builder()
                     .dst_set(descriptor_set)
                     .dst_binding(2)
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&[normal_image_info])
+                    .image_info(&normal_infos)
                     .build(),
                 vk::WriteDescriptorSet::builder()
                     .dst_set(descriptor_set)
                     .dst_binding(3)
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&[metallic_roughness_image_info])
+                    .image_info(&metallic_roughness_infos)
                     .build(),
                 vk::WriteDescriptorSet::builder()
                     .dst_set(descriptor_set)
                     .dst_binding(4)
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&[ao_image_info])
+                    .image_info(&ao_infos)
                     .build(),
                 vk::WriteDescriptorSet::builder()
                     .dst_set(descriptor_set)
                     .dst_binding(5)
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&[emission_image_info])
+                    .image_info(&emission_infos)
                     .build(),
                 vk::WriteDescriptorSet::builder()
                     .dst_set(descriptor_set)
                     .dst_binding(6)
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&[opacity_image_info])
+                    .image_info(&opacity_infos)
                     .build(),
             ];
+            
+            log::info!("[UBO] About to update descriptor sets for material");
+            log::info!("[UBO] descriptor_set: {:?}", descriptor_set);
+            log::info!("[UBO] descriptor_writes.len(): {}", descriptor_writes.len());
             
             unsafe {
                 context.raw_device().update_descriptor_sets(&descriptor_writes, &[]);
             }
+            
+            log::info!("[UBO] Successfully updated descriptor sets for material");
         }
         
         Ok(())

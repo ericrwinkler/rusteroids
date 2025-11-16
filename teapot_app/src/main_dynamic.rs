@@ -146,6 +146,10 @@ pub struct DynamicTeapotApp {
     fps_update_timer: Instant,
     frame_count: u32,
     current_fps: f32,
+    
+    // Debug tracking for UI events
+    last_debug_log: Instant,
+    last_mouse_pos: (f64, f64),
 }
 
 impl DynamicTeapotApp {
@@ -173,6 +177,44 @@ impl DynamicTeapotApp {
         graphics_engine.initialize_ui_text_system()
             .expect("Failed to initialize UI text system");
         log::info!("UI text rendering system initialized");
+        
+        // Register button click event handler
+        log::info!("Registering UI event handlers...");
+        use rust_engine::events::{Event, EventHandler, EventType};
+        
+        struct ButtonClickHandler;
+        impl EventHandler for ButtonClickHandler {
+            fn on_event(&mut self, event: &Event) -> bool {
+                if let Some(button_id) = event.get_button_id() {
+                    println!("🎉🎉🎉 BUTTON {} WAS CLICKED! 🎉🎉🎉", button_id);
+                    log::info!("🎉 Button {} was clicked!", button_id);
+                    true // Consume the event
+                } else {
+                    false
+                }
+            }
+        }
+        
+        graphics_engine.register_event_handler(
+            EventType::ButtonClicked,
+            Box::new(ButtonClickHandler)
+        );
+        
+        // Register hover event handler for debugging
+        struct HoverHandler;
+impl EventHandler for HoverHandler {
+    fn on_event(&mut self, _event: &Event) -> bool {
+        // Silently handle hover events without logging
+        false // Don't consume hover events
+    }
+}        graphics_engine.register_event_handler(
+            EventType::ButtonHoverChanged,
+            Box::new(HoverHandler)
+        );
+        log::info!("UI event handlers registered");
+        
+        // Initialize UI screen size for input collision detection
+        graphics_engine.update_ui_screen_size(1200.0, 800.0);
         
         // Initialize dynamic object system with pool for 50 objects
         log::info!("Initializing dynamic object system...");
@@ -262,6 +304,10 @@ impl DynamicTeapotApp {
             fps_update_timer: Instant::now(),
             frame_count: 0,
             current_fps: 60.0,
+            
+            // Debug tracking
+            last_debug_log: Instant::now(),
+            last_mouse_pos: (0.0, 0.0),
         }
     }
     
@@ -1040,7 +1086,7 @@ impl DynamicTeapotApp {
         log::info!("Creating static 3D text 'LIT TEXT'...");
         
         use rust_engine::render::systems::text::text_vertices_to_mesh;
-        let (test_vertices, test_indices) = self.text_layout.as_ref().unwrap().layout_text("LIT TEXT");
+        let (test_vertices, test_indices) = self.text_layout.as_ref().unwrap().layout_text("HI SCOTT LIT TEXT");
         let test_mesh = text_vertices_to_mesh(test_vertices, test_indices);
         
         let test_text_material = self.text_material.as_ref().unwrap().clone();
@@ -1105,11 +1151,20 @@ impl DynamicTeapotApp {
         
         let mut framebuffer_resized = false;
         
+        println!("🚀 App starting main loop - move mouse and click to test button at (100, 100)");
+        
         while !self.window.should_close() {
             self.window.poll_events();
             
-            // Handle events
+            // Debug: Log every 2 seconds that we're alive
+            if self.last_debug_log.elapsed().as_secs() >= 2 {
+                println!("💓 App alive, FPS: {:.1}", self.current_fps);
+                self.last_debug_log = Instant::now();
+            }
+            
+            // Handle events FIRST
             let events: Vec<_> = self.window.event_iter().collect();
+            
             for (_, event) in events {
                 match event {
                     WindowEvent::Key(Key::Escape, _, Action::Press, _) => {
@@ -1119,7 +1174,26 @@ impl DynamicTeapotApp {
                         framebuffer_resized = true;
                         if width > 0 && height > 0 {
                             self.camera.set_aspect_ratio(width as f32 / height as f32);
+                            // Update UI screen size for input collision detection
+                            self.graphics_engine.update_ui_screen_size(width as f32, height as f32);
                         }
+                    }
+                    WindowEvent::CursorPos(x, y) => {
+                        // Update mouse position for UI
+                        self.graphics_engine.update_mouse_position(x as f32, y as f32);
+                        self.last_mouse_pos = (x, y);
+                    }
+                    WindowEvent::MouseButton(button, action, _) => {
+                        // Update mouse button state for UI
+                        use rust_engine::render::systems::ui::MouseButton as UIMouseButton;
+                        let ui_button = match button {
+                            glfw::MouseButton::Button1 => UIMouseButton::Left,
+                            glfw::MouseButton::Button2 => UIMouseButton::Right,
+                            glfw::MouseButton::Button3 => UIMouseButton::Middle,
+                            _ => continue, // Ignore other buttons
+                        };
+                        let pressed = action == Action::Press;
+                        self.graphics_engine.update_mouse_button(ui_button, pressed);
                     }
                     WindowEvent::Key(Key::Space, _, Action::Press, _) => {
                         // Dynamic spawning is automatic now - space key disabled
@@ -1152,6 +1226,12 @@ impl DynamicTeapotApp {
                 log::error!("Failed to render frame: {:?}", e);
                 break;
             }
+            
+            // Dispatch UI events after rendering
+            self.graphics_engine.dispatch_events();
+            
+            // Reset per-frame input state for next frame
+            self.graphics_engine.ui_begin_frame();
         }
         
         log::info!("Dynamic teapot demo completed");

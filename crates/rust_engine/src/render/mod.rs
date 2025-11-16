@@ -181,6 +181,51 @@ impl GraphicsEngine {
         }
     }
     
+    /// Register an event handler for UI events
+    ///
+    /// Registers a handler that will be called when events of the specified type occur.
+    /// Handlers are called in registration order and can consume events to stop propagation.
+    pub fn register_event_handler(&mut self, event_type: crate::events::EventType, handler: Box<dyn crate::events::EventHandler>) {
+        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
+            vulkan_backend.register_event_handler(event_type, handler);
+        }
+    }
+    
+    /// Update mouse position for UI input processing
+    pub fn update_mouse_position(&mut self, x: f32, y: f32) {
+        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
+            vulkan_backend.update_mouse_position(x, y);
+        }
+    }
+    
+    /// Update mouse button state for UI input processing
+    pub fn update_mouse_button(&mut self, button: crate::render::systems::ui::MouseButton, pressed: bool) {
+        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
+            vulkan_backend.update_mouse_button(button, pressed);
+        }
+    }
+    
+    /// Update UI screen size for input collision detection
+    pub fn update_ui_screen_size(&mut self, width: f32, height: f32) {
+        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
+            vulkan_backend.update_ui_screen_size(width, height);
+        }
+    }
+    
+    /// Begin new frame for UI input processing
+    pub fn ui_begin_frame(&mut self) {
+        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
+            vulkan_backend.ui_begin_frame();
+        }
+    }
+    
+    /// Dispatch all pending UI events
+    pub fn dispatch_events(&mut self) {
+        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
+            vulkan_backend.dispatch_events();
+        }
+    }
+    
     /// Begin a new frame
     ///
     /// Prepares the renderer for a new frame of rendering. Currently this is

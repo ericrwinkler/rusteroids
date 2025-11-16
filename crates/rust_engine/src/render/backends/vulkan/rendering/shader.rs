@@ -202,41 +202,62 @@ use crate::render::backends::vulkan::{VulkanResult, VulkanError};
 /// Automatically cleans up Vulkan shader module on drop, preventing resource leaks.
 /// Shader modules are immutable once created and can be safely shared across pipelines.
 pub struct ShaderModule {
-    device: Device,
+    #[allow(dead_code)]
+    device: std::sync::Arc<Device>,
     module: vk::ShaderModule,
 }
 
 impl ShaderModule {
     /// Create shader module from SPIR-V bytecode
-    pub fn from_bytes(device: Device, bytes: &[u8]) -> VulkanResult<Self> {
+    pub fn from_bytes(device: &Device, bytes: &[u8]) -> VulkanResult<Self> {
+        log::debug!("[SHADER] Creating shader module from {} bytes", bytes.len());
+        
         // Convert bytes to u32 slice (SPIR-V is u32-aligned)
         let (prefix, u32_slice, suffix) = unsafe { bytes.align_to::<u32>() };
         if !prefix.is_empty() || !suffix.is_empty() {
+            log::error!("[SHADER] SPIR-V alignment check failed: prefix={}, suffix={}", prefix.len(), suffix.len());
             return Err(VulkanError::InitializationFailed(
                 "SPIR-V bytecode is not properly aligned".to_string()
             ));
         }
         
+        log::debug!("[SHADER] SPIR-V contains {} u32 words", u32_slice.len());
+        
         let create_info = vk::ShaderModuleCreateInfo::builder()
             .code(u32_slice);
-            
+        
+        log::debug!("[SHADER] Calling vkCreateShaderModule...");
         let module = unsafe {
             device.create_shader_module(&create_info, None)
-                .map_err(VulkanError::Api)?
+                .map_err(|e| {
+                    log::error!("[SHADER] vkCreateShaderModule failed: {:?}", e);
+                    VulkanError::Api(e)
+                })?
         };
         
-        Ok(Self { device, module })
+        log::debug!("[SHADER] Shader module created successfully: {:?}", module);
+        Ok(Self { device: std::sync::Arc::new(device.clone()), module })
     }
     
     /// Load shader from SPIR-V file
-    pub fn from_file<P: AsRef<Path>>(device: Device, path: P) -> VulkanResult<Self> {
-        let mut file = File::open(path)
-            .map_err(|e| VulkanError::InitializationFailed(format!("Failed to open shader file: {}", e)))?;
+    pub fn from_file<P: AsRef<Path>>(device: &Device, path: P) -> VulkanResult<Self> {
+        let path_ref = path.as_ref();
+        log::debug!("[SHADER] Loading shader from: {:?}", path_ref);
+        
+        let mut file = File::open(path_ref)
+            .map_err(|e| {
+                log::error!("[SHADER] Failed to open shader file {:?}: {}", path_ref, e);
+                VulkanError::InitializationFailed(format!("Failed to open shader file: {}", e))
+            })?;
             
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)
-            .map_err(|e| VulkanError::InitializationFailed(format!("Failed to read shader file: {}", e)))?;
-            
+            .map_err(|e| {
+                log::error!("[SHADER] Failed to read shader file {:?}: {}", path_ref, e);
+                VulkanError::InitializationFailed(format!("Failed to read shader file: {}", e))
+            })?;
+        
+        log::debug!("[SHADER] Read {} bytes from {:?}", bytes.len(), path_ref);
         Self::from_bytes(device, &bytes)
     }
     
@@ -257,15 +278,17 @@ impl ShaderModule {
 
 impl Drop for ShaderModule {
     fn drop(&mut self) {
+        log::debug!("[SHADER] Dropping ShaderModule {:?}", self.module);
         unsafe {
             self.device.destroy_shader_module(self.module, None);
         }
+        log::debug!("[SHADER] ShaderModule dropped successfully");
     }
 }
 
 /// Graphics pipeline wrapper with RAII cleanup
 pub struct GraphicsPipeline {
-    device: Device,
+    device: std::sync::Arc<Device>,
     pipeline: vk::Pipeline,
     layout: vk::PipelineLayout,
 }
@@ -273,7 +296,7 @@ pub struct GraphicsPipeline {
 impl GraphicsPipeline {
     /// Create graphics pipeline
     pub fn new(
-        device: Device,
+        device: &Device,
         render_pass: vk::RenderPass,
         vertex_shader: &ShaderModule,
         fragment_shader: &ShaderModule,
@@ -291,7 +314,7 @@ impl GraphicsPipeline {
     
     /// Create graphics pipeline with descriptor set layouts
     pub fn new_with_descriptor_layouts(
-        device: Device,
+        device: &Device,
         render_pass: vk::RenderPass,
         vertex_shader: &ShaderModule,
         fragment_shader: &ShaderModule,
@@ -400,16 +423,16 @@ impl GraphicsPipeline {
         let pipeline = pipelines[0];
         
         Ok(Self {
-            device,
+            device: std::sync::Arc::new(device.clone()),
             pipeline,
             layout,
         })
     }
     
     /// Create GraphicsPipeline from raw Vulkan handles
-    pub fn from_raw(device: Device, pipeline: vk::Pipeline, layout: vk::PipelineLayout) -> Self {
+    pub fn from_raw(device: &Device, pipeline: vk::Pipeline, layout: vk::PipelineLayout) -> Self {
         Self {
-            device,
+            device: std::sync::Arc::new(device.clone()),
             pipeline,
             layout,
         }
@@ -428,9 +451,11 @@ impl GraphicsPipeline {
 
 impl Drop for GraphicsPipeline {
     fn drop(&mut self) {
+        log::debug!("[PIPELINE] Dropping GraphicsPipeline {:?}", self.pipeline);
         unsafe {
             self.device.destroy_pipeline(self.pipeline, None);
             self.device.destroy_pipeline_layout(self.layout, None);
         }
+        log::debug!("[PIPELINE] GraphicsPipeline dropped successfully");
     }
 }

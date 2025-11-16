@@ -170,12 +170,15 @@ impl CacheManager {
                 .range(std::mem::size_of::<crate::render::ObjectUBO>() as vk::DeviceSize)
                 .build();
 
+            // Keep array alive - CRITICAL for avoiding dangling pointers!
+            let buffer_infos = [buffer_info];
+
             let descriptor_write = vk::WriteDescriptorSet::builder()
                 .dst_set(descriptor_set)
                 .dst_binding(0)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(&[buffer_info])
+                .buffer_info(&buffer_infos)
                 .build();
 
             unsafe {

@@ -40,43 +40,60 @@ impl PipelineManager {
         // Initialize all opaque pipelines
         log::info!("Initializing rendering pipelines...");
         
+        log::debug!("[PIPELINE] Creating StandardPBR config...");
+        let pbr_config = PipelineConfig::standard_pbr();
+        log::debug!("[PIPELINE] StandardPBR config created");
+        
+        log::debug!("[PIPELINE] Creating vertex input info...");
+        let (binding_descs, attr_descs) = Self::create_vertex_input_info();
+        log::debug!("[PIPELINE] Vertex input info created");
+        
+        log::debug!("[PIPELINE] Calling create_pipeline for StandardPBR...");
         // StandardPBR pipeline - opaque objects with full PBR lighting
         self.create_pipeline(
             context,
             render_pass,
-            PipelineConfig::standard_pbr(),
-            Self::create_vertex_input_info(),
+            pbr_config,
             descriptor_set_layouts,
+            binding_descs,
+            attr_descs,
         )?;
+        log::debug!("[PIPELINE] StandardPBR pipeline created successfully");
 
         // Unlit pipeline - opaque objects without lighting calculations
+        let (binding_descs, attr_descs) = Self::create_vertex_input_info();
         self.create_pipeline(
             context,
             render_pass,
             PipelineConfig::unlit(),
-            Self::create_vertex_input_info(),
             descriptor_set_layouts,
+            binding_descs,
+            attr_descs,
         )?;
         
         // Initialize transparent pipelines
         log::info!("Initializing transparent rendering pipelines...");
         
         // TransparentPBR pipeline - transparent objects with PBR lighting
+        let (binding_descs, attr_descs) = Self::create_vertex_input_info();
         self.create_pipeline(
             context,
             render_pass,
             PipelineConfig::transparent_pbr(),
-            Self::create_vertex_input_info(),
             descriptor_set_layouts,
+            binding_descs,
+            attr_descs,
         )?;
         
         // TransparentUnlit pipeline - transparent objects without lighting
+        let (binding_descs, attr_descs) = Self::create_vertex_input_info();
         self.create_pipeline(
             context,
             render_pass,
             PipelineConfig::transparent_unlit(),
-            Self::create_vertex_input_info(),
             descriptor_set_layouts,
+            binding_descs,
+            attr_descs,
         )?;
 
         // Set StandardPBR as default active pipeline to use material UBO system
@@ -93,25 +110,43 @@ impl PipelineManager {
         context: &VulkanContext,
         render_pass: vk::RenderPass,
         config: PipelineConfig,
-        vertex_input_info: vk::PipelineVertexInputStateCreateInfo,
         descriptor_set_layouts: &[vk::DescriptorSetLayout],
+        binding_descs: [vk::VertexInputBindingDescription; 2],
+        attr_descs: [vk::VertexInputAttributeDescription; 16],
     ) -> VulkanResult<()> {
-        log::debug!("Creating {:?} pipeline", config.pipeline_type);
-
+        log::info!("[PIPELINE] Creating pipeline");
+        
+        // Build vertex input info here where arrays are in final location
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder()
+            .vertex_binding_descriptions(&binding_descs)
+            .vertex_attribute_descriptions(&attr_descs)
+            .build();
+        
+        let device = context.raw_device();
+        
+        log::info!("[PIPELINE] Loading vertex shader from: {}", config.vertex_shader_path);
+        
         // Load shaders
         let vertex_shader = ShaderModule::from_file(
-            context.raw_device(),
+            &device,
             &config.vertex_shader_path,
         )?;
 
+        log::info!("[PIPELINE] Loading fragment shader from: {}", config.fragment_shader_path);
         let fragment_shader = ShaderModule::from_file(
-            context.raw_device(),
+            &device,
             &config.fragment_shader_path,
         )?;
+        log::info!("[PIPELINE] Both shaders loaded successfully");
 
+        log::info!("[PIPELINE] About to create graphics pipeline with config");
+        log::info!("[PIPELINE] Parameters: device={:?}, render_pass={:?}", device.handle(), render_pass);
+        log::info!("[PIPELINE] vertex_input_info sType: {:?}", vertex_input_info.s_type);
+        log::info!("[PIPELINE] Calling create_graphics_pipeline_with_config NOW...");
+        
         // Create pipeline with custom configuration
         let pipeline = Self::create_graphics_pipeline_with_config(
-            context.raw_device(),
+            &device,
             render_pass,
             &vertex_shader,
             &fragment_shader,
@@ -119,16 +154,19 @@ impl PipelineManager {
             descriptor_set_layouts,
             &config,
         )?;
+        
+        log::info!("[PIPELINE] RETURNED from create_graphics_pipeline_with_config");
+        log::info!("[PIPELINE] Graphics pipeline created successfully");
 
         self.pipelines.insert(config.pipeline_type, pipeline);
-        log::debug!("{:?} pipeline created successfully", config.pipeline_type);
+        log::debug!("[PIPELINE] Pipeline inserted into manager");
 
         Ok(())
     }
 
     /// Create graphics pipeline with custom configuration
     fn create_graphics_pipeline_with_config(
-        device: ash::Device,
+        device: &ash::Device,
         render_pass: vk::RenderPass,
         vertex_shader: &ShaderModule,
         fragment_shader: &ShaderModule,
@@ -138,6 +176,9 @@ impl PipelineManager {
     ) -> VulkanResult<GraphicsPipeline> {
         use crate::render::backends::vulkan::VulkanError;
 
+        log::debug!("[PIPELINE] create_graphics_pipeline_with_config called");
+        log::debug!("[PIPELINE] Creating shader stage infos...");
+        
         // Shader stages
         let vertex_entry = std::ffi::CStr::from_bytes_with_nul(b"main\0").unwrap();
         let fragment_entry = std::ffi::CStr::from_bytes_with_nul(b"main\0").unwrap();
@@ -146,6 +187,8 @@ impl PipelineManager {
             vertex_shader.create_stage_info(vk::ShaderStageFlags::VERTEX, vertex_entry),
             fragment_shader.create_stage_info(vk::ShaderStageFlags::FRAGMENT, fragment_entry),
         ];
+        
+        log::debug!("[PIPELINE] Shader stages created, setting up input assembly...");
         
         // Input assembly
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::builder()
@@ -265,13 +308,8 @@ impl PipelineManager {
     }
 
     /// Create vertex input info for all pipelines (unified instanced rendering)
-    fn create_vertex_input_info() -> vk::PipelineVertexInputStateCreateInfo {
-        let (binding_descriptions, attr_descriptions) = VulkanVertexLayout::get_instanced_input_state();
-        
-        vk::PipelineVertexInputStateCreateInfo::builder()
-            .vertex_binding_descriptions(&binding_descriptions)
-            .vertex_attribute_descriptions(&attr_descriptions)
-            .build()
+    fn create_vertex_input_info() -> ([vk::VertexInputBindingDescription; 2], [vk::VertexInputAttributeDescription; 16]) {
+        VulkanVertexLayout::get_instanced_input_state()
     }
 
     /// Convert MaterialType to PipelineType

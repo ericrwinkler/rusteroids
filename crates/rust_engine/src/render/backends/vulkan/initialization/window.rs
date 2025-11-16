@@ -71,6 +71,10 @@ impl Window {
         window.set_close_polling(true);
         window.set_size_polling(true);
         window.set_framebuffer_size_polling(true);
+        
+        // Enable mouse/cursor input events
+        window.set_cursor_pos_polling(true);
+        window.set_mouse_button_polling(true);
 
         Ok(Self {
             glfw,

@@ -3,9 +3,9 @@ name = "teapot_app"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "teapot_static"
-path = "src/main.rs"
+# [[bin]]
+# name = "teapot_static"
+# path = "src/main.rs"
 
 [[bin]]
 name = "teapot_dynamic"

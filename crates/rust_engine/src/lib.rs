@@ -58,6 +58,7 @@ pub mod input;
 pub mod audio;
 pub mod physics;
 pub mod settings;
+pub mod events;
 
 mod application;
 mod engine;
@@ -79,6 +80,7 @@ pub mod prelude {
         assets::{Asset, AssetHandle, AssetManager},
         render::{GraphicsEngine, Camera, Mesh, Material},
         input::{InputManager, KeyCode, MouseButton},
+        events::{Event, EventType, EventArg, EventHandler, EventSystem},
         // New unified config system
         core::config::{ApplicationConfig, VulkanRendererConfig, ShaderConfig},
     };

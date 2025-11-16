@@ -111,6 +111,11 @@ impl TextureManager {
             .sampler(resource_manager.default_white_texture().sampler())
             .build();
         
+        // Keep arrays alive - CRITICAL for avoiding dangling pointers!
+        let material_buffer_infos = [material_buffer_info];
+        let base_color_infos = [base_color_image_info];
+        let default_infos = [default_image_info];
+        
         let descriptor_writes = vec![
             // Binding 0: Material UBO
             vk::WriteDescriptorSet::builder()
@@ -118,7 +123,7 @@ impl TextureManager {
                 .dst_binding(0)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(&[material_buffer_info])
+                .buffer_info(&material_buffer_infos)
                 .build(),
             // Binding 1: Base color texture (custom texture)
             vk::WriteDescriptorSet::builder()
@@ -126,7 +131,7 @@ impl TextureManager {
                 .dst_binding(1)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&[base_color_image_info])
+                .image_info(&base_color_infos)
                 .build(),
             // Binding 2: Normal map (default)
             vk::WriteDescriptorSet::builder()
@@ -134,7 +139,7 @@ impl TextureManager {
                 .dst_binding(2)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&[default_image_info])
+                .image_info(&default_infos)
                 .build(),
             // Binding 3: Metallic/roughness (default)
             vk::WriteDescriptorSet::builder()
@@ -142,7 +147,7 @@ impl TextureManager {
                 .dst_binding(3)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&[default_image_info])
+                .image_info(&default_infos)
                 .build(),
             // Binding 4: AO (default)
             vk::WriteDescriptorSet::builder()
@@ -150,7 +155,7 @@ impl TextureManager {
                 .dst_binding(4)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&[default_image_info])
+                .image_info(&default_infos)
                 .build(),
             // Binding 5: Emission (default)
             vk::WriteDescriptorSet::builder()
@@ -158,7 +163,7 @@ impl TextureManager {
                 .dst_binding(5)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&[default_image_info])
+                .image_info(&default_infos)
                 .build(),
             // Binding 6: Opacity (default)
             vk::WriteDescriptorSet::builder()
@@ -166,7 +171,7 @@ impl TextureManager {
                 .dst_binding(6)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&[default_image_info])
+                .image_info(&default_infos)
                 .build(),
         ];
         

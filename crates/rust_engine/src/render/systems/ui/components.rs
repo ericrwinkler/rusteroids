@@ -144,16 +144,22 @@ impl Default for UIText {
 /// Horizontal text alignment
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HorizontalAlign {
+    /// Left-aligned text
     Left,
+    /// Center-aligned text
     Center,
+    /// Right-aligned text
     Right,
 }
 
 /// Vertical text alignment
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VerticalAlign {
+    /// Top-aligned text
     Top,
+    /// Middle-aligned text
     Middle,
+    /// Bottom-aligned text
     Bottom,
 }
 
@@ -187,8 +193,11 @@ pub struct UIButton {
     
     /// Colors for different states
     pub normal_color: Vec4,
+    /// Hover state color
     pub hover_color: Vec4,
+    /// Pressed state color
     pub pressed_color: Vec4,
+    /// Disabled state color
     pub disabled_color: Vec4,
     
     /// Text color
@@ -196,6 +205,7 @@ pub struct UIButton {
     
     /// Border properties
     pub border_color: Vec4,
+    /// Border width in pixels
     pub border_width: f32,
     
     /// Whether the button is enabled

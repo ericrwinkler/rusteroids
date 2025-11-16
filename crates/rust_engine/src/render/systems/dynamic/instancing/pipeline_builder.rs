@@ -55,15 +55,16 @@ pub fn create_instanced_pipeline(
     }
     
     // Load shaders optimized for instanced rendering
+    let device = context.raw_device();
     let vertex_shader = ShaderModule::from_file(
-        context.raw_device(),
+        &device,
         "target/shaders/standard_pbr_vert.spv",
     )?;
     
     let fragment_shader = ShaderModule::from_file(
-        context.raw_device(),
+        &device,
         "target/shaders/standard_pbr_frag.spv",
-    )?;
+    )?;;
     
     // Create INSTANCED vertex input state
     // This configures per-vertex attributes (position, normal, UV) + per-instance attributes (transforms)
@@ -78,7 +79,7 @@ pub fn create_instanced_pipeline(
     
     // Create instanced graphics pipeline
     let pipeline = GraphicsPipeline::new_with_descriptor_layouts(
-        context.raw_device(),
+        &device,
         render_pass,
         &vertex_shader,
         &fragment_shader,

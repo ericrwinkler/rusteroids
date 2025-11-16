@@ -3,6 +3,7 @@
 //! Converts UI component data to screen-space coordinates for rendering.
 
 use crate::foundation::math::Vec2;
+#[allow(unused_imports)] // Used in tests
 use super::components::{UIElement, Anchor};
 
 /// Layout calculator for UI elements

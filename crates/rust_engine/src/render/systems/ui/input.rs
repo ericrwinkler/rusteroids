@@ -2,14 +2,18 @@
 //!
 //! Processes mouse input for interactive UI elements like buttons.
 
-use super::components::{UIButton, UIElement, ButtonState};
+use super::components::{UIButton, ButtonState};
 use super::layout::UILayout;
+use crate::events::{Event, EventType, EventArg, EventSystem};
 
 /// Mouse button states
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MouseButton {
+    /// Left mouse button
     Left,
+    /// Right mouse button
     Right,
+    /// Middle mouse button
     Middle,
 }
 
@@ -17,9 +21,17 @@ pub enum MouseButton {
 #[derive(Debug, Clone)]
 pub enum UIEvent {
     /// Button was clicked
-    ButtonClicked { button_id: u32 },
+    ButtonClicked {
+        /// Button identifier
+        button_id: u32
+    },
     /// Button hover state changed
-    ButtonHoverChanged { button_id: u32, hovered: bool },
+    ButtonHoverChanged {
+        /// Button identifier
+        button_id: u32,
+        /// Is button hovered
+        hovered: bool
+    },
 }
 
 /// UI input processor
@@ -85,8 +97,8 @@ impl UIInputProcessor {
     /// Process input for a button, updating its state
     ///
     /// # Returns
-    /// Optional event if button was clicked
-    pub fn process_button(&self, button: &mut UIButton) -> Option<UIEvent> {
+    /// Optional event if button was clicked or hover changed
+    pub fn process_button(&self, button: &mut UIButton, event_system: &mut EventSystem, timestamp: f64) -> Option<UIEvent> {
         if !button.enabled || !button.element.visible {
             button.state = ButtonState::Disabled;
             return None;
@@ -101,7 +113,7 @@ impl UIInputProcessor {
             self.mouse_y,
         );
         
-        let mut event = None;
+        let mut ui_event = None;
         
         // Update button state based on hover and click
         let old_state = button.state;
@@ -117,7 +129,12 @@ impl UIInputProcessor {
                 // Fire click event if mouse was just released over button
                 if self.left_button_released_this_frame && old_state == ButtonState::Pressed {
                     if let Some(id) = button.on_click_id {
-                        event = Some(UIEvent::ButtonClicked { button_id: id });
+                        ui_event = Some(UIEvent::ButtonClicked { button_id: id });
+                        
+                        // Send to event system
+                        let event = Event::new(EventType::ButtonClicked, timestamp)
+                            .with_arg("button_id", EventArg::ButtonId(id));
+                        event_system.send(event);
                     }
                 }
             }
@@ -129,22 +146,34 @@ impl UIInputProcessor {
                 (ButtonState::Normal, ButtonState::Hovered) |
                 (ButtonState::Normal, ButtonState::Pressed) => {
                     if let Some(id) = button.on_click_id {
-                        if event.is_none() {
-                            event = Some(UIEvent::ButtonHoverChanged { 
+                        if ui_event.is_none() {
+                            ui_event = Some(UIEvent::ButtonHoverChanged { 
                                 button_id: id, 
                                 hovered: true 
                             });
+                            
+                            // Send to event system
+                            let event = Event::new(EventType::ButtonHoverChanged, timestamp)
+                                .with_arg("button_id", EventArg::ButtonId(id))
+                                .with_arg("hovered", EventArg::Hovered(true));
+                            event_system.send(event);
                         }
                     }
                 }
                 (ButtonState::Hovered, ButtonState::Normal) |
                 (ButtonState::Pressed, ButtonState::Normal) => {
                     if let Some(id) = button.on_click_id {
-                        if event.is_none() {
-                            event = Some(UIEvent::ButtonHoverChanged { 
+                        if ui_event.is_none() {
+                            ui_event = Some(UIEvent::ButtonHoverChanged { 
                                 button_id: id, 
                                 hovered: false 
                             });
+                            
+                            // Send to event system
+                            let event = Event::new(EventType::ButtonHoverChanged, timestamp)
+                                .with_arg("button_id", EventArg::ButtonId(id))
+                                .with_arg("hovered", EventArg::Hovered(false));
+                            event_system.send(event);
                         }
                     }
                 }
@@ -152,7 +181,7 @@ impl UIInputProcessor {
             }
         }
         
-        event
+        ui_event
     }
     
     /// Get current mouse position

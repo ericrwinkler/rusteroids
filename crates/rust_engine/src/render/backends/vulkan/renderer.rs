@@ -70,13 +70,23 @@ pub struct VulkanRenderer {
     // Dynamic object instanced rendering system
     instance_renderer: Option<crate::render::systems::dynamic::InstanceRenderer>,
     
-    // UI overlay rendering (Step 1: Simple quad proof of concept)
+    // UI rendering system (clean architecture after refactor)
+    ui_renderer: crate::render::systems::ui::UIRenderer,
+    
+    // UI input processing
+    ui_input_processor: crate::render::systems::ui::UIInputProcessor,
+    
+    // Event system for UI interactions
+    event_system: crate::events::EventSystem,
+    
+    // UI overlay rendering (Vulkan-specific resources)
     ui_pipeline: Option<vk::Pipeline>,
     ui_pipeline_layout: Option<vk::PipelineLayout>,
     ui_vertex_buffer: Option<vk::Buffer>,
     ui_vertex_buffer_memory: Option<vk::DeviceMemory>,
+    ui_vertex_buffer_size: vk::DeviceSize,
     
-    // UI text rendering (Step 3: Screen-space text with glyph atlas)
+    // UI text rendering (Vulkan-specific resources)
     ui_text_pipeline: Option<vk::Pipeline>,
     ui_text_pipeline_layout: Option<vk::PipelineLayout>,
     ui_text_descriptor_set_layout: Option<vk::DescriptorSetLayout>,
@@ -117,8 +127,12 @@ impl VulkanRenderer {
         let sync_manager = SyncManager::new(&context, &context.swapchain(), config.max_frames_in_flight)?;
         let swapchain_manager = SwapchainManager::new(&context, &render_pass)?;
         
+        log::debug!("[INIT] All managers created, initializing command recorder");
         // Initialize command recorder
         command_recorder.initialize(config.max_frames_in_flight);
+        
+        log::debug!("[INIT] About to initialize standard pipelines");
+        log::debug!("[INIT] render_pass handle: {:?}", render_pass.handle());
         
         // Initialize all 4 standard pipelines (StandardPBR, Unlit, TransparentPBR, TransparentUnlit)
         pipeline_manager.initialize_standard_pipelines(
@@ -127,8 +141,12 @@ impl VulkanRenderer {
             &[ubo_manager.frame_descriptor_set_layout(), ubo_manager.material_descriptor_set_layout()],
         )?;
         
+        log::info!("[INIT] Standard pipelines initialized successfully");
+        
         // Then initialize UBO descriptor sets
+        log::info!("[INIT] About to initialize UBO descriptor sets");
         ubo_manager.initialize_descriptor_sets(&context, &mut resource_manager)?;
+        log::info!("[INIT] UBO descriptor sets initialized successfully");
         
         log::debug!("Modular VulkanRenderer created successfully");
         Ok(Self {
@@ -149,10 +167,14 @@ impl VulkanRenderer {
             object_resources: HashMap::new(),
             next_object_id: 1,
             instance_renderer: None, // Will be initialized when dynamic system is enabled
+            ui_renderer: crate::render::systems::ui::UIRenderer::new(),
+            ui_input_processor: crate::render::systems::ui::UIInputProcessor::new(800.0, 600.0), // Updated on first frame
+            event_system: crate::events::EventSystem::new(),
             ui_pipeline: None, // Lazy initialization on first UI render
             ui_pipeline_layout: None,
             ui_vertex_buffer: None,
             ui_vertex_buffer_memory: None,
+            ui_vertex_buffer_size: 0,
             ui_text_pipeline: None, // Lazy initialization on first text render
             ui_text_pipeline_layout: None,
             ui_text_descriptor_set_layout: None,
@@ -227,6 +249,43 @@ impl VulkanRenderer {
     /// Wait for device idle
     pub fn wait_idle(&self) -> VulkanResult<()> {
         self.sync_manager.wait_idle(&self.context)
+    }
+    
+    // === UI Input and Event System ===
+    
+    /// Update mouse position for UI input processing
+    pub fn update_mouse_position(&mut self, x: f32, y: f32) {
+        self.ui_input_processor.update_mouse_position(x, y);
+    }
+    
+    /// Update mouse button state for UI input processing
+    pub fn update_mouse_button(&mut self, button: crate::render::systems::ui::MouseButton, pressed: bool) {
+        self.ui_input_processor.update_mouse_button(button, pressed);
+    }
+    
+    /// Update screen size for UI input processor
+    pub fn update_ui_screen_size(&mut self, width: f32, height: f32) {
+        self.ui_input_processor.set_screen_size(width, height);
+    }
+    
+    /// Begin new frame for UI input processing (resets per-frame state)
+    pub fn ui_begin_frame(&mut self) {
+        self.ui_input_processor.begin_frame();
+    }
+    
+    /// Register an event handler for UI events
+    pub fn register_event_handler(&mut self, event_type: crate::events::EventType, handler: Box<dyn crate::events::EventHandler>) {
+        self.event_system.register_handler(event_type, handler);
+    }
+    
+    /// Dispatch all pending UI events
+    pub fn dispatch_events(&mut self) {
+        self.event_system.dispatch();
+    }
+    
+    /// Update event system time
+    pub fn update_event_time(&mut self, time: f64) {
+        self.event_system.update_time(time);
     }
     
     // === Internal Resource Management (Hidden from Applications) ===
@@ -965,6 +1024,9 @@ impl crate::render::RenderBackend for VulkanRenderer {
     }
     
     fn record_ui_overlay_test(&mut self, fps_text: Option<&str>) -> crate::render::BackendResult<()> {
+        use crate::render::systems::ui::{UIPanel, UIElement, Anchor, UIRenderCommand, UIText, UIButton, ButtonState, HorizontalAlign, VerticalAlign};
+        use crate::foundation::math::Vec4;
+        
         // Ensure UI pipeline is initialized (lazy init)
         self.ensure_ui_pipeline_initialized()
             .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
@@ -982,91 +1044,155 @@ impl crate::render::RenderBackend for VulkanRenderer {
             ))?;
         
         let command_buffer = recording_state.command_buffer;
-        let device = self.context.raw_device();
         
-        // Get UI rendering resources
-        let pipeline = self.ui_pipeline.unwrap();
-        let pipeline_layout = self.ui_pipeline_layout.unwrap();
-        let vertex_buffer = self.ui_vertex_buffer.unwrap();
+        // Get current screen dimensions
+        let (screen_width, screen_height) = self.get_swapchain_extent();
+        let screen_width_f = screen_width as f32;
+        let screen_height_f = screen_height as f32;
         
-        unsafe {
-            // Bind UI pipeline
-            device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
-            
-            // Bind vertex buffer
-            device.cmd_bind_vertex_buffers(command_buffer, 0, &[vertex_buffer], &[0]);
-            
-            // STEP 2: Push blue color constant (RGBA: semi-transparent blue)
-            let color = [0.0f32, 0.0f32, 1.0f32, 0.7f32]; // Blue with 70% alpha
-            let color_bytes = std::slice::from_raw_parts(
-                color.as_ptr() as *const u8,
-                std::mem::size_of_val(&color),
-            );
-            device.cmd_push_constants(
-                command_buffer,
-                pipeline_layout,
-                vk::ShaderStageFlags::FRAGMENT,
-                0,
-                color_bytes,
-            );
-            
-            // Draw the quad (6 vertices = 2 triangles)
-            device.cmd_draw(command_buffer, 6, 1, 0, 0);
-        }
+        // Check if screen changed and update dirty flag
+        let screen_changed = self.ui_renderer.check_screen_changed(screen_width, screen_height);
         
-        // STEP 3: Render FPS text using screen-space projection mode
-        if let Some(text) = fps_text {
-            // Generate text vertices from font atlas
-            if let Some(ref font_atlas) = self.font_atlas {
-                // Use TextLayout to generate vertices for the FPS text
-                let text_layout = crate::render::systems::text::TextLayout::new(font_atlas.clone());
-                let (text_vertices, text_indices) = text_layout.layout_text(text);
+        // FPS text changes every frame, so always mark dirty for now
+        // TODO: Separate static UI from dynamic text to avoid full rebuild
+        let fps_changed = fps_text.is_some();
+        
+        if screen_changed || fps_changed || self.ui_renderer.is_dirty() {
+            
+            // Clear and regenerate UI commands
+            self.ui_renderer.clear();
+            
+            // Create blue panel at bottom-left (Step 2)
+            let panel = UIPanel {
+                element: UIElement {
+                    position: (10.0, screen_height_f - 60.0),
+                    size: (50.0, 50.0),
+                    anchor: Anchor::TopLeft,
+                    visible: true,
+                    z_order: 0,
+                },
+                color: Vec4::new(0.0, 0.0, 1.0, 0.7),
+                ..Default::default()
+            };
+            self.ui_renderer.update_panel(&panel, screen_width_f, screen_height_f);
+            
+            // Create test button (Step 4)
+            let mut test_button = UIButton {
+                element: UIElement {
+                    position: (100.0, 100.0),
+                    size: (150.0, 40.0),
+                    anchor: Anchor::TopLeft,
+                    visible: true,
+                    z_order: 1,
+                },
+                text: "Click Me!".to_string(),
+                font_size: 18.0,
+                state: ButtonState::Normal,
+                normal_color: Vec4::new(0.3, 0.3, 0.3, 0.9),
+                hover_color: Vec4::new(0.4, 0.5, 0.7, 0.9),
+                pressed_color: Vec4::new(0.2, 0.3, 0.5, 0.9),
+                disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+                text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+                border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
+                border_width: 2.0,
+                enabled: true,
+                on_click_id: Some(1),
+            };
+            
+            // Process button input (updates button state and sends events)
+            if let Some(font_atlas) = &self.font_atlas {
+                // Use a simple frame counter instead of SystemTime for timestamps
+                static mut FRAME_COUNTER: u64 = 0;
+                let timestamp = unsafe {
+                    FRAME_COUNTER += 1;
+                    FRAME_COUNTER as f64
+                };
                 
-                if !text_vertices.is_empty() && !text_indices.is_empty() {
-                    // Get screen dimensions for NDC conversion
-                    let (screen_width, screen_height) = self.get_swapchain_extent();
-                    
-                    // Text position in screen space (top-left corner)
-                    let text_x_pixels = 10.0f32;
-                    let text_y_pixels = 30.0f32;  // Offset from top to avoid window chrome
-                    let text_scale = 1.0f32;      // 1:1 scale = 24px font height
-                    
-                    // Convert indexed geometry to triangle list with proper vertex order
-                    let mut screen_vertices: Vec<f32> = Vec::with_capacity(text_indices.len() * 4);
-                    
-                    for &index in &text_indices {
-                        let vertex = &text_vertices[index as usize];
-                        
-                        // Font-space coordinates (Y-up, origin at baseline)
-                        let local_x = vertex.position.x * text_scale;
-                        let local_y = vertex.position.y * text_scale;
-                        
-                        // Convert to screen-space (Y-down from top-left, per ARCHITECTURE.md)
-                        // Origin at top-left, Y+ goes down, measured in pixels
-                        let screen_x = text_x_pixels + local_x;
-                        let screen_y = text_y_pixels - local_y; // Font Y-up → Screen Y-down
-                        
-                        // Convert to NDC using SAME formula as blue panel (SOURCE OF TRUTH)
-                        // x_ndc = (x_screen / screen_width) * 2.0 - 1.0
-                        // y_ndc = (y_screen / screen_height) * 2.0 - 1.0
-                        let ndc_x = (screen_x / screen_width as f32) * 2.0 - 1.0;
-                        let ndc_y = (screen_y / screen_height as f32) * 2.0 - 1.0;
-                        
-                        // Pack as [pos_x, pos_y, uv_x, uv_y]
-                        screen_vertices.push(ndc_x);
-                        screen_vertices.push(ndc_y);
-                        screen_vertices.push(vertex.uv.x);
-                        screen_vertices.push(vertex.uv.y);
-                    }
-                    
-                    // Upload vertices and render text
-                    self.render_text_vertices(command_buffer, &screen_vertices)
-                        .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+                // Process button (updates state, generates events)
+                let _ui_event = self.ui_input_processor.process_button(
+                    &mut test_button,
+                    &mut self.event_system,
+                    timestamp
+                );
+                
+                // Render button
+                self.ui_renderer.update_button(&test_button, font_atlas, screen_width_f, screen_height_f);
+            }
+            
+            // Add FPS text every frame (text content changes)
+            if let Some(text) = fps_text {
+                if let Some(font_atlas) = &self.font_atlas {
+                    let text_ui = UIText {
+                        element: UIElement {
+                            position: (10.0, 30.0),
+                            size: (0.0, 0.0),
+                            anchor: Anchor::TopLeft,
+                            visible: true,
+                            z_order: 1,
+                        },
+                        text: text.to_string(),
+                        font_size: 24.0,
+                        color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+                        h_align: HorizontalAlign::Left,
+                        v_align: VerticalAlign::Top,
+                    };
+                    self.ui_renderer.update_text(&text_ui, font_atlas, screen_width_f, screen_height_f);
                 }
-            } else {
-                log::warn!("Font atlas not initialized, cannot render text");
             }
         }
+        
+        // Render all UI commands
+        let commands: Vec<_> = self.ui_renderer.get_render_commands().to_vec();
+        
+        // Batch all panels together to avoid vertex buffer overwrite
+        let mut all_panel_vertices = Vec::new();
+        let mut panel_draws: Vec<(usize, usize, crate::foundation::math::Vec4)> = Vec::new(); // (start_index, vertex_count, color)
+        
+        for command in commands.iter() {
+            match command {
+                UIRenderCommand::Panel { vertices, color } => {
+                    let start = all_panel_vertices.len();
+                    all_panel_vertices.extend_from_slice(vertices);
+                    panel_draws.push((start, vertices.len(), *color));
+                }
+                UIRenderCommand::Text { vertices: _, color: _ } => {
+                    // Text rendering happens after panels
+                }
+            }
+        }
+        
+        // Render all panels in one batch (if any)
+        if !all_panel_vertices.is_empty() {
+            
+            // Upload all panel vertices to buffer once
+            self.upload_ui_panel_vertices(command_buffer, &all_panel_vertices)
+                .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+            
+            // Issue draw calls with different colors and vertex ranges
+            for (start, count, color) in panel_draws {
+                self.draw_ui_panel_range(command_buffer, start, count, color)
+                    .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+            }
+        }
+        
+        // Render text commands
+        for command in commands.into_iter() {
+            if let UIRenderCommand::Text { vertices, color: _ } = command {
+                // Convert UIVertex to flat f32 array for render_text_vertices
+                let mut flat_vertices = Vec::with_capacity(vertices.len() * 4);
+                for vertex in &vertices {
+                    flat_vertices.push(vertex.position[0]);
+                    flat_vertices.push(vertex.position[1]);
+                    flat_vertices.push(vertex.uv[0]);
+                    flat_vertices.push(vertex.uv[1]);
+                }
+                self.render_text_vertices(command_buffer, &flat_vertices)
+                    .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
+            }
+        }
+        
+        // Mark UI rendering complete (resets dirty flag)
+        self.ui_renderer.end_frame();
         
         Ok(())
     }
@@ -1393,23 +1519,30 @@ impl VulkanRenderer {
         &mut self,
         texture_handle: crate::render::resources::materials::TextureHandle,
     ) -> Result<vk::DescriptorSet, Box<dyn std::error::Error>> {
+        log::info!("[RENDERER] create_material_descriptor_set_with_texture called with texture {:?}", texture_handle);
+        
         // Allocate a new descriptor set
         let layouts = vec![self.ubo_manager.material_descriptor_set_layout()];
+        log::info!("[RENDERER] About to build alloc_info");
         let alloc_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(self.resource_manager.get_descriptor_pool())
             .set_layouts(&layouts);
 
+        log::info!("[RENDERER] About to allocate descriptor sets");
         let descriptor_sets = unsafe {
             self.context.raw_device().allocate_descriptor_sets(&alloc_info)
                 .map_err(|e| format!("Failed to allocate descriptor set: {:?}", e))?
         };
         
+        log::info!("[RENDERER] Descriptor sets allocated successfully");
         let descriptor_set = descriptor_sets[0];
         
         // Get the texture from resource manager
+        log::info!("[RENDERER] Getting texture from resource manager");
         let texture = self.resource_manager.get_loaded_texture(texture_handle.0 as usize)
             .ok_or("Texture not found in resource manager")?;
         
+        log::info!("[RENDERER] Building buffer and image infos");
         // Material UBO buffer info - use actual size of StandardMaterialUBO
         use crate::render::resources::materials::StandardMaterialUBO;
         let material_ubo_size = std::mem::size_of::<StandardMaterialUBO>() as vk::DeviceSize;
@@ -1433,6 +1566,11 @@ impl VulkanRenderer {
             .sampler(self.resource_manager.default_white_texture().sampler())
             .build();
         
+        // Keep arrays alive - CRITICAL for avoiding dangling pointers!
+        let material_buffer_infos = [material_buffer_info];
+        let base_color_infos = [base_color_image_info];
+        let default_infos = [default_image_info];
+        
         let descriptor_writes = vec![
             // Binding 0: Material UBO
             vk::WriteDescriptorSet::builder()
@@ -1440,7 +1578,7 @@ impl VulkanRenderer {
                 .dst_binding(0)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(&[material_buffer_info])
+                .buffer_info(&material_buffer_infos)
                 .build(),
             // Binding 1: Base color texture (custom texture)
             vk::WriteDescriptorSet::builder()
@@ -1448,7 +1586,7 @@ impl VulkanRenderer {
                 .dst_binding(1)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&[base_color_image_info])
+                .image_info(&base_color_infos)
                 .build(),
             // Binding 2: Normal map (default)
             vk::WriteDescriptorSet::builder()
@@ -1456,7 +1594,7 @@ impl VulkanRenderer {
                 .dst_binding(2)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&[default_image_info])
+                .image_info(&default_infos)
                 .build(),
             // Binding 3: Metallic/roughness (default)
             vk::WriteDescriptorSet::builder()
@@ -1464,7 +1602,7 @@ impl VulkanRenderer {
                 .dst_binding(3)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&[default_image_info])
+                .image_info(&default_infos)
                 .build(),
             // Binding 4: AO (default)
             vk::WriteDescriptorSet::builder()
@@ -1472,7 +1610,7 @@ impl VulkanRenderer {
                 .dst_binding(4)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&[default_image_info])
+                .image_info(&default_infos)
                 .build(),
             // Binding 5: Emission (default)
             vk::WriteDescriptorSet::builder()
@@ -1480,7 +1618,7 @@ impl VulkanRenderer {
                 .dst_binding(5)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&[default_image_info])
+                .image_info(&default_infos)
                 .build(),
             // Binding 6: Opacity (default)
             vk::WriteDescriptorSet::builder()
@@ -1488,15 +1626,16 @@ impl VulkanRenderer {
                 .dst_binding(6)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&[default_image_info])
+                .image_info(&default_infos)
                 .build(),
         ];
         
+        log::info!("[RENDERER] About to update descriptor sets");
         unsafe {
             self.context.raw_device().update_descriptor_sets(&descriptor_writes, &[]);
         }
         
-        log::info!("Created material descriptor set {:?} with texture {:?}", descriptor_set, texture_handle);
+        log::info!("[RENDERER] Created material descriptor set {:?} with texture {:?}", descriptor_set, texture_handle);
         Ok(descriptor_set)
     }
     
@@ -1888,64 +2027,16 @@ impl VulkanRenderer {
             device.destroy_shader_module(frag_module, None);
         }
         
-        // Create vertex buffer with a quad in screen-space
-        // STEP 2: Using pixel coordinates converted to NDC
-        // Get screen dimensions
-        let (screen_width, screen_height) = self.get_swapchain_extent();
-        
-        // TODO: KNOWN ISSUE - Aspect ratio on resize
-        // The vertex buffer is created once at initialization. When window resizes,
-        // the quad becomes distorted (square -> rectangle) because NDC coordinates
-        // are based on initial screen size.
+        // Create vertex buffer for dynamic UI rendering
         // 
-        // Solutions:
-        // 1. Recreate vertex buffer on resize (detect swapchain recreation)
-        // 2. Use orthographic projection matrix in uniform buffer (proper solution)
-        // 3. Use screen dimensions in push constants and convert in vertex shader
+        // REFACTORED: No longer creating fixed-NDC vertices at initialization.
+        // UIRenderer generates vertices dynamically based on current screen dimensions.
+        // Buffer is HOST_VISIBLE | HOST_COHERENT for efficient per-frame updates.
         //
-        // For Step 2 MVP, this is acceptable. Will be fixed in Step 3+ with proper UI system.
-        
-        // Define quad in SCREEN SPACE: 50x50 pixels at bottom-left (10 pixels from edges)
-        // 
-        // COORDINATE SYSTEM (per ARCHITECTURE.md "Coordinate Systems" section):
-        // - SCREEN SPACE: Origin at TOP-LEFT (0,0), Y+ goes DOWN, measured in pixels
-        // - VULKAN NDC: With positive-height viewport, (-1,-1) is TOP-LEFT, (+1,+1) is BOTTOM-RIGHT
-        //
-        // For a bottom-left panel (10 pixels from left edge, 10 pixels from bottom edge):
-        let x_pixels = 10.0f32;
-        let y_pixels = screen_height as f32 - 50.0f32 - 10.0f32;  // Near bottom in screen space
-        let width_pixels = 50.0f32;
-        let height_pixels = 50.0f32;
-        
-        // Convert to NDC using standard formula (per ui/layout.rs::screen_to_ndc)
-        // This is the SOURCE OF TRUTH conversion:
-        // x_ndc = (x_screen / screen_width) * 2.0 - 1.0
-        // y_ndc = (y_screen / screen_height) * 2.0 - 1.0
-        //
-        // With positive viewport: screen (0,0) → NDC (-1,-1) [both top-left]
-        let x_ndc = (x_pixels / screen_width as f32) * 2.0 - 1.0;
-        let x2_ndc = ((x_pixels + width_pixels) / screen_width as f32) * 2.0 - 1.0;
-        
-        let y_ndc = (y_pixels / screen_height as f32) * 2.0 - 1.0;  // Top edge of panel
-        let y2_ndc = ((y_pixels + height_pixels) / screen_height as f32) * 2.0 - 1.0;  // Bottom edge
-        
-        #[repr(C)]
-        struct Vertex {
-            pos: [f32; 2],
-        }
-        
-        let vertices = [
-            // Triangle 1
-            Vertex { pos: [x_ndc, y_ndc] },      // Bottom-left
-            Vertex { pos: [x2_ndc, y_ndc] },     // Bottom-right
-            Vertex { pos: [x_ndc, y2_ndc] },     // Top-left
-            // Triangle 2
-            Vertex { pos: [x_ndc, y2_ndc] },     // Top-left
-            Vertex { pos: [x2_ndc, y_ndc] },     // Bottom-right
-            Vertex { pos: [x2_ndc, y2_ndc] },    // Top-right
-        ];
-        
-        let buffer_size = (std::mem::size_of::<Vertex>() * vertices.len()) as vk::DeviceSize;
+        // Allocate buffer large enough for typical UI (e.g., 100 quads = 600 vertices)
+        use crate::render::systems::ui::UIVertex;
+        let max_vertices = 600; // 100 quads * 6 vertices each
+        let buffer_size = (std::mem::size_of::<UIVertex>() * max_vertices) as vk::DeviceSize;
         
         // Create vertex buffer
         let buffer_info = vk::BufferCreateInfo::builder()
@@ -1960,7 +2051,7 @@ impl VulkanRenderer {
         
         let mem_requirements = unsafe { device.get_buffer_memory_requirements(vertex_buffer) };
         
-        // Find memory type
+        // Find memory type (HOST_VISIBLE | HOST_COHERENT)
         let memory_properties = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let mem_props = unsafe {
             self.context.instance().get_physical_device_memory_properties(self.context.physical_device().device)
@@ -1990,22 +2081,6 @@ impl VulkanRenderer {
         unsafe {
             device.bind_buffer_memory(vertex_buffer, vertex_buffer_memory, 0)
                 .map_err(VulkanError::Api)?;
-            
-            // Copy vertex data
-            let data_ptr = device.map_memory(
-                vertex_buffer_memory,
-                0,
-                buffer_size,
-                vk::MemoryMapFlags::empty(),
-            ).map_err(VulkanError::Api)?;
-            
-            std::ptr::copy_nonoverlapping(
-                vertices.as_ptr(),
-                data_ptr as *mut Vertex,
-                vertices.len(),
-            );
-            
-            device.unmap_memory(vertex_buffer_memory);
         }
         
         // Store in renderer
@@ -2013,6 +2088,7 @@ impl VulkanRenderer {
         self.ui_pipeline_layout = Some(layout);
         self.ui_vertex_buffer = Some(vertex_buffer);
         self.ui_vertex_buffer_memory = Some(vertex_buffer_memory);
+        self.ui_vertex_buffer_size = buffer_size;
         
         log::debug!("UI overlay pipeline initialized");
         
@@ -2339,6 +2415,168 @@ impl VulkanRenderer {
         self.ui_text_descriptor_set = Some(descriptor_set);
         
         log::info!("Text descriptor set created with font atlas texture");
+        Ok(())
+    }
+    
+    /// Render a UI panel with given vertices and color
+    /// 
+    /// Low-level Vulkan rendering primitive called by UIRenderer.
+    /// Uploads vertices to GPU and issues draw command.
+    fn render_ui_panel(
+        &mut self,
+        command_buffer: vk::CommandBuffer,
+        vertices: &[crate::render::systems::ui::PanelVertex],
+        color: crate::foundation::math::Vec4,
+    ) -> VulkanResult<()> {
+        use crate::render::systems::ui::PanelVertex;
+        
+        let device = self.context.raw_device();
+        
+        // Update vertex buffer with panel vertices
+        let vertex_buffer = self.ui_vertex_buffer
+            .ok_or_else(|| VulkanError::InitializationFailed("UI vertex buffer not initialized".to_string()))?;
+        let vertex_buffer_memory = self.ui_vertex_buffer_memory
+            .ok_or_else(|| VulkanError::InitializationFailed("UI vertex buffer memory not initialized".to_string()))?;
+        
+        // Ensure buffer is large enough
+        let required_size = (std::mem::size_of::<PanelVertex>() * vertices.len()) as vk::DeviceSize;
+        if required_size > self.ui_vertex_buffer_size {
+            log::warn!("UI vertex buffer too small ({} bytes needed, {} allocated)", 
+                       required_size, self.ui_vertex_buffer_size);
+            // In production, would recreate buffer here
+        }
+        
+        // Upload vertices
+        unsafe {
+            let data_ptr = device.map_memory(
+                vertex_buffer_memory,
+                0,
+                required_size,
+                vk::MemoryMapFlags::empty(),
+            ).map_err(VulkanError::Api)? as *mut PanelVertex;
+            
+            std::ptr::copy_nonoverlapping(vertices.as_ptr(), data_ptr, vertices.len());
+            
+            device.unmap_memory(vertex_buffer_memory);
+        }
+        
+        // Get pipeline resources
+        let pipeline = self.ui_pipeline
+            .ok_or_else(|| VulkanError::InitializationFailed("UI pipeline not initialized".to_string()))?;
+        let pipeline_layout = self.ui_pipeline_layout
+            .ok_or_else(|| VulkanError::InitializationFailed("UI pipeline layout not initialized".to_string()))?;
+        
+        unsafe {
+            // Bind UI pipeline
+            device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
+            
+            // Bind vertex buffer
+            device.cmd_bind_vertex_buffers(command_buffer, 0, &[vertex_buffer], &[0]);
+            
+            // Push color constant
+            let color_array = [color.x, color.y, color.z, color.w];
+            let color_bytes = std::slice::from_raw_parts(
+                color_array.as_ptr() as *const u8,
+                std::mem::size_of_val(&color_array),
+            );
+            device.cmd_push_constants(
+                command_buffer,
+                pipeline_layout,
+                vk::ShaderStageFlags::FRAGMENT,
+                0,
+                color_bytes,
+            );
+            
+            // Draw
+            device.cmd_draw(command_buffer, vertices.len() as u32, 1, 0, 0);
+        }
+        
+        Ok(())
+    }
+    
+    /// Upload all panel vertices to the vertex buffer at once
+    fn upload_ui_panel_vertices(
+        &mut self,
+        _command_buffer: vk::CommandBuffer,
+        vertices: &[crate::render::systems::ui::PanelVertex],
+    ) -> VulkanResult<()> {
+        use crate::render::systems::ui::PanelVertex;
+        
+        let device = self.context.raw_device();
+        
+        let vertex_buffer_memory = self.ui_vertex_buffer_memory
+            .ok_or_else(|| VulkanError::InitializationFailed("UI vertex buffer memory not initialized".to_string()))?;
+        
+        // Ensure buffer is large enough
+        let required_size = (std::mem::size_of::<PanelVertex>() * vertices.len()) as vk::DeviceSize;
+        if required_size > self.ui_vertex_buffer_size {
+            log::warn!("UI vertex buffer too small ({} bytes needed, {} allocated)", 
+                       required_size, self.ui_vertex_buffer_size);
+            // In production, would recreate buffer here
+            return Err(VulkanError::InvalidOperation { 
+                reason: format!("UI vertex buffer too small") 
+            });
+        }
+        
+        // Upload all vertices at once
+        unsafe {
+            let data_ptr = device.map_memory(
+                vertex_buffer_memory,
+                0,
+                required_size,
+                vk::MemoryMapFlags::empty(),
+            ).map_err(VulkanError::Api)? as *mut PanelVertex;
+            
+            std::ptr::copy_nonoverlapping(vertices.as_ptr(), data_ptr, vertices.len());
+            
+            device.unmap_memory(vertex_buffer_memory);
+        }
+        
+        Ok(())
+    }
+    
+    /// Draw a range of panel vertices with the given color
+    fn draw_ui_panel_range(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        start_vertex: usize,
+        vertex_count: usize,
+        color: crate::foundation::math::Vec4,
+    ) -> VulkanResult<()> {
+        let device = self.context.raw_device();
+        
+        let vertex_buffer = self.ui_vertex_buffer
+            .ok_or_else(|| VulkanError::InitializationFailed("UI vertex buffer not initialized".to_string()))?;
+        let pipeline = self.ui_pipeline
+            .ok_or_else(|| VulkanError::InitializationFailed("UI pipeline not initialized".to_string()))?;
+        let pipeline_layout = self.ui_pipeline_layout
+            .ok_or_else(|| VulkanError::InitializationFailed("UI pipeline layout not initialized".to_string()))?;
+        
+        unsafe {
+            // Bind UI pipeline (may already be bound, but safe to rebind)
+            device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
+            
+            // Bind vertex buffer
+            device.cmd_bind_vertex_buffers(command_buffer, 0, &[vertex_buffer], &[0]);
+            
+            // Push color constant
+            let color_array = [color.x, color.y, color.z, color.w];
+            let color_bytes = std::slice::from_raw_parts(
+                color_array.as_ptr() as *const u8,
+                std::mem::size_of_val(&color_array),
+            );
+            device.cmd_push_constants(
+                command_buffer,
+                pipeline_layout,
+                vk::ShaderStageFlags::FRAGMENT,
+                0,
+                color_bytes,
+            );
+            
+            // Draw this range
+            device.cmd_draw(command_buffer, vertex_count as u32, 1, start_vertex as u32, 0);
+        }
+        
         Ok(())
     }
     

@@ -58,7 +58,7 @@ pub struct VulkanRenderer {
     clear_color: [f32; 4],
     
     // State for multiple object command recording
-    command_recording_state: Option<CommandRecordingState>,
+    pub(crate) command_recording_state: Option<CommandRecordingState>,
     
     // Internal resource cache - hides SharedRenderingResources from applications
     mesh_cache: HashMap<u64, crate::render::SharedRenderingResources>,
@@ -103,11 +103,11 @@ pub struct VulkanRenderer {
 }
 
 /// State for recording multiple objects in a single command buffer
-struct CommandRecordingState {
-    command_buffer: vk::CommandBuffer,
-    frame_index: usize,
-    image_index: u32,
-    acquire_semaphore_handle: vk::Semaphore,
+pub(crate) struct CommandRecordingState {
+    pub(crate) command_buffer: vk::CommandBuffer,
+    pub(crate) frame_index: usize,
+    pub(crate) image_index: u32,
+    pub(crate) acquire_semaphore_handle: vk::Semaphore,
 }
 
 impl VulkanRenderer {
@@ -1030,207 +1030,6 @@ impl crate::render::RenderBackend for VulkanRenderer {
         Ok(())
     }
     
-    fn record_ui_overlay_test(&mut self, fps_text: Option<&str>) -> crate::render::BackendResult<()> {
-        use crate::render::systems::ui::{UIPanel, UIElement, Anchor, UIRenderCommand, UIText, UIButton, ButtonState, HorizontalAlign, VerticalAlign};
-        use crate::foundation::math::Vec4;
-        
-        // === Phase 1: Performance Metrics ===
-        let ui_start = Instant::now();
-        
-        // Ensure UI pipeline is initialized (lazy init)
-        self.ensure_ui_pipeline_initialized()
-            .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
-        
-        // If we have text to render, ensure text pipeline is initialized
-        if fps_text.is_some() {
-            self.ensure_ui_text_pipeline_initialized()
-                .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
-        }
-        
-        // Validate we have an active recording session
-        let recording_state = self.command_recording_state.as_ref()
-            .ok_or_else(|| crate::render::RenderError::BackendError(
-                "No active command recording. UI rendering must happen during dynamic frame.".to_string()
-            ))?;
-        
-        let command_buffer = recording_state.command_buffer;
-        
-        // Get current screen dimensions
-        let (screen_width, screen_height) = self.get_swapchain_extent();
-        let screen_width_f = screen_width as f32;
-        let screen_height_f = screen_height as f32;
-        
-        // Check if screen changed and update dirty flag
-        let screen_changed = self.ui_renderer.check_screen_changed(screen_width, screen_height);
-        
-        // FPS text changes every frame, so always mark dirty for now
-        // TODO: Separate static UI from dynamic text to avoid full rebuild
-        let fps_changed = fps_text.is_some();
-        
-        if screen_changed || fps_changed || self.ui_renderer.is_dirty() {
-            
-            // Clear and regenerate UI commands
-            self.ui_renderer.clear();
-            
-            // Create blue panel at bottom-left (Step 2)
-            let panel = UIPanel {
-                element: UIElement {
-                    position: (10.0, screen_height_f - 60.0),
-                    size: (50.0, 50.0),
-                    anchor: Anchor::TopLeft,
-                    visible: true,
-                    z_order: 0,
-                },
-                color: Vec4::new(0.0, 0.0, 1.0, 0.7),
-                ..Default::default()
-            };
-            self.ui_renderer.update_panel(&panel, screen_width_f, screen_height_f);
-            
-            // Create test button (Step 4)
-            let mut test_button = UIButton {
-                element: UIElement {
-                    position: (100.0, 100.0),
-                    size: (150.0, 40.0),
-                    anchor: Anchor::TopLeft,
-                    visible: true,
-                    z_order: 1,
-                },
-                text: "Click Me!".to_string(),
-                font_size: 18.0,
-                state: ButtonState::Normal,
-                normal_color: Vec4::new(0.3, 0.3, 0.3, 0.9),
-                hover_color: Vec4::new(0.4, 0.5, 0.7, 0.9),
-                pressed_color: Vec4::new(0.2, 0.3, 0.5, 0.9),
-                disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
-                text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
-                border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
-                border_width: 2.0,
-                enabled: true,
-                on_click_id: Some(1),
-            };
-            
-            // Process button input (updates button state and sends events)
-            if let Some(font_atlas) = &self.font_atlas {
-                // Use a simple frame counter instead of SystemTime for timestamps
-                static mut FRAME_COUNTER: u64 = 0;
-                let timestamp = unsafe {
-                    FRAME_COUNTER += 1;
-                    FRAME_COUNTER as f64
-                };
-                
-                // Process button (updates state, generates events)
-                let _ui_event = self.ui_input_processor.process_button(
-                    &mut test_button,
-                    &mut self.event_system,
-                    timestamp
-                );
-                
-                // Render button
-                self.ui_renderer.update_button(&test_button, font_atlas, screen_width_f, screen_height_f);
-            }
-            
-            // Add FPS text every frame (text content changes)
-            if let Some(text) = fps_text {
-                if let Some(font_atlas) = &self.font_atlas {
-                    let text_ui = UIText {
-                        element: UIElement {
-                            position: (10.0, 30.0),
-                            size: (0.0, 0.0),
-                            anchor: Anchor::TopLeft,
-                            visible: true,
-                            z_order: 1,
-                        },
-                        text: text.to_string(),
-                        font_size: 24.0,
-                        color: Vec4::new(1.0, 1.0, 1.0, 1.0),
-                        h_align: HorizontalAlign::Left,
-                        v_align: VerticalAlign::Top,
-                    };
-                    self.ui_renderer.update_text(&text_ui, font_atlas, screen_width_f, screen_height_f);
-                }
-            }
-        }
-        
-        // Render all UI commands
-        let commands: Vec<_> = self.ui_renderer.get_render_commands().to_vec();
-        
-        // Batch all panels together to avoid vertex buffer overwrite
-        let mut all_panel_vertices = Vec::new();
-        let mut panel_draws: Vec<(usize, usize, crate::foundation::math::Vec4)> = Vec::new(); // (start_index, vertex_count, color)
-        
-        for command in commands.iter() {
-            match command {
-                UIRenderCommand::Panel { vertices, color } => {
-                    let start = all_panel_vertices.len();
-                    all_panel_vertices.extend_from_slice(vertices);
-                    panel_draws.push((start, vertices.len(), *color));
-                }
-                UIRenderCommand::Text { vertices: _, color: _ } => {
-                    // Text rendering happens after panels
-                }
-            }
-        }
-        
-        // Render all panels in one batch (if any)
-        if !all_panel_vertices.is_empty() {
-            
-            // Upload all panel vertices to buffer once
-            self.upload_ui_panel_vertices(command_buffer, &all_panel_vertices)
-                .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
-            
-            // Issue draw calls with different colors and vertex ranges
-            for (start, count, color) in panel_draws {
-                self.draw_ui_panel_range(command_buffer, start, count, color)
-                    .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
-            }
-        }
-        
-        // Render text commands
-        for command in commands.into_iter() {
-            if let UIRenderCommand::Text { vertices, color: _ } = command {
-                // Convert UIVertex to flat f32 array for render_text_vertices
-                let mut flat_vertices = Vec::with_capacity(vertices.len() * 4);
-                for vertex in &vertices {
-                    flat_vertices.push(vertex.position[0]);
-                    flat_vertices.push(vertex.position[1]);
-                    flat_vertices.push(vertex.uv[0]);
-                    flat_vertices.push(vertex.uv[1]);
-                }
-                self.render_text_vertices(command_buffer, &flat_vertices)
-                    .map_err(|e| crate::render::RenderError::BackendError(e.to_string()))?;
-            }
-        }
-        
-        // Mark UI rendering complete (resets dirty flag)
-        self.ui_renderer.end_frame();
-        
-        // === Phase 1: Record timing and log once per second ===
-        let ui_duration = ui_start.elapsed();
-        self.ui_timing_samples.push(ui_duration);
-        
-        // Log aggregated metrics once per second
-        let elapsed_since_log = self.ui_timing_last_log.elapsed();
-        if elapsed_since_log >= Duration::from_secs(1) && !self.ui_timing_samples.is_empty() {
-            let count = self.ui_timing_samples.len();
-            let total: Duration = self.ui_timing_samples.iter().sum();
-            let avg = total / count as u32;
-            let min = self.ui_timing_samples.iter().min().copied().unwrap();
-            let max = self.ui_timing_samples.iter().max().copied().unwrap();
-            
-            log::info!("[UI_PERF] {} frames - Avg: {:.2}ms, Min: {:.2}ms, Max: {:.2}ms",
-                count,
-                avg.as_secs_f64() * 1000.0,
-                min.as_secs_f64() * 1000.0,
-                max.as_secs_f64() * 1000.0
-            );
-            
-            // Reset for next second
-            self.ui_timing_samples.clear();
-            self.ui_timing_last_log = Instant::now();
-        }
-        
-        Ok(())
-    }
 }
 
 impl VulkanRenderer {
@@ -1895,7 +1694,7 @@ impl VulkanRenderer {
     /// - Depth test DISABLED
     /// - Alpha blending ENABLED  
     /// - Push constants for color
-    fn ensure_ui_pipeline_initialized(&mut self) -> VulkanResult<()> {
+    pub(crate) fn ensure_ui_pipeline_initialized(&mut self) -> VulkanResult<()> {
         // Already initialized?
         if self.ui_pipeline.is_some() {
             return Ok(());
@@ -2134,7 +1933,7 @@ impl VulkanRenderer {
     /// 
     /// Similar to ensure_ui_pipeline_initialized() but with texture sampling support
     /// for font atlas rendering. Vertex format: [x, y, u, v] (4 floats per vertex).
-    fn ensure_ui_text_pipeline_initialized(&mut self) -> VulkanResult<()> {
+    pub(crate) fn ensure_ui_text_pipeline_initialized(&mut self) -> VulkanResult<()> {
         // Already initialized?
         if self.ui_text_pipeline.is_some() {
             return Ok(());
@@ -2360,7 +2159,7 @@ impl VulkanRenderer {
     /// 
     /// Loads font, rasterizes glyphs, uploads atlas texture to GPU, and creates descriptor set.
     /// This version is self-contained and doesn't require GraphicsEngine.
-    fn ensure_font_atlas_initialized_internal(&mut self) -> VulkanResult<()> {
+    pub(crate) fn ensure_font_atlas_initialized_internal(&mut self) -> VulkanResult<()> {
         if self.font_atlas.is_some() && self.ui_text_descriptor_set.is_some() {
             return Ok(());
         }
@@ -2530,7 +2329,7 @@ impl VulkanRenderer {
     }
     
     /// Upload all panel vertices to the vertex buffer at once
-    fn upload_ui_panel_vertices(
+    pub(crate) fn upload_ui_panel_vertices(
         &mut self,
         _command_buffer: vk::CommandBuffer,
         vertices: &[crate::render::systems::ui::PanelVertex],
@@ -2571,7 +2370,7 @@ impl VulkanRenderer {
     }
     
     /// Draw a range of panel vertices with the given color
-    fn draw_ui_panel_range(
+    pub(crate) fn draw_ui_panel_range(
         &self,
         command_buffer: vk::CommandBuffer,
         start_vertex: usize,
@@ -2753,6 +2552,149 @@ impl VulkanRenderer {
             // Draw vertices (vertices array has 4 floats per vertex: x, y, u, v)
             let vertex_count = (vertices.len() / 4) as u32;
             device.cmd_draw(command_buffer, vertex_count, 1, 0, 0);
+        }
+        
+        Ok(())
+    }
+    
+    /// Upload all text vertices in a single batch and issue multiple draw calls
+    /// This prevents buffer overwriting when rendering multiple text items
+    pub(crate) fn upload_text_vertices_batch(&mut self, command_buffer: vk::CommandBuffer, all_vertices: &[f32], draw_ranges: &[(usize, usize)]) -> VulkanResult<()> {
+        if all_vertices.is_empty() || draw_ranges.is_empty() {
+            return Ok(());
+        }
+        
+        let device = self.context.raw_device();
+        let buffer_size = (all_vertices.len() * std::mem::size_of::<f32>()) as vk::DeviceSize;
+        
+        // Create or resize vertex buffer if needed
+        if self.ui_text_vertex_buffer.is_none() || self.ui_text_vertex_buffer_size < buffer_size {
+            // Clean up old buffer if exists
+            if let Some(old_buffer) = self.ui_text_vertex_buffer.take() {
+                unsafe {
+                    device.destroy_buffer(old_buffer, None);
+                }
+            }
+            if let Some(old_memory) = self.ui_text_vertex_buffer_memory.take() {
+                unsafe {
+                    device.free_memory(old_memory, None);
+                }
+            }
+            
+            // Create new buffer (allocate 2x for headroom)
+            let alloc_size = buffer_size * 2;
+            
+            let buffer_info = vk::BufferCreateInfo::builder()
+                .size(alloc_size)
+                .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            
+            let buffer = unsafe {
+                device.create_buffer(&buffer_info, None)
+                    .map_err(VulkanError::Api)?
+            };
+            
+            let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+            
+            // Find HOST_VISIBLE | HOST_COHERENT memory
+            let memory_properties = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+            let mem_props = unsafe {
+                self.context.instance().get_physical_device_memory_properties(self.context.physical_device().device)
+            };
+            
+            let mut memory_type_index = None;
+            for i in 0..mem_props.memory_type_count {
+                if (mem_requirements.memory_type_bits & (1 << i)) != 0 
+                    && (mem_props.memory_types[i as usize].property_flags & memory_properties) == memory_properties 
+                {
+                    memory_type_index = Some(i);
+                    break;
+                }
+            }
+            
+            let memory_type_index = memory_type_index.ok_or(VulkanError::NoSuitableMemoryType)?;
+            
+            let alloc_info = vk::MemoryAllocateInfo::builder()
+                .allocation_size(mem_requirements.size)
+                .memory_type_index(memory_type_index);
+            
+            let memory = unsafe {
+                device.allocate_memory(&alloc_info, None)
+                    .map_err(VulkanError::Api)?
+            };
+            
+            unsafe {
+                device.bind_buffer_memory(buffer, memory, 0)
+                    .map_err(VulkanError::Api)?;
+            }
+            
+            self.ui_text_vertex_buffer = Some(buffer);
+            self.ui_text_vertex_buffer_memory = Some(memory);
+            self.ui_text_vertex_buffer_size = alloc_size;
+            
+            log::debug!("Created text vertex buffer: {} bytes", alloc_size);
+        }
+        
+        // Upload ALL vertex data at once
+        let buffer = self.ui_text_vertex_buffer.unwrap();
+        let memory = self.ui_text_vertex_buffer_memory.unwrap();
+        
+        unsafe {
+            let data_ptr = device.map_memory(memory, 0, buffer_size, vk::MemoryMapFlags::empty())
+                .map_err(VulkanError::Api)?;
+            
+            std::ptr::copy_nonoverlapping(
+                all_vertices.as_ptr(),
+                data_ptr as *mut f32,
+                all_vertices.len(),
+            );
+            
+            device.unmap_memory(memory);
+        }
+        
+        // Get text rendering resources
+        let pipeline = self.ui_text_pipeline
+            .ok_or_else(|| VulkanError::InitializationFailed("Text pipeline not initialized".to_string()))?;
+        let pipeline_layout = self.ui_text_pipeline_layout
+            .ok_or_else(|| VulkanError::InitializationFailed("Text pipeline layout not initialized".to_string()))?;
+        let descriptor_set = self.ui_text_descriptor_set
+            .ok_or_else(|| VulkanError::InitializationFailed("Text descriptor set not initialized".to_string()))?;
+        
+        unsafe {
+            // Bind text pipeline once
+            device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
+            
+            // Bind descriptor set once (font atlas texture)
+            device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline_layout,
+                0,
+                &[descriptor_set],
+                &[],
+            );
+            
+            // Push text color constant (white) - shared for all text
+            let text_color = [1.0f32, 1.0f32, 1.0f32, 1.0f32];
+            let color_bytes = std::slice::from_raw_parts(
+                text_color.as_ptr() as *const u8,
+                std::mem::size_of_val(&text_color),
+            );
+            device.cmd_push_constants(
+                command_buffer,
+                pipeline_layout,
+                vk::ShaderStageFlags::FRAGMENT,
+                0,
+                color_bytes,
+            );
+            
+            // Bind vertex buffer once
+            device.cmd_bind_vertex_buffers(command_buffer, 0, &[buffer], &[0]);
+            
+            // Issue multiple draw calls from different ranges of the same buffer
+            for (start_vertex, vertex_count) in draw_ranges {
+                device.cmd_draw(command_buffer, *vertex_count as u32, 1, *start_vertex as u32, 0);
+            }
         }
         
         Ok(())

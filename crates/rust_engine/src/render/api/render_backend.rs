@@ -172,27 +172,6 @@ pub trait RenderBackend {
     /// # Returns
     /// Result indicating successful command recording
     fn record_indexed_draw(&mut self, index_start: u32, index_count: u32, transform: &Mat4, material: &crate::render::Material) -> BackendResult<()>;
-    
-    /// Record UI overlay rendering commands (Chapter 11.4.4)
-    ///
-    /// Records UI overlay drawing commands into the current command buffer while the render pass
-    /// is still active. This implements the single render pass approach described in Chapter 11.4.4:
-    /// "Overlays are generally rendered after the primary scene, with z-testing disabled."
-    ///
-    /// This method MUST be called while a render pass is active (after `begin_render_pass()` or
-    /// during dynamic rendering, and before the render pass is ended).
-    ///
-    /// # Implementation Strategy
-    /// - Switches to UI pipeline (depth test DISABLED, alpha blend ENABLED)
-    /// - Records UI draw commands (quads, text, etc.)
-    /// - Render pass STAYS OPEN (single render pass approach)
-    ///
-    /// # Parameters
-    /// - `fps_text`: Optional FPS text to render (e.g., "FPS: 60.2")
-    ///
-    /// # Returns
-    /// Result indicating successful command recording
-    fn record_ui_overlay_test(&mut self, fps_text: Option<&str>) -> BackendResult<()>;
 }
 
 /// Window backend access trait

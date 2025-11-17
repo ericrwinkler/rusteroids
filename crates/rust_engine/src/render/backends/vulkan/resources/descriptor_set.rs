@@ -7,7 +7,7 @@
 /// # Architecture Assessment: ADVANCED RESOURCE BINDING SYSTEM
 /// 
 /// Descriptor sets are Vulkan's mechanism for binding resources (textures, buffers,
-/// samplers) to shaders. This module provides sophisticated abstractions over this
+/// samplers) to shaders. This module provides abstractions over this
 /// complex system while maintaining performance and type safety.
 /// 
 /// ## Key Responsibilities:

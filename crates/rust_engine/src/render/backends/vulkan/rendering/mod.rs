@@ -6,6 +6,7 @@ pub mod shader;
 pub mod vertex_layout;
 pub mod command_recorder;
 pub mod dynamic_coordinator;
+pub mod ui_backend;
 
 // Re-export specific types from commands to avoid ambiguity
 pub use commands::{CommandPool, ActiveRenderPass};

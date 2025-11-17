@@ -59,6 +59,7 @@ pub mod audio;
 pub mod physics;
 pub mod settings;
 pub mod events;
+pub mod ui;
 
 mod application;
 mod engine;

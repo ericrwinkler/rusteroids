@@ -162,7 +162,11 @@ impl UIRenderer {
         let text_layout = TextLayout::new(font_atlas);
         let (text_vertices, text_indices) = text_layout.layout_text(&text.text);
         
+        log::debug!("update_text: '{}' produced {} vertices, {} indices", 
+            text.text, text_vertices.len(), text_indices.len());
+        
         if text_vertices.is_empty() || text_indices.is_empty() {
+            log::warn!("update_text: No vertices generated for text '{}'", text.text);
             return; // Nothing to render
         }
         
@@ -234,8 +238,15 @@ impl UIRenderer {
         
         // Render text label centered on button
         if !button.text.is_empty() {
+            // Offset text position to center it within the button
+            let text_x = button.element.position.0 + 4.0; // Small padding from left (FIX ME, center text by length, add text positioning modes)
+            let text_y = button.element.position.1 + (button.element.size.1 / 2.0) + 8.0; // plus half font height
+            
+            let mut text_element = button.element.clone();
+            text_element.position = (text_x, text_y);
+            
             let text_ui = UIText {
-                element: button.element.clone(),
+                element: text_element,
                 text: button.text.clone(),
                 font_size: button.font_size,
                 color: button.text_color,

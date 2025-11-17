@@ -226,6 +226,13 @@ impl GraphicsEngine {
         }
     }
     
+    /// Get mutable reference to the Vulkan renderer (for UI rendering)
+    /// 
+    /// Returns None if the backend is not Vulkan
+    pub fn get_vulkan_renderer_mut(&mut self) -> Option<&mut crate::render::backends::vulkan::VulkanRenderer> {
+        self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>()
+    }
+    
     /// Begin a new frame
     ///
     /// Prepares the renderer for a new frame of rendering. Currently this is
@@ -995,13 +1002,13 @@ impl GraphicsEngine {
     ///
     /// # Arguments
     /// * `fps_text` - Optional FPS text to display (e.g., "FPS: 60.2")
-    pub fn record_ui_draws_with_text(&mut self, fps_text: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-        log::debug!("Recording UI overlay commands");
-        
-        // Delegate to backend for UI rendering
-        self.backend.record_ui_overlay_test(fps_text)?;
-        
-        log::trace!("UI overlay recording complete");
+    /// Record UI draws (DEPRECATED - use UIManager in application layer instead)
+    ///
+    /// This method is deprecated. UI rendering should now be handled by the application
+    /// layer using UIManager. See teapot_app for example usage.
+    #[deprecated(note = "Use UIManager in application layer for UI rendering")]
+    pub fn record_ui_draws_with_text(&mut self, _fps_text: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        log::warn!("record_ui_draws_with_text is deprecated. Use UIManager in application layer.");
         Ok(())
     }
 

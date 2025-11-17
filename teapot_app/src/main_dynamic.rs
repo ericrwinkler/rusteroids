@@ -146,6 +146,11 @@ pub struct DynamicTeapotApp {
     frame_count: u32,
     current_fps: f32,
     
+    // UI System (clean architecture)
+    ui_manager: rust_engine::ui::UIManager,
+    fps_label_id: rust_engine::ui::UINodeId,
+    test_button_id: rust_engine::ui::UINodeId,
+    
     // Debug tracking for UI events
     last_debug_log: Instant,
     last_mouse_pos: (f64, f64),
@@ -262,6 +267,82 @@ impl EventHandler for HoverHandler {
         
         log::info!("Created sunlight and prepared for dynamic spawning");
         
+        // Initialize UI Manager (clean architecture)
+        log::info!("Initializing UI Manager...");
+        let mut ui_manager = rust_engine::ui::UIManager::new();
+        ui_manager.set_screen_size(1200.0, 800.0);
+        
+        // Create font atlas for UI (font is in workspace root)
+        let font_path = "resources/fonts/default.ttf";
+        let font_data = std::fs::read(font_path)
+            .expect(&format!("Failed to read font file: {}", font_path));
+        let mut font_atlas = FontAtlas::new(&font_data, 24.0)
+            .expect("Failed to create font atlas");
+        font_atlas.rasterize_glyphs()
+            .expect("Failed to rasterize glyphs");
+        ui_manager.initialize_font_atlas(font_atlas);
+        
+        // Create UI elements
+        use rust_engine::ui::{UIPanel, UIText, UIButton, Anchor};
+        use rust_engine::foundation::math::Vec4;
+        
+        // Blue panel at bottom-left
+        let panel = UIPanel {
+            element: rust_engine::ui::UIElement {
+                position: (10.0, -60.0),
+                size: (50.0, 50.0),
+                anchor: Anchor::BottomLeft,
+                visible: true,
+                z_order: 0,
+            },
+            color: Vec4::new(0.0, 0.0, 1.0, 0.7),
+            ..Default::default()
+        };
+        ui_manager.add_panel(panel);
+        
+        // FPS counter
+        let fps_text = UIText {
+            element: rust_engine::ui::UIElement {
+                position: (10.0, 30.0),
+                size: (0.0, 0.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "FPS: 0.0".to_string(),
+            font_size: 24.0,
+            color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            h_align: rust_engine::ui::HorizontalAlign::Left,
+            v_align: rust_engine::ui::VerticalAlign::Top,
+        };
+        let fps_label_id = ui_manager.add_text(fps_text);
+        
+        // "Click Me!" button
+        let button = UIButton {
+            element: rust_engine::ui::UIElement {
+                position: (100.0, 100.0),
+                size: (150.0, 40.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "Click Me!".to_string(),
+            font_size: 18.0,
+            state: rust_engine::ui::ButtonState::Normal,
+            normal_color: Vec4::new(0.3, 0.3, 0.3, 0.9),
+            hover_color: Vec4::new(0.4, 0.5, 0.7, 0.9),
+            pressed_color: Vec4::new(0.2, 0.3, 0.5, 0.9),
+            disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+            text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
+            border_width: 2.0,
+            enabled: true,
+            on_click_id: Some(1),
+        };
+        let test_button_id = ui_manager.add_button(button);
+        
+        log::info!("UI Manager initialized with panel, FPS label, and button");
+        
         let now = Instant::now();
         
         Self {
@@ -302,6 +383,11 @@ impl EventHandler for HoverHandler {
             fps_update_timer: Instant::now(),
             frame_count: 0,
             current_fps: 60.0,
+            
+            // UI Manager (clean architecture)
+            ui_manager,
+            fps_label_id,
+            test_button_id,
             
             // Debug tracking
             last_debug_log: Instant::now(),
@@ -1170,18 +1256,18 @@ impl EventHandler for HoverHandler {
                         framebuffer_resized = true;
                         if width > 0 && height > 0 {
                             self.camera.set_aspect_ratio(width as f32 / height as f32);
-                            // Update UI screen size for input collision detection
-                            self.graphics_engine.update_ui_screen_size(width as f32, height as f32);
+                            // Update UI screen size
+                            self.ui_manager.set_screen_size(width as f32, height as f32);
                         }
                     }
                     WindowEvent::CursorPos(x, y) => {
                         // Update mouse position for UI
-                        self.graphics_engine.update_mouse_position(x as f32, y as f32);
+                        self.ui_manager.update_mouse_position(x as f32, y as f32);
                         self.last_mouse_pos = (x, y);
                     }
                     WindowEvent::MouseButton(button, action, _) => {
                         // Update mouse button state for UI
-                        use rust_engine::render::systems::ui::MouseButton as UIMouseButton;
+                        use rust_engine::ui::MouseButton as UIMouseButton;
                         let ui_button = match button {
                             glfw::MouseButton::Button1 => UIMouseButton::Left,
                             glfw::MouseButton::Button2 => UIMouseButton::Right,
@@ -1189,7 +1275,7 @@ impl EventHandler for HoverHandler {
                             _ => continue, // Ignore other buttons
                         };
                         let pressed = action == Action::Press;
-                        self.graphics_engine.update_mouse_button(ui_button, pressed);
+                        self.ui_manager.update_mouse_button(ui_button, pressed);
                     }
                     WindowEvent::Key(Key::Space, _, Action::Press, _) => {
                         // Dynamic spawning is automatic now - space key disabled
@@ -1222,12 +1308,6 @@ impl EventHandler for HoverHandler {
                 log::error!("Failed to render frame: {:?}", e);
                 break;
             }
-            
-            // Dispatch UI events after rendering
-            self.graphics_engine.dispatch_events();
-            
-            // Reset per-frame input state for next frame
-            self.graphics_engine.ui_begin_frame();
         }
         
         log::info!("Dynamic teapot demo completed");
@@ -1404,9 +1484,21 @@ impl EventHandler for HoverHandler {
         // Render pass stays OPEN - we switch pipeline state within same render pass
         log::debug!("Recording UI overlay commands...");
         
-        // Step 3: Display FPS text using screen-space projection mode
+        // Update FPS text
         let fps_text = format!("FPS: {:.1}", self.current_fps);
-        self.graphics_engine.record_ui_draws_with_text(Some(&fps_text))?;
+        self.ui_manager.update_text(self.fps_label_id, fps_text);
+        
+        // Update UI state
+        self.ui_manager.update(delta_time);
+        
+        // Render UI using the new clean architecture
+        if let Some(vulkan_renderer) = self.graphics_engine.get_vulkan_renderer_mut() {
+            self.ui_manager.render(vulkan_renderer)?;
+        }
+        
+        // Dispatch UI events
+        self.ui_manager.dispatch_events();
+        
         log::debug!("UI overlay commands recorded successfully");
         
         // END DYNAMIC FRAME: Close render pass, submit and present

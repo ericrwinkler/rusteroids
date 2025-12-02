@@ -171,6 +171,9 @@ impl UIManager {
                 self.input_processor.process_button(button, &mut self.event_system, timestamp);
             }
         }
+        
+        // Reset per-frame input flags AFTER processing all buttons
+        self.input_processor.reset_frame_flags();
     }
     
     /// Render UI to the backend

@@ -3,7 +3,7 @@
 //! High-level graphics API methods for dynamic object management.
 //! These methods are called by GraphicsEngine and delegate to the dynamic object systems.
 
-use crate::foundation::math::Vec3;
+use crate::foundation::math::{Vec3, Mat4};
 use crate::render::primitives::Mesh;
 use crate::render::resources::materials::Material;
 use crate::render::systems::dynamic::{
@@ -132,16 +132,15 @@ where
 /// * `position` - World position for the object
 /// * `rotation` - Rotation in radians (Euler angles)
 /// * `scale` - Scale factors for each axis
+/// * `transform` - Pre-computed model-to-world transformation matrix
 /// * `material` - Material properties for rendering
 ///
 /// # Returns
 /// Handle to the spawned object for tracking/despawning
-pub fn spawn_dynamic_object(
+pub fn allocate_from_pool(
     pool_manager: &mut Option<MeshPoolManager>,
     mesh_type: MeshType,
-    position: Vec3,
-    rotation: Vec3,
-    scale: Vec3,
+    transform: Mat4,
     material: Material,
 ) -> Result<DynamicObjectHandle, SpawnerError> {
     // Ensure pool system is initialized
@@ -150,29 +149,29 @@ pub fn spawn_dynamic_object(
             reason: "Pool system not initialized - call initialize_dynamic_system() first".to_string()
         })?;
     
-    // Spawn the object in the appropriate mesh pool with the provided material
-    let handle = mgr.spawn_object(mesh_type, position, rotation, scale, material)
+    // Allocate from the appropriate mesh pool with the provided material
+    let handle = mgr.allocate_instance(mesh_type, transform, material)
         .map_err(|e| SpawnerError::InvalidParameters {
-            reason: format!("Pool manager spawn failed: {}", e)
+            reason: format!("Pool manager allocation failed: {}", e)
         })?;
     
-    log::debug!("Spawned {} object at position {:?}", mesh_type, position);
+    log::debug!("Allocated {} object from pool", mesh_type);
     Ok(handle)
 }
 
-/// Despawn a specific dynamic object by handle
+/// Free a pool instance and return it to the pool
 ///
-/// Immediately removes a dynamic object from the rendering system and returns
-/// its resources to the pool.
+/// Immediately removes the instance from rendering and returns
+/// its GPU resources to the pool for reuse.
 ///
 /// # Arguments
 /// * `pool_manager` - Mutable reference to pool manager
 /// * `mesh_type` - Type of mesh
-/// * `handle` - Handle to the object to despawn
+/// * `handle` - Handle to the pool instance to free
 ///
 /// # Returns
-/// Result indicating success or despawn failure
-pub fn despawn_dynamic_object(
+/// Result indicating success or failure
+pub fn free_pool_instance(
     pool_manager: &mut Option<MeshPoolManager>,
     mesh_type: MeshType,
     handle: DynamicObjectHandle,
@@ -182,54 +181,31 @@ pub fn despawn_dynamic_object(
             reason: "Pool system not initialized".to_string()
         })?;
     
-    mgr.despawn_object(mesh_type, handle)
+    mgr.free_instance(mesh_type, handle)
         .map_err(|e| SpawnerError::InvalidParameters {
-            reason: format!("Pool manager despawn failed: {}", e)
+            reason: format!("Pool manager free failed: {}", e)
         })?;
-    log::debug!("Despawned {} object with handle generation {}", mesh_type, handle.generation);
+    log::debug!("Freed {} pool instance with handle generation {}", mesh_type, handle.generation);
     Ok(())
 }
 
-/// Update the transform of a dynamic object
+/// Update the transform matrix of a pool instance
 ///
 /// # Arguments
 /// * `pool_manager` - Mutable reference to pool manager
-/// * `mesh_type` - The mesh type pool this object belongs to
-/// * `handle` - Handle to the dynamic object to update
-/// * `position` - New world position
-/// * `rotation` - New rotation in radians (Euler angles)
-/// * `scale` - New scale factors
-pub fn update_dynamic_object_transform(
+/// * `mesh_type` - The mesh type pool this instance belongs to
+/// * `handle` - Handle to the pool instance to update
+/// * `transform` - New pre-computed model-to-world transformation matrix
+pub fn update_pool_instance(
     pool_manager: &mut Option<MeshPoolManager>,
     mesh_type: MeshType,
     handle: DynamicObjectHandle,
-    position: Vec3,
-    rotation: Vec3,
-    scale: Vec3,
+    transform: Mat4,
 ) -> Result<(), SpawnerError> {
     if let Some(ref mut mgr) = pool_manager {
-        mgr.update_object_transform(mesh_type, handle, position, rotation, scale)
+        mgr.update_instance_transform(mesh_type, handle, transform)
             .map_err(|e| SpawnerError::InvalidParameters {
-                reason: format!("Failed to update object transform: {}", e),
-            })
-    } else {
-        Err(SpawnerError::InvalidParameters {
-            reason: "Pool manager not initialized".to_string(),
-        })
-    }
-}
-
-/// Update only the position of a dynamic object, preserving rotation and scale
-pub fn update_dynamic_object_position(
-    pool_manager: &mut Option<MeshPoolManager>,
-    mesh_type: MeshType,
-    handle: DynamicObjectHandle,
-    position: Vec3,
-) -> Result<(), SpawnerError> {
-    if let Some(ref mut mgr) = pool_manager {
-        mgr.update_object_position(mesh_type, handle, position)
-            .map_err(|e| SpawnerError::InvalidParameters {
-                reason: format!("Failed to update object position: {}", e),
+                reason: format!("Failed to update instance transform: {}", e),
             })
     } else {
         Err(SpawnerError::InvalidParameters {

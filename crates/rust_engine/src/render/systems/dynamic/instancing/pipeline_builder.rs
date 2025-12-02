@@ -64,7 +64,7 @@ pub fn create_instanced_pipeline(
     let fragment_shader = ShaderModule::from_file(
         &device,
         "target/shaders/standard_pbr_frag.spv",
-    )?;;
+    )?;
     
     // Create INSTANCED vertex input state
     // This configures per-vertex attributes (position, normal, UV) + per-instance attributes (transforms)

@@ -1,5 +1,7 @@
 //! Input management system
 
+pub mod ui_input;
+
 /// Input manager
 pub struct InputManager {
     // TODO: Implement input state tracking

@@ -22,14 +22,13 @@ use rust_engine::render::{
     VulkanRendererConfig,
     WindowHandle,
     resources::materials::{MaterialId, MaterialType},
-    GameObject,
     SharedRenderingResources,
     systems::dynamic::{DynamicObjectHandle, MeshType},
     FontAtlas,
     TextLayout,
     systems::text::{create_lit_text_material, create_unlit_text_material, TextRenderer},
 };
-use rust_engine::foundation::math::Vec3;
+use rust_engine::foundation::math::{Vec3, Mat4};
 use glfw::{Action, Key, WindowEvent};
 use std::time::Instant;
 use rand::prelude::*;
@@ -112,8 +111,7 @@ pub struct DynamicTeapotApp {
     quad_mesh: Option<Mesh>, // Simple quad for testing
     material_ids: Vec<MaterialId>,
     
-    // GameObject rendering system - unified multi-mesh architecture
-    teapot_game_objects: Vec<GameObject>,
+    // Mesh resources for rendering
     shared_resources: Option<SharedRenderingResources>, // Teapot mesh resources
     sphere_shared_resources: Option<SharedRenderingResources>, // Sphere mesh resources
     
@@ -182,40 +180,8 @@ impl DynamicTeapotApp {
             .expect("Failed to initialize UI text system");
         log::info!("UI text rendering system initialized");
         
-        // Register button click event handler
-        log::info!("Registering UI event handlers...");
-        use rust_engine::events::{Event, EventHandler, EventType};
-        
-        struct ButtonClickHandler;
-        impl EventHandler for ButtonClickHandler {
-            fn on_event(&mut self, event: &Event) -> bool {
-                if let Some(button_id) = event.get_button_id() {
-                    println!("🎉🎉🎉 BUTTON {} WAS CLICKED! 🎉🎉🎉", button_id);
-                    log::info!("🎉 Button {} was clicked!", button_id);
-                    true // Consume the event
-                } else {
-                    false
-                }
-            }
-        }
-        
-        graphics_engine.register_event_handler(
-            EventType::ButtonClicked,
-            Box::new(ButtonClickHandler)
-        );
-        
-        // Register hover event handler for debugging
-        struct HoverHandler;
-impl EventHandler for HoverHandler {
-    fn on_event(&mut self, _event: &Event) -> bool {
-        // Silently handle hover events without logging
-        false // Don't consume hover events
-    }
-}        graphics_engine.register_event_handler(
-            EventType::ButtonHoverChanged,
-            Box::new(HoverHandler)
-        );
-        log::info!("UI event handlers registered");
+        // Event handlers will be registered after UIManager is created
+        log::info!("UI text rendering system initialized");
         
         // Initialize UI screen size for input collision detection
         graphics_engine.update_ui_screen_size(1200.0, 800.0);
@@ -341,6 +307,44 @@ impl EventHandler for HoverHandler {
         };
         let test_button_id = ui_manager.add_button(button);
         
+        // Register button click event handler WITH UIManager's EventSystem
+        // (NOT GraphicsEngine - UIManager has its own EventSystem!)
+        log::info!("Registering UI event handlers...");
+        use rust_engine::events::{Event, EventHandler, EventType};
+        
+        struct ButtonClickHandler;
+        impl EventHandler for ButtonClickHandler {
+            fn on_event(&mut self, event: &Event) -> bool {
+                if let Some(button_id) = event.get_button_id() {
+                    println!("🎉🎉🎉 BUTTON {} WAS CLICKED! 🎉🎉🎉", button_id);
+                    log::info!("🎉 Button {} was clicked!", button_id);
+                    true // Consume the event
+                } else {
+                    false
+                }
+            }
+        }
+        
+        // Register with UIManager's event system (not GraphicsEngine!)
+        ui_manager.event_system_mut().register_handler(
+            EventType::ButtonClicked,
+            Box::new(ButtonClickHandler)
+        );
+        
+        // Register hover event handler for debugging
+        struct HoverHandler;
+        impl EventHandler for HoverHandler {
+            fn on_event(&mut self, _event: &Event) -> bool {
+                // Silently handle hover events without logging
+                false // Don't consume hover events
+            }
+        }
+        ui_manager.event_system_mut().register_handler(
+            EventType::ButtonHoverChanged,
+            Box::new(HoverHandler)
+        );
+        log::info!("UI event handlers registered with UIManager's EventSystem");
+        
         log::info!("UI Manager initialized with panel, FPS label, and button");
         
         let now = Instant::now();
@@ -358,7 +362,6 @@ impl EventHandler for HoverHandler {
             sphere_mesh: None,
             quad_mesh: None,
             material_ids,
-            teapot_game_objects: Vec::new(),
             shared_resources: None,
             sphere_shared_resources: None,
 
@@ -549,12 +552,15 @@ impl EventHandler for HoverHandler {
             }
         };
         
+        // Compute transform matrix (application responsibility)
+        let transform = Mat4::new_translation(&position)
+            * Mat4::from_euler_angles(0.0, 0.0, 0.0)
+            * Mat4::new_nonuniform_scaling(&Vec3::new(1.5, 1.5, 1.5));
+        
         // Spawn dynamic object with 1.5x scale (50% bigger)
-        match self.graphics_engine.spawn_dynamic_object(
+        match self.graphics_engine.allocate_from_pool(
             MeshType::Teapot,
-            position,
-            Vec3::new(0.0, 0.0, 0.0), // No initial rotation
-            Vec3::new(1.5, 1.5, 1.5), // 50% bigger
+            transform,
             selected_material.clone(),
         ) {
             Ok(dynamic_handle) => {
@@ -696,12 +702,15 @@ impl EventHandler for HoverHandler {
             alpha: 0.1, // Semi-transparent
         });
         
+        // Compute transform matrix (application responsibility)
+        let transform = Mat4::new_translation(&position)
+            * Mat4::from_euler_angles(0.0, 0.0, 0.0)
+            * Mat4::new_nonuniform_scaling(&Vec3::new(0.8, 0.8, 0.8));
+        
         // Spawn sphere using multi-mesh system with appropriate scale
-        match self.graphics_engine.spawn_dynamic_object(
+        match self.graphics_engine.allocate_from_pool(
             MeshType::Sphere,
-            position,
-            Vec3::new(0.0, 0.0, 0.0), // No rotation
-            Vec3::new(0.8, 0.8, 0.8), // Larger sphere scale for visible light markers
+            transform,
             sphere_material,
         ) {
             Ok(handle) => {
@@ -737,7 +746,7 @@ impl EventHandler for HoverHandler {
                     log::info!("Despawned old teapot entity (lived {:.1}s)", elapsed);
                 }
                 if let Some(handle) = instance.dynamic_handle {
-                    if let Err(e) = self.graphics_engine.despawn_dynamic_object(MeshType::Teapot, handle) {
+                    if let Err(e) = self.graphics_engine.free_pool_instance(MeshType::Teapot, handle) {
                         log::warn!("Failed to despawn old teapot: {}", e);
                     } else {
                         log::info!("Despawned old teapot (lived {:.1}s, over limit)", elapsed);
@@ -764,7 +773,7 @@ impl EventHandler for HoverHandler {
                 
                 // Also despawn the sphere marker if it exists
                 if let Some(sphere_handle) = instance.sphere_handle {
-                    if let Err(e) = self.graphics_engine.despawn_dynamic_object(MeshType::Sphere, sphere_handle) {
+                    if let Err(e) = self.graphics_engine.free_pool_instance(MeshType::Sphere, sphere_handle) {
                         log::warn!("Failed to despawn light sphere marker: {}", e);
                     } else {
                         log::trace!("Despawned sphere marker for old light");
@@ -1181,11 +1190,13 @@ impl EventHandler for HoverHandler {
         )?;
         
         // Spawn at origin
-        let test_text_handle = self.graphics_engine.spawn_dynamic_object(
+        let transform = Mat4::new_translation(&Vec3::new(0.0, 0.0, 0.0))
+            * Mat4::from_euler_angles(0.0, 0.0, 0.0)
+            * Mat4::new_nonuniform_scaling(&Vec3::new(0.05, 0.05, 0.05));
+        
+        let test_text_handle = self.graphics_engine.allocate_from_pool(
             MeshType::TextQuad,
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.05, 0.05, 0.05),
+            transform,
             test_text_material,
         )?;
         
@@ -1213,11 +1224,13 @@ impl EventHandler for HoverHandler {
         )?;
         
         // Position unlit text at (5, 2, 0) - to the right
-        let unlit_text_handle = self.graphics_engine.spawn_dynamic_object(
+        let transform = Mat4::new_translation(&Vec3::new(5.0, 2.0, 0.0))
+            * Mat4::from_euler_angles(0.0, 0.0, 0.0)
+            * Mat4::new_nonuniform_scaling(&Vec3::new(0.05, 0.05, 0.05));
+        
+        let unlit_text_handle = self.graphics_engine.allocate_from_pool(
             MeshType::Cube,
-            Vec3::new(5.0, 2.0, 0.0),
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.05, 0.05, 0.05),
+            transform,
             unlit_text_material,
         )?;
         
@@ -1410,21 +1423,25 @@ impl EventHandler for HoverHandler {
                     let scale_vec = Vec3::new(combined_scale, combined_scale, combined_scale);
                     
                     // Update both position and scale
-                    if let Err(e) = self.graphics_engine.update_dynamic_object_transform(
+                    let transform = Mat4::new_translation(&light_instance.current_position)
+                        * Mat4::from_euler_angles(0.0, 0.0, 0.0)
+                        * Mat4::new_nonuniform_scaling(&scale_vec);
+                    
+                    if let Err(e) = self.graphics_engine.update_pool_instance(
                         MeshType::Sphere,
                         sphere_handle,
-                        light_instance.current_position,
-                        Vec3::new(0.0, 0.0, 0.0), // No rotation
-                        scale_vec,
+                        transform,
                     ) {
                         log::warn!("Failed to update sphere marker transform: {}", e);
                     }
                 } else {
                     // Fallback to position-only update if light component not found
-                    if let Err(e) = self.graphics_engine.update_dynamic_object_position(
+                    let transform = Mat4::new_translation(&light_instance.current_position);
+                    
+                    if let Err(e) = self.graphics_engine.update_pool_instance(
                         MeshType::Sphere,
                         sphere_handle,
-                        light_instance.current_position,
+                        transform,
                     ) {
                         log::warn!("Failed to update sphere marker position: {}", e);
                     }
@@ -1463,7 +1480,7 @@ impl EventHandler for HoverHandler {
         let delta_time = 0.016; // Approximate 60 FPS delta time
         
         // BEGIN DYNAMIC FRAME: Setup and lifecycle updates
-        self.graphics_engine.begin_dynamic_frame(delta_time)?;
+        self.graphics_engine.begin_dynamic_frame()?;
         
         // Set camera for the frame (this needs to be done before any rendering)
         self.graphics_engine.set_camera(&self.camera);

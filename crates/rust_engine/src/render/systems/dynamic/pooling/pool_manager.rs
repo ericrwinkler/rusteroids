@@ -4,7 +4,7 @@
 //! Each mesh type gets its own dedicated pool to enable perfect batching with minimal
 //! state changes.
 
-use crate::foundation::math::Vec3;
+use crate::foundation::math::{Vec3, Mat4};
 use crate::render::backends::vulkan::{VulkanContext, VulkanError};
 use crate::render::resources::materials::{Material, TextureHandle};
 use crate::render::systems::dynamic::{
@@ -282,31 +282,36 @@ impl MeshPoolManager {
     /// * `lifetime` - How long the object should live (seconds)
     ///
     /// # Returns
+    /// Allocate an instance from the pool with a pre-computed transform
     ///
-    /// * `Ok(DynamicObjectHandle)` - Handle to the spawned object
-    /// * `Err(PoolManagerError)` - Spawning failed
-    pub fn spawn_object(
+    /// # Arguments
+    ///
+    /// * `mesh_type` - Which mesh type pool to allocate from
+    /// * `transform` - Pre-computed model-to-world transformation matrix
+    /// * `material` - Material properties for rendering
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(DynamicObjectHandle)` - Handle to the allocated instance
+    /// * `Err(PoolManagerError)` - Allocation failed
+    pub fn allocate_instance(
         &mut self,
         mesh_type: MeshType,
-        position: Vec3,
-        rotation: Vec3,
-        scale: Vec3,
+        transform: Mat4,
         material: Material,
     ) -> Result<DynamicObjectHandle, PoolManagerError> {
         let pool_resources = self.pools.get_mut(&mesh_type)
             .ok_or(PoolManagerError::PoolNotFound { mesh_type })?;
         
-        let spawn_params = DynamicSpawnParams::new(
-            position,
-            rotation,
-            scale,
+        let spawn_params = DynamicSpawnParams::from_matrix(
+            transform,
             material,
         );
         
         let handle = pool_resources.manager.spawn_object(spawn_params)
             .map_err(|err| PoolManagerError::PoolOperationFailed {
                 mesh_type,
-                operation: "spawn_object".to_string(),
+                operation: "allocate_instance".to_string(),
                 reason: err.to_string(),
             })?;
         
@@ -328,7 +333,7 @@ impl MeshPoolManager {
     ///
     /// * `Ok(())` - Object despawned successfully
     /// * `Err(PoolManagerError)` - Despawning failed
-    pub fn despawn_object(
+    pub fn free_instance(
         &mut self,
         mesh_type: MeshType,
         handle: DynamicObjectHandle,
@@ -339,7 +344,7 @@ impl MeshPoolManager {
         pool_resources.manager.despawn_object(handle)
             .map_err(|err| PoolManagerError::PoolOperationFailed {
                 mesh_type,
-                operation: "despawn_object".to_string(),
+                operation: "free_instance".to_string(),
                 reason: err.to_string(),
             })?;
         
@@ -470,7 +475,9 @@ impl MeshPoolManager {
                     
                     if is_transparent {
                         // Calculate view-space depth for sorting
-                        let to_object = render_data.position - camera_position;
+                        // Extract position from transform matrix
+                        let position = render_data.transform.column(3).xyz();
+                        let to_object = position - camera_position;
                         let depth = to_object.dot(&camera_forward);
                         
                         transparent_objects.push(TransparentObjectInfo {
@@ -684,28 +691,25 @@ impl MeshPoolManager {
     
     /// Update the transform of a specific dynamic object
     ///
-    /// Updates the position, rotation, and scale of an object identified by its handle.
+    /// Updates the transform matrix of an object identified by its handle.
     /// The mesh type is used to locate the correct pool.
+    /// Application is responsible for computing the transform matrix from components.
     ///
     /// # Arguments
     /// * `mesh_type` - The type of mesh (determines which pool to search)
     /// * `handle` - Unique handle identifying the object
-    /// * `position` - New position in world coordinates
-    /// * `rotation` - New rotation angles in radians (x, y, z)
-    /// * `scale` - New scale factor for each axis
+    /// * `transform` - New transform matrix in world coordinates
     ///
     /// # Returns
     /// Result indicating success or failure with specific error details
-    pub fn update_object_transform(
+    pub fn update_instance_transform(
         &mut self,
         mesh_type: MeshType,
         handle: DynamicObjectHandle,
-        position: Vec3,
-        rotation: Vec3,
-        scale: Vec3,
+        transform: Mat4,
     ) -> Result<(), DynamicObjectError> {
         if let Some(pool_resources) = self.pools.get_mut(&mesh_type) {
-            pool_resources.manager.update_object_transform(handle, position, rotation, scale)
+            pool_resources.manager.update_instance_transform(handle, transform)
         } else {
             Err(DynamicObjectError::ResourceCreationFailed(
                 format!("No pool found for mesh type: {:?}", mesh_type)
@@ -713,31 +717,6 @@ impl MeshPoolManager {
         }
     }
 
-    /// Update only the position of a dynamic object, preserving rotation and scale.
-    ///
-    /// The mesh type is used to locate the correct pool.
-    ///
-    /// # Arguments
-    /// * `mesh_type` - The type of mesh (determines which pool to search)
-    /// * `handle` - Unique handle identifying the object
-    /// * `position` - New position in world coordinates
-    ///
-    /// # Returns
-    /// Result indicating success or failure with specific error details
-    pub fn update_object_position(
-        &mut self,
-        mesh_type: MeshType,
-        handle: DynamicObjectHandle,
-        position: Vec3,
-    ) -> Result<(), DynamicObjectError> {
-        if let Some(pool_resources) = self.pools.get_mut(&mesh_type) {
-            pool_resources.manager.update_object_position(handle, position)
-        } else {
-            Err(DynamicObjectError::ResourceCreationFailed(
-                format!("No pool found for mesh type: {:?}", mesh_type)
-            ))
-        }
-    }
 }
 
 impl Default for MeshPoolManager {
@@ -773,10 +752,10 @@ pub fn create_spawn_params(
         ..Default::default()
     });
     
-    DynamicSpawnParams::new(
-        position,
-        rotation,
-        scale,
-        material,
-    )
+    // Build transform matrix from components
+    let transform = Mat4::new_translation(&position)
+        * Mat4::from_euler_angles(rotation.x, rotation.y, rotation.z)
+        * Mat4::new_nonuniform_scaling(&scale);
+    
+    DynamicSpawnParams::from_matrix(transform, material)
 }

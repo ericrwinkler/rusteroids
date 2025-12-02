@@ -17,6 +17,9 @@ pub mod state;
 /// Core Vulkan types and utilities
 pub mod core;
 
+/// Per-object uniform buffer data structures
+pub mod object_data;
+
 /// Main Vulkan renderer implementation
 pub mod renderer;
 
@@ -43,6 +46,9 @@ pub use rendering::render_pass::RenderPass;
 pub use rendering::commands::{CommandPool, CommandRecorder as VulkanCommandRecorder, ActiveRenderPass};
 pub use rendering::command_recorder::CommandRecorder;
 pub use rendering::vertex_layout::VulkanVertexLayout;
+
+// Re-export object data structures
+pub use object_data::ObjectUBO;
 
 // Re-export state types
 pub use state::framebuffer::Framebuffer;

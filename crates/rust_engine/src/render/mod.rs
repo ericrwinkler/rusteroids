@@ -26,6 +26,7 @@
 // Public modules for application use
 pub mod window;
 pub mod api;
+pub mod commands;
 
 // Core primitives
 pub mod primitives;
@@ -51,6 +52,7 @@ pub use window::WindowHandle;
 pub use primitives::{Mesh, Vertex, CoordinateSystem, CoordinateConverter, Camera};
 pub use resources::materials::{Material, MaterialType, MaterialId, PipelineType, AlphaMode};
 pub use systems::lighting::{Light, LightType, LightingEnvironment};
+pub use systems::dynamic::{MeshType, DynamicObjectHandle};
 pub use systems::text::{
     FontAtlas, GlyphInfo, TextLayout, TextVertex, TextBounds, text_vertices_to_mesh,
     create_lit_text_material, create_unlit_text_material,
@@ -73,19 +75,17 @@ pub use resources::pipelines::{
     BlendMode, RenderPriority, PolygonMode, DepthBiasConfig,
 };
 pub use resources::shared::{RenderQueue, RenderCommand, CommandType, RenderCommandId};
-pub use resources::shared::{GameObject, ObjectUBO, cleanup_game_object};
+pub use resources::shared::ObjectUBO;  // Legitimate rendering data structure
 #[deprecated(since = "0.1.0", note = "SharedRenderingResources is now internal - use MeshHandle/MaterialHandle instead")]
 pub use resources::shared::{SharedRenderingResources, SharedRenderingResourcesBuilder};
 pub use systems::batching::{BatchRenderer, RenderBatch, BatchError, BatchStats, BatchResult};
+pub use commands::{SimpleRenderCommand, SimpleRenderBatch};
 
 use thiserror::Error;
 // REMOVED: Engine coupling for cleaner library abstraction
 // use crate::engine::{RendererConfig, WindowConfig}; 
 use crate::foundation::math::{Vec3, Mat4, Mat4Ext};
-use crate::render::systems::dynamic::{
-    MeshPoolManager, MeshType, DynamicObjectHandle,
-    SpawnerError
-};
+use crate::render::systems::dynamic::MeshPoolManager;
 
 /// # Graphics Engine
 ///
@@ -117,10 +117,6 @@ pub struct GraphicsEngine {
     /// Current lighting environment
     /// FIXME: Should be integrated with scene management system
     current_lighting: Option<LightingEnvironment>,
-    
-    /// Frame counter for debugging and performance tracking
-    /// FIXME: Should be optional debug feature, not core renderer responsibility
-    frame_count: u64,
     
     /// Dynamic object pool management system for temporary objects
     /// Manages multiple single-mesh pools for optimal rendering performance
@@ -161,7 +157,6 @@ impl GraphicsEngine {
             backend: Box::new(vulkan_renderer),
             current_camera: None,
             current_lighting: None,
-            frame_count: 0,
             pool_manager: None, // Will be initialized when first needed
         })
     }
@@ -183,8 +178,12 @@ impl GraphicsEngine {
     
     /// Register an event handler for UI events
     ///
-    /// Registers a handler that will be called when events of the specified type occur.
-    /// Handlers are called in registration order and can consume events to stop propagation.
+    /// DEPRECATED: Event handling should be done through the input system, not the renderer.
+    /// Use `InputSystem` or application-level event handling instead.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Event handling moved to input system. Renderer should not process events."
+    )]
     pub fn register_event_handler(&mut self, event_type: crate::events::EventType, handler: Box<dyn crate::events::EventHandler>) {
         if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
             vulkan_backend.register_event_handler(event_type, handler);
@@ -192,6 +191,13 @@ impl GraphicsEngine {
     }
     
     /// Update mouse position for UI input processing
+    ///
+    /// DEPRECATED: Mouse input handling should be done through the input system.
+    /// Use `InputSystem::update_mouse_position()` instead.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Mouse handling moved to input system. Renderer should not track input state."
+    )]
     pub fn update_mouse_position(&mut self, x: f32, y: f32) {
         if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
             vulkan_backend.update_mouse_position(x, y);
@@ -199,6 +205,13 @@ impl GraphicsEngine {
     }
     
     /// Update mouse button state for UI input processing
+    ///
+    /// DEPRECATED: Mouse input handling should be done through the input system.
+    /// Use `InputSystem::update_mouse_button()` instead.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Mouse handling moved to input system. Renderer should not track input state."
+    )]
     pub fn update_mouse_button(&mut self, button: crate::render::systems::ui::MouseButton, pressed: bool) {
         if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
             vulkan_backend.update_mouse_button(button, pressed);
@@ -213,6 +226,13 @@ impl GraphicsEngine {
     }
     
     /// Begin new frame for UI input processing
+    ///
+    /// DEPRECATED: UI frame management and input processing should be handled separately.
+    /// Use the UI system's frame management independently from rendering.
+    #[deprecated(
+        since = "0.2.0",
+        note = "UI frame management moved out of renderer. Use UI system directly."
+    )]
     pub fn ui_begin_frame(&mut self) {
         if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
             vulkan_backend.ui_begin_frame();
@@ -220,6 +240,13 @@ impl GraphicsEngine {
     }
     
     /// Dispatch all pending UI events
+    ///
+    /// DEPRECATED: Event handling should be done through the application's event system.
+    /// Renderer should not manage event dispatch.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Event dispatch moved to input/event system. Renderer should not handle events."
+    )]
     pub fn dispatch_events(&mut self) {
         if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
             vulkan_backend.dispatch_events();
@@ -244,7 +271,7 @@ impl GraphicsEngine {
     pub fn begin_frame(&mut self) {
         // FIXME: Frame setup should be more comprehensive
         // Should handle: UBO updates, command buffer reset, sync object management
-        log::trace!("Begin frame {}", self.frame_count);
+        log::trace!("Begin frame");
     }
     
     /// Set the active camera for 3D rendering
@@ -454,74 +481,12 @@ impl GraphicsEngine {
         Ok(())
     }
     
-    /// Draw a single object using command recording (DEPRECATED - use render_objects instead)
-    /// Records draw command without immediate submission
-    #[deprecated(since = "0.1.0", note = "Use render_objects with MeshHandle for cleaner API")]
-    pub fn record_object_draw(&mut self, object: &GameObject, shared_resources: &SharedRenderingResources) -> Result<(), Box<dyn std::error::Error>> {
-        // Update per-object uniform data  
-        let model_matrix = object.get_model_matrix();
-        
-        // Set per-object uniforms (model matrix, material)
-        let model_array: [[f32; 4]; 4] = model_matrix.into();
-        self.backend.set_model_matrix(model_array);
-        
-        let material_color = object.material.get_base_color_array();
-        self.backend.set_material_color(material_color);
-        
-        // TODO: Replace with proper object ID system 
-        // For now, use the object's memory address as a unique identifier
-        let object_id = object as *const _ as usize as u32;
-        
-        // Record draw using shared resources and object ID
-        #[allow(deprecated)]
-        self.backend.record_shared_object_draw(shared_resources, object_id)
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-        
-        Ok(())
-    }
-    
     /// Submit all recorded commands and present (NEW API)
     /// This replaces individual draw_frame() calls with batched submission
     pub fn submit_commands_and_present(&mut self, _window: &mut WindowHandle) -> Result<(), Box<dyn std::error::Error>> {
         // End render pass and submit all recorded draw commands
         self.backend.end_render_pass_and_submit()
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-            
-        // Update frame counter
-        self.frame_count += 1;
-        
-        Ok(())
-    }
-    
-    /// Create a GameObject with proper GPU resource initialization (UPDATED CLEAN API)
-    /// This handles the backend resource creation using opaque handles
-    pub fn create_game_object(&mut self, position: Vec3, rotation: Vec3, scale: Vec3, material: Material) -> Result<GameObject, Box<dyn std::error::Error>> {
-        let mut game_object = GameObject::new(position, rotation, scale, material.clone());
-        
-        // Use the new clean API to create object resources
-        let resource_handle = self.backend.create_object_resources(&material)
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-        
-        // Set the resource handle in the GameObject
-        game_object.set_resource_handle(resource_handle);
-        
-        log::debug!("Created GameObject with clean backend resource handle: {:?}", resource_handle);
-        
-        Ok(game_object)
-    }
-    
-    /// Update GameObject uniforms using clean backend API
-    /// This updates the per-object uniform data (model matrix, material properties)
-    pub fn update_object_uniforms(&mut self, game_object: &GameObject) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(resource_handle) = game_object.get_resource_handle() {
-            let model_matrix = game_object.get_model_matrix();
-            let material_color = game_object.material.get_base_color_array();
-            
-            self.backend.update_object_uniforms(resource_handle, model_matrix, &material_color)
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-        } else {
-            log::warn!("GameObject has no resource handle - cannot update uniforms");
-        }
         
         Ok(())
     }
@@ -720,188 +685,124 @@ impl GraphicsEngine {
     /// - Invalid parameters: Position/scale contains NaN or infinite values
     /// - System not initialized: initialize_dynamic_system() not called
     ///
-    /// # Example Usage
-    /// ```rust
-    /// use crate::render::systems::dynamic::MeshType;
-    /// 
-    /// // Spawn a temporary teapot that lasts 3 seconds
-    /// let handle = graphics_engine.spawn_dynamic_object(
-    ///     MeshType::Teapot,               // mesh type
-    ///     Vec3::new(5.0, 2.0, -3.0),     // position
-    ///     Vec3::new(0.0, 45.0_f32.to_radians(), 0.0), // Y rotation
-    /// Spawn a dynamic object with specified parameters
-    ///
-    /// Creates a new dynamic object using the pooled resource system. Objects are
-    /// automatically managed by the pool and will be despawned when their lifetime expires.
-    /// This is the high-level API for creating temporary objects.
-    ///
-    /// # Arguments
-    /// * `position` - World position for the object
-    /// * `rotation` - Rotation in radians (Euler angles)
-    /// * `scale` - Scale factors for each axis
-    /// * `material` - Material properties for rendering
-    /// * `lifetime` - How long the object should exist (seconds)
-    ///
-    /// # Returns
-    /// Handle to the spawned object for tracking/despawning
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// # use crate::render::{GraphicsEngine, MaterialProperties};
-    /// # use crate::foundation::math::Vec3;
-    /// # let mut graphics_engine = GraphicsEngine::new(window_config)?;
-    /// // Spawn a dynamic object (uses default mesh type)
-    /// let handle = graphics_engine.spawn_dynamic_object(
-    ///     Vec3::new(0.0, 5.0, -10.0),    // position
-    ///     Vec3::new(0.0, 1.57, 0.0),     // rotation
-    ///     Vec3::new(2.0, 1.0, 2.0),      // scale
-    ///     MaterialProperties {
-    ///         base_color: [1.0, 0.5, 0.0, 1.0], // Orange
-    ///         metallic: 0.2,
-    ///         roughness: 0.8,
-    ///         emission: [0.0, 0.0, 0.0, 0.0],
-    ///     },
-    ///     3.0  // 3 second lifetime
-    /// )?;
-    /// ```
-    pub fn spawn_dynamic_object(
-        &mut self,
-        mesh_type: MeshType,
-        position: Vec3,
-        rotation: Vec3,
-        scale: Vec3,
-        material: Material,
-    ) -> Result<DynamicObjectHandle, SpawnerError> {
-        systems::dynamic::graphics_api::spawn_dynamic_object(
-            &mut self.pool_manager,
-            mesh_type,
-            position,
-            rotation,
-            scale,
-            material,
-        )
-    }
-
-    /// Despawn a specific dynamic object by handle
-    ///
-    /// Immediately removes a dynamic object from the rendering system and returns
-    /// its resources to the pool. This allows manual cleanup before the object's
-    /// lifetime expires.
-    ///
-    /// # Arguments
-    /// * `handle` - Handle to the object to despawn
-    ///
-    /// # Returns
-    /// Result indicating success or despawn failure
-    ///
-    /// # Error Conditions
-    /// - Invalid handle: Handle is not valid or object already despawned
-    /// - System not initialized: Dynamic system not properly set up
-    ///
-    /// # Example
-    /// ```rust
-    /// let handle = graphics_engine.spawn_dynamic_object(/* ... */)?;
-    /// 
-    /// // Later, manually despawn the object
-    /// graphics_engine.despawn_dynamic_object(MeshType::Teapot, handle)?;
-    /// ```
-    pub fn despawn_dynamic_object(&mut self, mesh_type: MeshType, handle: DynamicObjectHandle) -> Result<(), SpawnerError> {
-        systems::dynamic::graphics_api::despawn_dynamic_object(&mut self.pool_manager, mesh_type, handle)
-    }
-
-    /// Update the transform of a dynamic object
-    ///
-    /// Updates the position, rotation, and scale of an existing dynamic object.
-    /// This allows objects to move, rotate, and scale during their lifetime.
-    ///
-    /// # Arguments
-    /// * `mesh_type` - The mesh type pool this object belongs to
-    /// * `handle` - Handle to the dynamic object to update
-    /// * `position` - New world position
-    /// * `rotation` - New rotation in radians (Euler angles)
-    /// * `scale` - New scale factors
-    ///
-    /// # Errors
-    /// Returns `SpawnerError` if:
-    /// - Pool system not initialized
-    /// - Handle is invalid or object has been despawned
-    /// - Transform update fails
-    /// 
-    /// # Note
-    /// This is a temporary API - in Phase 3 this will be improved
-    pub fn update_dynamic_object_transform(
-        &mut self,
-        mesh_type: MeshType,
-        handle: DynamicObjectHandle,
-        position: Vec3,
-        rotation: Vec3,
-        scale: Vec3,
-    ) -> Result<(), SpawnerError> {
-        systems::dynamic::graphics_api::update_dynamic_object_transform(
-            &mut self.pool_manager,
-            mesh_type,
-            handle,
-            position,
-            rotation,
-            scale,
-        )
-    }
-
-    /// Update only the position of a dynamic object, preserving rotation and scale
-    pub fn update_dynamic_object_position(
-        &mut self,
-        mesh_type: MeshType,
-        handle: DynamicObjectHandle,
-        position: Vec3,
-    ) -> Result<(), SpawnerError> {
-        systems::dynamic::graphics_api::update_dynamic_object_position(
-            &mut self.pool_manager,
-            mesh_type,
-            handle,
-            position,
-        )
-    }
-
     /// Begin dynamic frame rendering setup
     ///
     /// Prepares the dynamic rendering system for a new frame. This should be called
-    /// once per frame before any dynamic object operations. Handles automatic
-    /// lifecycle updates and resource cleanup.
-    ///
-    /// # Arguments
-    /// * `delta_time` - Time elapsed since last frame in seconds
+    /// once per frame before any dynamic object operations.
     ///
     /// # Returns
     /// Result indicating successful frame setup
     ///  
     /// # Frame Workflow
     /// The proper dynamic rendering workflow is:
-    /// 1. `begin_dynamic_frame(delta_time)` - Setup and lifecycle updates
-    /// 2. Spawn/despawn dynamic objects as needed
+    /// 1. `begin_dynamic_frame()` - Setup command recording
+    /// 2. Update entity transforms in ECS
     /// 3. `record_dynamic_draws()` - Record drawing commands
     /// 4. `end_dynamic_frame()` - Submit and present
     ///
     /// # Example
     /// ```rust
     /// // At start of render loop
-    /// graphics_engine.begin_dynamic_frame(delta_time)?;
+    /// graphics_engine.begin_dynamic_frame()?;
     /// 
-    /// // Spawn objects as needed
-    /// if should_spawn_asteroid {
-    ///     graphics_engine.spawn_dynamic_object(/* ... */)?;
-    /// }
+    /// // ECS systems update entity transforms
     /// 
     /// // Record and submit rendering
     /// graphics_engine.record_dynamic_draws()?;
     /// graphics_engine.end_dynamic_frame(window)?;
     /// ```
-    pub fn begin_dynamic_frame(&mut self, delta_time: f32) -> Result<(), Box<dyn std::error::Error>> {
-        systems::dynamic::graphics_api::begin_dynamic_frame(&mut self.pool_manager, delta_time);
+    pub fn begin_dynamic_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         
         // Begin command recording for the frame (same as static objects)
         self.begin_command_recording()?;
         
         Ok(())
+    }
+
+    /// Allocate a dynamic instance from a mesh pool
+    ///
+    /// Allocates GPU resources for a dynamic object. The application must compute
+    /// the transform matrix from position/rotation/scale before calling this method.
+    /// This enforces separation of concerns: rendering manages GPU resources,
+    /// while application/ECS manages transform logic.
+    ///
+    /// # Arguments
+    /// * `mesh_type` - The type of mesh to spawn (Teapot, Sphere, Cube, etc.)
+    /// * `transform` - Pre-computed model-to-world transformation matrix
+    /// * `material` - Material properties for rendering
+    ///
+    /// # Returns
+    /// Handle to the allocated pool instance, or error
+    ///
+    /// # Example
+    /// ```no_run
+    /// use rust_engine::foundation::math::{Vec3, Mat4};
+    /// 
+    /// // Application computes transform
+    /// let position = Vec3::new(1.0, 2.0, 3.0);
+    /// let rotation = Vec3::new(0.0, 0.5, 0.0);
+    /// let scale = Vec3::new(1.0, 1.0, 1.0);
+    /// let transform = Mat4::new_translation(&position)
+    ///     * Mat4::from_euler_angles(rotation.x, rotation.y, rotation.z)
+    ///     * Mat4::new_nonuniform_scaling(&scale);
+    /// 
+    /// // Renderer just allocates GPU resources
+    /// let handle = graphics_engine.allocate_from_pool(mesh_type, transform, material)?;
+    /// ```
+    pub fn allocate_from_pool(
+        &mut self,
+        mesh_type: systems::dynamic::MeshType,
+        transform: crate::foundation::math::Mat4,
+        material: resources::materials::Material,
+    ) -> Result<systems::dynamic::DynamicObjectHandle, Box<dyn std::error::Error>> {
+        systems::dynamic::graphics_api::allocate_from_pool(
+            &mut self.pool_manager,
+            mesh_type,
+            transform,
+            material,
+        ).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    }
+
+    /// Free a pool instance
+    ///
+    /// Returns the allocated GPU resources back to the pool for reuse.
+    ///
+    /// # Arguments
+    /// * `mesh_type` - The type of mesh (determines which pool to free from)
+    /// * `handle` - Handle to the pool instance to free
+    pub fn free_pool_instance(
+        &mut self,
+        mesh_type: systems::dynamic::MeshType,
+        handle: systems::dynamic::DynamicObjectHandle,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        systems::dynamic::graphics_api::free_pool_instance(
+            &mut self.pool_manager,
+            mesh_type,
+            handle,
+        ).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    }
+
+    /// Update the transform of a pool instance
+    ///
+    /// Updates the transformation matrix of an existing pool instance.
+    /// Application must compute the new transform matrix.
+    ///
+    /// # Arguments
+    /// * `mesh_type` - The type of mesh (determines which pool to search)
+    /// * `handle` - Handle to the pool instance to update
+    /// * `transform` - New pre-computed model-to-world transformation matrix
+    pub fn update_pool_instance(
+        &mut self,
+        mesh_type: systems::dynamic::MeshType,
+        handle: systems::dynamic::DynamicObjectHandle,
+        transform: crate::foundation::math::Mat4,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        systems::dynamic::graphics_api::update_pool_instance(
+            &mut self.pool_manager,
+            mesh_type,
+            handle,
+            transform,
+        ).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     }
 
     /// Record dynamic object draw commands
@@ -957,7 +858,7 @@ impl GraphicsEngine {
         // Submit commands and present (same as static objects)
         self.submit_commands_and_present(window)?;
         
-        log::trace!("Dynamic frame {} completed", self.frame_count);
+        log::trace!("Dynamic frame completed");
         Ok(())
     }
 
@@ -972,46 +873,6 @@ impl GraphicsEngine {
     /// The render pass remains OPEN during this call - we switch pipeline state but stay within
     /// the same render pass (single render pass approach per the book's guidance).
     ///
-    /// # Implementation Strategy (Step 1: Proof of Concept)
-    /// For Step 1, this renders a simple semi-transparent red quad in the corner to validate:
-    /// 1. UI renders after 3D scene (command order)
-    /// 2. Z-testing is disabled (UI not occluded by 3D geometry)
-    /// 3. Alpha blending works (semi-transparency visible)
-    /// 4. Screen-space positioning works (fixed position regardless of camera)
-    ///
-    /// # Future Expansion
-    /// - Step 2: Proper orthographic projection for screen-space quads
-    /// - Step 3: Text rendering with screen-space mode
-    /// - Step 4: Button input handling
-    /// - Step 5: Full UI hierarchy system
-    ///
-    /// # Example Usage
-    /// ```rust
-    /// graphics_engine.begin_dynamic_frame(delta_time)?;
-    /// graphics_engine.record_dynamic_draws()?;      // 3D scene (depth test ON)
-    /// graphics_engine.record_ui_draws()?;           // UI overlays (depth test OFF) ← NEW
-    /// graphics_engine.end_dynamic_frame(&mut window)?; // Close render pass, submit
-    /// ```
-    pub fn record_ui_draws(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.record_ui_draws_with_text(None)
-    }
-    
-    /// Record UI overlay rendering commands with optional FPS text
-    ///
-    /// Extended version that allows passing FPS text for rendering in the UI overlay.
-    ///
-    /// # Arguments
-    /// * `fps_text` - Optional FPS text to display (e.g., "FPS: 60.2")
-    /// Record UI draws (DEPRECATED - use UIManager in application layer instead)
-    ///
-    /// This method is deprecated. UI rendering should now be handled by the application
-    /// layer using UIManager. See teapot_app for example usage.
-    #[deprecated(note = "Use UIManager in application layer for UI rendering")]
-    pub fn record_ui_draws_with_text(&mut self, _fps_text: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-        log::warn!("record_ui_draws_with_text is deprecated. Use UIManager in application layer.");
-        Ok(())
-    }
-
     /// Get dynamic system statistics
     ///
     /// Returns statistics about the dynamic object system including pool utilization,

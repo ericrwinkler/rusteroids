@@ -72,8 +72,11 @@ impl DynamicCoordinator {
                 // Sort front-to-back using view-space Z (dot product with camera forward)
                 let mut sorted_objects = objects.clone();
                 sorted_objects.sort_by(|a, b| {
-                    let to_object_a = a.1.position - camera_position;
-                    let to_object_b = b.1.position - camera_position;
+                    // Extract positions from transform matrices
+                    let pos_a = a.1.transform.column(3).xyz();
+                    let pos_b = b.1.transform.column(3).xyz();
+                    let to_object_a = pos_a - camera_position;
+                    let to_object_b = pos_b - camera_position;
                     
                     let depth_a = to_object_a.dot(&camera_forward);
                     let depth_b = to_object_b.dot(&camera_forward);
@@ -109,8 +112,11 @@ impl DynamicCoordinator {
         // Sort ALL transparent objects back-to-front using view-space Z
         // This ensures correct alpha blending across different material types
         all_transparent_objects.sort_by(|a, b| {
-            let to_object_a = a.1.1.position - camera_position;
-            let to_object_b = b.1.1.position - camera_position;
+            // Extract positions from transform matrices
+            let pos_a = a.1.1.transform.column(3).xyz();
+            let pos_b = b.1.1.transform.column(3).xyz();
+            let to_object_a = pos_a - camera_position;
+            let to_object_b = pos_b - camera_position;
             
             let depth_a = to_object_a.dot(&camera_forward);
             let depth_b = to_object_b.dot(&camera_forward);

@@ -38,7 +38,7 @@
 //! - Handle validation errors
 //! - Resource allocation failures
 
-use crate::foundation::math::Vec3;
+use crate::foundation::math::{Vec3, Mat4};
 use crate::render::systems::dynamic::{
     DynamicObjectManager, DynamicObjectHandle, DynamicSpawnParams, DynamicObjectError
 };
@@ -400,12 +400,15 @@ impl DynamicObjectSpawner for DefaultDynamicSpawner {
             });
         }
         
+        // Build transform matrix from position, rotation, scale
+        let transform = Mat4::new_translation(&params.position)
+            * Mat4::from_euler_angles(params.rotation.x, params.rotation.y, params.rotation.z)
+            * Mat4::new_nonuniform_scaling(&params.scale);
+        
         // Convert to DynamicSpawnParams (no mesh_type - single mesh pool)
-        let spawn_params = DynamicSpawnParams {
-            position: params.position,
-            rotation: params.rotation,
-            scale: params.scale,
-            material: crate::render::resources::materials::Material::standard_pbr(
+        let spawn_params = DynamicSpawnParams::from_matrix(
+            transform,
+            crate::render::resources::materials::Material::standard_pbr(
                 crate::render::resources::materials::StandardMaterialParams {
                     base_color: Vec3::new(
                         params.material.base_color[0],
@@ -423,7 +426,7 @@ impl DynamicObjectSpawner for DefaultDynamicSpawner {
                     ..Default::default()
                 }
             ),
-        };
+        );
         
         // Spawn object through manager
         let handle = self.object_manager.spawn_object(spawn_params)?;
@@ -463,11 +466,16 @@ impl DynamicObjectSpawner for DefaultDynamicSpawner {
     fn get_object_info(&self, handle: DynamicObjectHandle) -> Option<ObjectInfo> {
         let render_data = self.object_manager.get_object(handle).ok()?;
         
+        // Extract transform components from matrix
+        let position = render_data.transform.column(3).xyz();
+        // TODO: Extract rotation and scale from matrix if needed
+        // For now, we don't have rotation/scale extraction, so return defaults
+        
         Some(ObjectInfo {
             handle,
-            position: render_data.position,
-            rotation: render_data.rotation,
-            scale: render_data.scale,
+            position,
+            rotation: Vec3::zeros(),
+            scale: Vec3::new(1.0, 1.0, 1.0),
             spawn_time: render_data.spawn_time,
             entity_id: None, // TODO: Add entity_id to DynamicRenderData
             render_flags: 0, // TODO: Add render_flags to DynamicRenderData

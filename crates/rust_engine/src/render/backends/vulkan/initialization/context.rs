@@ -91,12 +91,12 @@ impl VulkanInstance {
             .iter()
             .map(|ext| CString::new(ext.as_str()).unwrap())
             .collect();
-        let raw_extensions: Vec<*const i8> = cstr_extensions
+        
+        #[allow(unused_mut)] // Mutable in debug builds for adding debug extensions
+        let mut extensions: Vec<*const i8> = cstr_extensions
             .iter()
             .map(|ext| ext.as_ptr())
             .collect();
-
-        let mut extensions = raw_extensions;
 
         // Add debug extensions for debug builds
         #[cfg(debug_assertions)]

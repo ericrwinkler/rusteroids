@@ -116,23 +116,34 @@ impl DynamicObjectHandle {
 /// Parameters for spawning a new dynamic object
 #[derive(Debug, Clone)]
 pub struct DynamicSpawnParams {
-    /// Initial world position
-    pub position: Vec3,
-    /// Initial rotation (Euler angles in radians)
-    pub rotation: Vec3,
-    /// Initial scale
-    pub scale: Vec3,
+    /// Pre-computed model-to-world transformation matrix
+    pub transform: Mat4,
     /// Material properties for this object
     pub material: Material,
 }
 
 impl DynamicSpawnParams {
-    /// Create new spawn parameters
-    pub fn new(position: Vec3, rotation: Vec3, scale: Vec3, material: Material) -> Self {
+    /// Create spawn parameters from a pre-computed transform matrix
+    pub fn from_matrix(transform: Mat4, material: Material) -> Self {
         Self {
-            position,
-            rotation,
-            scale,
+            transform,
+            material,
+        }
+    }
+    
+    /// Legacy: Create from individual transform components (deprecated)
+    /// Application should compute the matrix instead
+    #[deprecated(note = "Compute matrix in application layer, use from_matrix()")]
+    pub fn new(position: Vec3, rotation: Vec3, scale: Vec3, material: Material) -> Self {
+        let translation = Mat4::new_translation(&position);
+        let rotation_x = Mat4::rotation_x(rotation.x);
+        let rotation_y = Mat4::rotation_y(rotation.y);
+        let rotation_z = Mat4::rotation_z(rotation.z);
+        let scale_matrix = Mat4::new_nonuniform_scaling(&scale);
+        let transform = translation * rotation_z * rotation_y * rotation_x * scale_matrix;
+        
+        Self {
+            transform,
             material,
         }
     }
@@ -152,12 +163,8 @@ pub enum ResourceState {
 /// Dynamic render object data
 #[derive(Debug, Clone)]
 pub struct DynamicRenderData {
-    /// Transform information
-    pub position: Vec3,
-    /// Rotation angles in radians (Euler angles)
-    pub rotation: Vec3,
-    /// Scale factors for each axis
-    pub scale: Vec3,
+    /// Pre-computed model-to-world transformation matrix
+    pub transform: Mat4,
     
     /// Material for rendering
     pub material: Material,
@@ -174,9 +181,7 @@ pub struct DynamicRenderData {
 impl Default for DynamicRenderData {
     fn default() -> Self {
         Self {
-            position: Vec3::zeros(),
-            rotation: Vec3::zeros(),
-            scale: Vec3::new(1.0, 1.0, 1.0),
+            transform: Mat4::identity(),
             material: Material::standard_pbr(crate::render::resources::materials::StandardMaterialParams::default()),
             spawn_time: Instant::now(),
             generation: 0,
@@ -189,16 +194,7 @@ impl DynamicRenderData {
     
     /// Get the model matrix for this object
     pub fn get_model_matrix(&self) -> Mat4 {
-        let translation = Mat4::new_translation(&self.position);
-        let rotation_x = Mat4::rotation_x(self.rotation.x);
-        let rotation_y = Mat4::rotation_y(self.rotation.y);
-        let rotation_z = Mat4::rotation_z(self.rotation.z);
-        let scale_matrix = Mat4::new_nonuniform_scaling(&self.scale);
-        
-        // Apply transforms: scale -> rotation -> translation
-        let result = translation * rotation_z * rotation_y * rotation_x * scale_matrix;
-        
-        result
+        self.transform
     }
 }
 
@@ -383,9 +379,7 @@ impl DynamicObjectManager {
         if let Some((index, generation)) = self.object_pool.allocate() {
             // Initialize object data
             if let Some(object) = self.object_pool.get_mut(index) {
-                object.position = params.position;
-                object.rotation = params.rotation;
-                object.scale = params.scale;
+                object.transform = params.transform;
                 object.material = params.material;
                 object.spawn_time = Instant::now();
                 object.generation = generation;
@@ -402,7 +396,7 @@ impl DynamicObjectManager {
                 self.stats.peak_active = self.stats.current_active;
             }
             
-            log::trace!("Spawned dynamic object with handle {:?} at position {:?}", handle, params.position);
+            log::trace!("Spawned dynamic object with handle {:?}", handle);
             Ok(handle)
         } else {
             self.stats.pool_exhaustions += 1;
@@ -435,12 +429,10 @@ impl DynamicObjectManager {
         Ok(())
     }
     
-    /// Update object transform
-    pub fn update_object_transform(&mut self, handle: DynamicObjectHandle, position: Vec3, rotation: Vec3, scale: Vec3) -> Result<(), DynamicObjectError> {
+    /// Update object transform matrix
+    pub fn update_instance_transform(&mut self, handle: DynamicObjectHandle, transform: Mat4) -> Result<(), DynamicObjectError> {
         if let Some(object) = self.object_pool.get_mut_with_handle(handle) {
-            object.position = position;
-            object.rotation = rotation;
-            object.scale = scale;
+            object.transform = transform;
             Ok(())
         } else {
             Err(DynamicObjectError::InvalidHandle {
@@ -450,20 +442,8 @@ impl DynamicObjectManager {
         }
     }
 
-    /// Update only object position, preserving rotation and scale
-    pub fn update_object_position(&mut self, handle: DynamicObjectHandle, position: Vec3) -> Result<(), DynamicObjectError> {
-        if let Some(object) = self.object_pool.get_mut_with_handle(handle) {
-            object.position = position;
-            Ok(())
-        } else {
-            Err(DynamicObjectError::InvalidHandle {
-                handle,
-                reason: "Object not found or generation mismatch".to_string(),
-            })
-        }
-    }
     
-    /// Get object data by handle
+    /// Get active object count
     pub fn get_object(&self, handle: DynamicObjectHandle) -> Result<&DynamicRenderData, DynamicObjectError> {
         if let Some(object) = self.object_pool.get_with_handle(handle) {
             Ok(object)
@@ -656,10 +636,9 @@ mod tests {
     fn test_dynamic_object_manager_spawn() {
         let mut manager = DynamicObjectManager::new(10);
         
-        let params = DynamicSpawnParams::new(
-            Vec3::new(1.0, 2.0, 3.0),
-            Vec3::zeros(),
-            Vec3::new(1.0, 1.0, 1.0),
+        let transform = Mat4::new_translation(&Vec3::new(1.0, 2.0, 3.0));
+        let params = DynamicSpawnParams::from_matrix(
+            transform,
             create_test_material(),
         );
         
@@ -667,17 +646,15 @@ mod tests {
         assert_eq!(manager.active_count(), 1);
         
         let object = manager.get_object(handle).expect("Should get object");
-        assert_eq!(object.position, Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(object.transform, transform);
     }
     
     #[test]
     fn test_dynamic_object_manager_pool_exhaustion() {
         let mut manager = DynamicObjectManager::new(2);
         
-        let params = DynamicSpawnParams::new(
-            Vec3::zeros(),
-            Vec3::zeros(),
-            Vec3::new(1.0, 1.0, 1.0),
+        let params = DynamicSpawnParams::from_matrix(
+            Mat4::identity(),
             create_test_material(),
         );
         
@@ -694,10 +671,8 @@ mod tests {
     fn test_dynamic_object_manager_despawn() {
         let mut manager = DynamicObjectManager::new(10);
         
-        let params = DynamicSpawnParams::new(
-            Vec3::zeros(),
-            Vec3::zeros(),
-            Vec3::new(1.0, 1.0, 1.0),
+        let params = DynamicSpawnParams::from_matrix(
+            Mat4::identity(),
             create_test_material(),
         );
         

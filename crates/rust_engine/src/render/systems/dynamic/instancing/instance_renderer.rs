@@ -394,9 +394,10 @@ impl InstanceRenderer {
         let mut batch = InstanceBatch::new(0, 0); // Default mesh and material
         
         for (_handle, render_data) in dynamic_objects {
-            // Validate render data before processing
-            if render_data.position.x.is_nan() || render_data.position.y.is_nan() || render_data.position.z.is_nan() {
-                log::warn!("Skipping object with NaN position: {:?}", render_data.position);
+            // Validate render data before processing - extract position from transform
+            let position = render_data.transform.column(3).xyz();
+            if position.x.is_nan() || position.y.is_nan() || position.z.is_nan() {
+                log::warn!("Skipping object with NaN position: {:?}", position);
                 continue;
             }
             
@@ -1003,10 +1004,13 @@ mod tests {
         use crate::render::resources::materials::{Material, UnlitMaterialParams};
         use std::time::Instant;
         
+        // Build transform matrix
+        let transform = Mat4::new_translation(&Vec3::new(1.0, 2.0, 3.0))
+            * Mat4::from_euler_angles(0.1, 0.2, 0.3)
+            * Mat4::new_nonuniform_scaling(&Vec3::new(1.0, 1.0, 1.0));
+        
         let render_data = DynamicRenderData {
-            position: Vec3::new(1.0, 2.0, 3.0),
-            rotation: Vec3::new(0.1, 0.2, 0.3),
-            scale: Vec3::new(1.0, 1.0, 1.0),
+            transform,
             material: Material::unlit(UnlitMaterialParams {
                 color: Vec3::new(1.0, 1.0, 1.0),
                 alpha: 1.0,

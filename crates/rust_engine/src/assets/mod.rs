@@ -41,9 +41,62 @@ impl AssetManager {
     }
     
     /// Load an asset from disk
-    pub fn load<T: Asset>(&mut self, _path: &str) -> Result<AssetHandle<T>, AssetError> {
-        // TODO: Implement asset loading
-        todo!("Asset loading not yet implemented")
+    ///
+    /// # Arguments
+    /// * `path` - Path to the asset file (relative to search paths)
+    ///
+    /// # Returns
+    /// A handle to the loaded asset
+    ///
+    /// # Example
+    /// ```ignore
+    /// let audio_handle = asset_manager.load::<AudioAsset>("audio/explosion.wav")?;
+    /// ```
+    pub fn load<T: Asset>(&mut self, path: &str) -> Result<AssetHandle<T>, AssetError> {
+        use crate::foundation::collections::HandleMap;
+        use std::fs;
+        use std::path::PathBuf;
+        
+        // Try each search path
+        let mut full_path = None;
+        for search_path in &self.config.search_paths {
+            let mut candidate = PathBuf::from(search_path);
+            candidate.push(path);
+            if candidate.exists() {
+                full_path = Some(candidate);
+                break;
+            }
+        }
+        
+        // If not found in search paths, try as absolute path
+        let file_path = full_path.unwrap_or_else(|| PathBuf::from(path));
+        
+        if !file_path.exists() {
+            return Err(AssetError::NotFound(path.to_string()));
+        }
+        
+        // Read file contents
+        let bytes = fs::read(&file_path)
+            .map_err(|e| AssetError::IoError(e))?;
+        
+        // Parse asset from bytes
+        let asset = T::from_bytes(&bytes)?;
+        
+        // Get or create storage for this asset type
+        let type_id = TypeId::of::<T>();
+        let storage = self.asset_storages
+            .entry(type_id)
+            .or_insert_with(|| Box::new(HandleMap::<T>::new()));
+        
+        // Cast to the correct type
+        let typed_storage = storage
+            .downcast_mut::<HandleMap<T>>()
+            .ok_or_else(|| AssetError::StorageError("Failed to cast storage".to_string()))?;
+        
+        // Store the asset and get its handle
+        let handle_key = typed_storage.insert(asset);
+        
+        Ok(AssetHandle::new(handle_key))
     }
     
     /// Create a mesh asset from runtime data
@@ -100,6 +153,10 @@ pub enum AssetError {
     /// Failed to load asset
     #[error("Failed to load asset: {0}")]
     LoadFailed(String),
+    
+    /// Invalid asset data
+    #[error("Invalid data: {0}")]
+    InvalidData(String),
     
     /// Unsupported asset format
     #[error("Unsupported format: {0}")]

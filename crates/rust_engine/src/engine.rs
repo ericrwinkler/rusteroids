@@ -7,6 +7,7 @@ use crate::{
     assets::AssetManager,
     render::GraphicsEngine,
     input::InputManager,
+    audio::AudioSystem,
 };
 use thiserror::Error;
 
@@ -19,6 +20,9 @@ pub struct Engine {
     
     /// Asset management system
     pub assets: AssetManager,
+    
+    /// Audio system
+    pub audio: Option<AudioSystem>,
     
     /// Graphics engine
     pub graphics_engine: GraphicsEngine,
@@ -62,9 +66,26 @@ impl Engine {
         let input = InputManager::new();
         let timer = Timer::new();
         
+        // Initialize audio if enabled
+        let audio = if config.features.audio {
+            match AudioSystem::new() {
+                Ok(audio) => {
+                    log::info!("Audio system initialized");
+                    Some(audio)
+                },
+                Err(e) => {
+                    log::warn!("Failed to initialize audio system: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        
         Ok(Self {
             world,
             assets,
+            audio,
             graphics_engine,
             window,
             input,
@@ -112,6 +133,11 @@ impl Engine {
         self.input.update();
         self.assets.update().map_err(|e| EngineError::AssetError(e.to_string()))?;
         self.world.update(delta_time);
+        
+        // Update audio system
+        if let Some(audio) = &mut self.audio {
+            audio.update(delta_time);
+        }
         
         Ok(())
     }

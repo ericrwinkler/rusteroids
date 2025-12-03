@@ -40,6 +40,9 @@ image = { workspace = true }
 # Text rendering
 fontdue = "0.8"
 
+# Audio
+rodio = "0.18"
+
 # Utility
 bitflags = { workspace = true }
 slotmap = { workspace = true }

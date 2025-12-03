@@ -456,7 +456,11 @@ impl DynamicObjectManager {
     }
     
     /// Update all dynamic objects
-    pub fn update(&mut self, _delta_time: f32) {
+    /// Update the object manager - processes cleanup of manually despawned objects
+    ///
+    /// This method checks for objects marked for cleanup and removes them from the pool.
+    /// Frame timing is not a rendering concern - this just manages GPU resources.
+    pub fn update(&mut self) {
         let mut objects_to_cleanup = Vec::new();
         
         // Only clean up objects that were manually marked for cleanup
@@ -497,7 +501,7 @@ impl DynamicObjectManager {
     /// Begin frame processing
     pub fn begin_frame(&mut self) {
         // Update objects and clean up expired ones
-        self.update(0.0);
+        self.update();
     }
     
     /// End frame processing
@@ -680,7 +684,7 @@ mod tests {
         assert_eq!(manager.active_count(), 1);
         
         manager.despawn_object(handle).expect("Should despawn object");
-        manager.update(0.0); // Process cleanup
+        manager.update(); // Process cleanup
         
         assert_eq!(manager.active_count(), 0);
     }

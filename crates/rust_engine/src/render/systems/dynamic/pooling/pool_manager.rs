@@ -383,9 +383,13 @@ impl MeshPoolManager {
     /// # Arguments
     ///
     /// * `delta_time` - Time elapsed since last update (seconds)
-    pub fn update_all_pools(&mut self, delta_time: f32) {
+    /// Update all pools - processes cleanup in each pool
+    ///
+    /// This method updates each pool to process cleanup of manually despawned objects.
+    /// Frame timing is not needed - this just manages GPU resources.
+    pub fn update_all_pools(&mut self) {
         for pool_resources in self.pools.values_mut() {
-            pool_resources.manager.update(delta_time);
+            pool_resources.manager.update();
         }
         
         self.update_stats();

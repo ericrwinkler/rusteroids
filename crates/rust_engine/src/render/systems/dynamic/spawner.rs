@@ -254,13 +254,9 @@ pub trait DynamicObjectSpawner {
     
     /// Update object lifecycle (call once per frame)
     /// 
-    /// This automatically despawns objects that have exceeded their lifetime
-    /// and handles any pending cleanup operations.
-    /// 
-    /// # Arguments
-    /// 
-    /// * `delta_time` - Time elapsed since last update in seconds
-    fn update_lifecycle(&mut self, delta_time: f32);
+    /// This processes cleanup of manually despawned objects.
+    /// Frame timing is not needed - this just manages GPU resources.
+    fn update_lifecycle(&mut self);
 }
 
 /// Information about a spawned dynamic object
@@ -489,11 +485,11 @@ impl DynamicObjectSpawner for DefaultDynamicSpawner {
         stats
     }
     
-    fn update_lifecycle(&mut self, delta_time: f32) {
+    fn update_lifecycle(&mut self) {
         let initial_count = self.object_manager.active_count();
         
         // Update object manager (handles automatic despawning)
-        self.object_manager.update(delta_time);
+        self.object_manager.update();
         
         let final_count = self.object_manager.active_count();
         let auto_despawned = initial_count.saturating_sub(final_count);

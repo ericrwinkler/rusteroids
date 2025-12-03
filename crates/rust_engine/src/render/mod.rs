@@ -26,7 +26,6 @@
 // Public modules for application use
 pub mod window;
 pub mod api;
-pub mod commands;
 
 // Core primitives
 pub mod primitives;
@@ -61,10 +60,24 @@ pub use systems::text::{
 
 // DEPRECATED: These should be removed in favor of cleaner APIs
 // TODO: Remove these exports once applications migrate to new APIs
+//
 // Current overlapping patterns that should be consolidated:
 // - MaterialManager + TextureManager: Should be unified into ResourceManager
 // - SharedRenderingResources: Should be internal to backend, not exposed
+//   * Currently used internally by create_mesh_pool() for dynamic object system
+//   * Applications don't use this directly (asteroids codebase has zero usages)
+//   * Can be made private once create_mesh_pool() is refactored to use MeshHandle API
 // - BatchRenderer: Should be integrated into core renderer, not separate
+//
+// Migration Strategy:
+// 1. Refactor create_mesh_pool() to use backend.create_mesh_resource() → MeshHandle
+//    instead of create_instanced_rendering_resources() → SharedRenderingResources
+// 2. Make SharedRenderingResources pub(crate) only (internal implementation detail)
+// 3. Consider whether MaterialManager/TextureManager need public exposure or should
+//    be accessed only through GraphicsEngine methods (upload_texture_from_image_data, etc.)
+// 4. Evaluate if BatchRenderer is still needed or if dynamic pool system supersedes it
+//
+// Status: Not yet safe to remove - actively used by internal dynamic rendering system
 pub use resources::materials::{
     StandardMaterialParams, UnlitMaterialParams,
     MaterialManager, TextureManager, MaterialTextures, TextureHandle, TextureType
@@ -79,7 +92,6 @@ pub use resources::shared::ObjectUBO;  // Legitimate rendering data structure
 #[deprecated(since = "0.1.0", note = "SharedRenderingResources is now internal - use MeshHandle/MaterialHandle instead")]
 pub use resources::shared::{SharedRenderingResources, SharedRenderingResourcesBuilder};
 pub use systems::batching::{BatchRenderer, RenderBatch, BatchError, BatchStats, BatchResult};
-pub use commands::{SimpleRenderCommand, SimpleRenderBatch};
 
 use thiserror::Error;
 // REMOVED: Engine coupling for cleaner library abstraction
@@ -712,6 +724,9 @@ impl GraphicsEngine {
     /// graphics_engine.end_dynamic_frame(window)?;
     /// ```
     pub fn begin_dynamic_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        
+        // Process cleanup of manually despawned objects
+        systems::dynamic::graphics_api::begin_dynamic_frame(&mut self.pool_manager);
         
         // Begin command recording for the frame (same as static objects)
         self.begin_command_recording()?;

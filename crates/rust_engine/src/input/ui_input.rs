@@ -4,8 +4,8 @@
 //! Input processing is not a rendering concern - it belongs in the input system.
 
 use crate::render::systems::ui::components::{UIButton, ButtonState};
-use crate::render::systems::ui::layout::UILayout;
 use crate::events::{Event, EventType, EventArg, EventSystem};
+use crate::input::collision;
 
 /// Mouse button identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,8 +116,8 @@ impl UIInputProcessor {
             return None;
         }
         
-        // Check if mouse is over button
-        let is_hovered = UILayout::contains_point(
+        // Check if mouse is over button - use collision detection from input system
+        let is_hovered = collision::point_in_ui_element(
             &button.element,
             self.screen_width,
             self.screen_height,

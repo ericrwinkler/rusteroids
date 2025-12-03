@@ -57,6 +57,14 @@ impl UILayout {
     }
     
     /// Check if a point is inside an element's bounds
+    ///
+    /// # Deprecated
+    /// This method has been moved to `crate::input::collision::point_in_ui_element`.
+    /// Hit testing is an input system concern, not a rendering concern.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `crate::input::collision::point_in_ui_element` instead. Hit testing belongs in the input system."
+    )]
     pub fn contains_point(
         element: &UIElement,
         screen_width: f32,
@@ -64,11 +72,14 @@ impl UILayout {
         point_x: f32,
         point_y: f32,
     ) -> bool {
-        let (min_x, min_y, max_x, max_y) = 
-            Self::calculate_bounds(element, screen_width, screen_height);
-        
-        point_x >= min_x && point_x <= max_x && 
-        point_y >= min_y && point_y <= max_y
+        // Delegate to the input system's collision module
+        crate::input::collision::point_in_ui_element(
+            element,
+            screen_width,
+            screen_height,
+            point_x,
+            point_y,
+        )
     }
     
     /// Convert screen coordinates to normalized device coordinates (NDC)
@@ -133,6 +144,8 @@ mod tests {
     
     #[test]
     fn test_contains_point() {
+        use crate::input::collision;
+        
         let element = UIElement {
             position: (100.0, 100.0),
             size: (200.0, 100.0),
@@ -141,10 +154,10 @@ mod tests {
             z_order: 0,
         };
         
-        assert!(UILayout::contains_point(&element, 800.0, 600.0, 150.0, 150.0));
-        assert!(UILayout::contains_point(&element, 800.0, 600.0, 100.0, 100.0));
-        assert!(UILayout::contains_point(&element, 800.0, 600.0, 300.0, 200.0));
-        assert!(!UILayout::contains_point(&element, 800.0, 600.0, 50.0, 50.0));
-        assert!(!UILayout::contains_point(&element, 800.0, 600.0, 350.0, 250.0));
+        assert!(collision::point_in_ui_element(&element, 800.0, 600.0, 150.0, 150.0));
+        assert!(collision::point_in_ui_element(&element, 800.0, 600.0, 100.0, 100.0));
+        assert!(collision::point_in_ui_element(&element, 800.0, 600.0, 300.0, 200.0));
+        assert!(!collision::point_in_ui_element(&element, 800.0, 600.0, 50.0, 50.0));
+        assert!(!collision::point_in_ui_element(&element, 800.0, 600.0, 350.0, 250.0));
     }
 }

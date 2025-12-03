@@ -217,19 +217,18 @@ pub fn update_pool_instance(
 /// Begin dynamic frame rendering setup
 ///
 /// Prepares the dynamic rendering system for a new frame.
+/// Processes cleanup of manually despawned objects.
 ///
 /// # Arguments
 /// * `pool_manager` - Mutable reference to pool manager
-/// * `delta_time` - Time elapsed since last frame in seconds
 pub fn begin_dynamic_frame(
     pool_manager: &mut Option<MeshPoolManager>,
-    delta_time: f32,
 ) {
     log::trace!("Dynamic frame started");
     
     // Update pool manager to process cleanup of manually despawned objects
     if let Some(mgr) = pool_manager {
-        mgr.update_all_pools(delta_time);
+        mgr.update_all_pools();
     }
 }
 

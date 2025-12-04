@@ -1468,6 +1468,31 @@ impl VulkanRenderer {
         Ok(descriptor_set)
     }
     
+    /// Create a material descriptor set with base color AND emission textures
+    ///
+    /// Creates a descriptor set configured for materials with custom base color
+    /// and emission textures, using defaults for all other texture bindings.
+    ///
+    /// # Arguments
+    /// * `base_color_handle` - The texture to bind as base color (binding 1)
+    /// * `emission_handle` - The texture to bind as emission (binding 5)
+    ///
+    /// # Returns
+    /// A descriptor set configured with the specified textures
+    pub fn create_material_descriptor_set_with_textures(
+        &mut self,
+        base_color_handle: crate::render::resources::materials::TextureHandle,
+        emission_handle: crate::render::resources::materials::TextureHandle,
+    ) -> Result<vk::DescriptorSet, Box<dyn std::error::Error>> {
+        crate::render::backends::vulkan::resources::TextureManager::create_material_descriptor_set_with_textures(
+            &self.context,
+            &self.resource_manager,
+            &self.ubo_manager,
+            base_color_handle,
+            emission_handle,
+        )
+    }
+    
     // FIXME: LEGACY - Remove after modular pipeline system is complete
     // This assumes a single active pipeline; new system selects pipeline per-material
     /// Get the current graphics pipeline (INTERNAL) (LEGACY - will be removed)

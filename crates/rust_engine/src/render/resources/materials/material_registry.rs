@@ -137,20 +137,84 @@ impl MaterialManager {
     fn create_material_ubo(&self, material: &Material) -> VulkanResult<MaterialUBO> {
         let ubo = match &material.material_type {
             MaterialType::StandardPBR(params) => {
-                MaterialUBO::StandardPBR(StandardMaterialUBO::from_params(params))
+                let mut material_ubo = StandardMaterialUBO::from_params(params);
+                
+                // Set texture flags based on attached textures
+                material_ubo = material_ubo.with_texture_flags(
+                    material.textures.base_color.is_some(),
+                    material.textures.normal.is_some(),
+                    material.textures.metallic_roughness.is_some(),
+                    material.textures.ambient_occlusion.is_some(),
+                );
+                
+                // Set emission texture flag
+                if material.textures.emission.is_some() {
+                    material_ubo = material_ubo.with_emission_texture(true);
+                }
+                
+                // Set opacity texture flag
+                if material.textures.opacity.is_some() {
+                    material_ubo = material_ubo.with_opacity_texture(true);
+                }
+                
+                MaterialUBO::StandardPBR(material_ubo)
             }
             MaterialType::Unlit(params) => {
-                MaterialUBO::Unlit(UnlitMaterialUBO::from_params(params))
+                let mut material_ubo = UnlitMaterialUBO::from_params(params);
+                
+                // Set texture flags
+                material_ubo = material_ubo.with_texture_flags(
+                    material.textures.base_color.is_some(),
+                );
+                
+                // Set opacity texture flag
+                if material.textures.opacity.is_some() {
+                    material_ubo = material_ubo.with_opacity_texture(true);
+                }
+                
+                MaterialUBO::Unlit(material_ubo)
             }
             MaterialType::Transparent { base_material, .. } => {
                 // For transparent materials, use the base material's UBO
                 // Alpha blending is handled by the pipeline, not the UBO
                 match &**base_material {
                     MaterialType::StandardPBR(params) => {
-                        MaterialUBO::StandardPBR(StandardMaterialUBO::from_params(params))
+                        let mut material_ubo = StandardMaterialUBO::from_params(params);
+                        
+                        // Set texture flags based on attached textures
+                        material_ubo = material_ubo.with_texture_flags(
+                            material.textures.base_color.is_some(),
+                            material.textures.normal.is_some(),
+                            material.textures.metallic_roughness.is_some(),
+                            material.textures.ambient_occlusion.is_some(),
+                        );
+                        
+                        // Set emission texture flag
+                        if material.textures.emission.is_some() {
+                            material_ubo = material_ubo.with_emission_texture(true);
+                        }
+                        
+                        // Set opacity texture flag
+                        if material.textures.opacity.is_some() {
+                            material_ubo = material_ubo.with_opacity_texture(true);
+                        }
+                        
+                        MaterialUBO::StandardPBR(material_ubo)
                     }
                     MaterialType::Unlit(params) => {
-                        MaterialUBO::Unlit(UnlitMaterialUBO::from_params(params))
+                        let mut material_ubo = UnlitMaterialUBO::from_params(params);
+                        
+                        // Set texture flags
+                        material_ubo = material_ubo.with_texture_flags(
+                            material.textures.base_color.is_some(),
+                        );
+                        
+                        // Set opacity texture flag
+                        if material.textures.opacity.is_some() {
+                            material_ubo = material_ubo.with_opacity_texture(true);
+                        }
+                        
+                        MaterialUBO::Unlit(material_ubo)
                     }
                     MaterialType::Transparent { .. } => {
                         return Err(VulkanError::InitializationFailed(

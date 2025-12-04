@@ -83,7 +83,8 @@ impl ObjLoader {
                     if parts.len() >= 3 {
                         let u: f32 = parts[1].parse().map_err(|_| ObjError::ParseError("Invalid tex coord u".to_string()))?;
                         let v: f32 = parts[2].parse().map_err(|_| ObjError::ParseError("Invalid tex coord v".to_string()))?;
-                        tex_coords.push([u, v]);
+                        // Flip V coordinate for Vulkan (OpenGL uses bottom-left origin, Vulkan uses top-left)
+                        tex_coords.push([u, 1.0 - v]);
                     }
                 }
                 "f" => {

@@ -179,7 +179,150 @@ impl TextureManager {
             context.raw_device().update_descriptor_sets(&descriptor_writes, &[]);
         }
         
-        log::info!("Created material descriptor set {:?} with texture {:?}", descriptor_set, texture_handle);
+        log::info!("Created material descriptor set with custom base_color texture {:?}", texture_handle);
+        Ok(descriptor_set)
+    }
+    
+    /// Create a material descriptor set with base color AND emission textures
+    ///
+    /// This creates a descriptor set configured for a material with custom base color
+    /// and emission textures, using defaults for all other texture bindings.
+    ///
+    /// # Arguments
+    /// * `context` - Vulkan context for device access
+    /// * `resource_manager` - Resource manager for descriptor pool and textures
+    /// * `ubo_manager` - UBO manager for material UBO and descriptor set layout
+    /// * `base_color_handle` - The texture to bind as base color (binding 1)
+    /// * `emission_handle` - The texture to bind as emission (binding 5)
+    ///
+    /// # Returns
+    /// A descriptor set configured with the specified textures
+    pub fn create_material_descriptor_set_with_textures(
+        context: &VulkanContext,
+        resource_manager: &super::ResourceManager,
+        ubo_manager: &super::UboManager,
+        base_color_handle: TextureHandle,
+        emission_handle: TextureHandle,
+    ) -> Result<vk::DescriptorSet, Box<dyn std::error::Error>> {
+        // Allocate a new descriptor set
+        let layouts = vec![ubo_manager.material_descriptor_set_layout()];
+        let alloc_info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(resource_manager.get_descriptor_pool())
+            .set_layouts(&layouts);
+
+        let descriptor_sets = unsafe {
+            context.raw_device().allocate_descriptor_sets(&alloc_info)
+                .map_err(|e| format!("Failed to allocate descriptor set: {:?}", e))?
+        };
+        
+        let descriptor_set = descriptor_sets[0];
+        
+        // Get the textures from resource manager
+        let base_color_texture = resource_manager.get_loaded_texture(base_color_handle.0 as usize)
+            .ok_or("Base color texture not found in resource manager")?;
+        let emission_texture = resource_manager.get_loaded_texture(emission_handle.0 as usize)
+            .ok_or("Emission texture not found in resource manager")?;
+        
+        // Material UBO buffer info
+        let material_ubo_size = std::mem::size_of::<StandardMaterialUBO>() as vk::DeviceSize;
+        let material_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(ubo_manager.material_ubo_buffer_handle())
+            .offset(0)
+            .range(material_ubo_size)
+            .build();
+        
+        // Base color texture - custom
+        let base_color_image_info = vk::DescriptorImageInfo::builder()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(base_color_texture.image_view())
+            .sampler(base_color_texture.sampler())
+            .build();
+        
+        // Emission texture - custom
+        let emission_image_info = vk::DescriptorImageInfo::builder()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(emission_texture.image_view())
+            .sampler(emission_texture.sampler())
+            .build();
+        
+        // All other textures use default white
+        let default_image_info = vk::DescriptorImageInfo::builder()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(resource_manager.default_white_texture().image_view())
+            .sampler(resource_manager.default_white_texture().sampler())
+            .build();
+        
+        // Keep arrays alive - CRITICAL for avoiding dangling pointers!
+        let material_buffer_infos = [material_buffer_info];
+        let base_color_infos = [base_color_image_info];
+        let emission_infos = [emission_image_info];
+        let default_infos = [default_image_info];
+        
+        let descriptor_writes = vec![
+            // Binding 0: Material UBO
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(0)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(&material_buffer_infos)
+                .build(),
+            // Binding 1: Base color texture (custom)
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(1)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&base_color_infos)
+                .build(),
+            // Binding 2: Normal map (default)
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(2)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&default_infos)
+                .build(),
+            // Binding 3: Metallic/roughness (default)
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(3)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&default_infos)
+                .build(),
+            // Binding 4: AO (default)
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(4)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&default_infos)
+                .build(),
+            // Binding 5: Emission (custom)
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(5)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&emission_infos)
+                .build(),
+            // Binding 6: Opacity (default)
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(6)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&default_infos)
+                .build(),
+        ];
+        
+        unsafe {
+            context.raw_device().update_descriptor_sets(&descriptor_writes, &[]);
+        }
+        
+        log::info!("Created material descriptor set with custom base_color {:?} and emission {:?} textures", 
+                   base_color_handle, emission_handle);
         Ok(descriptor_set)
     }
 }

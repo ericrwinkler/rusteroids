@@ -19,12 +19,14 @@ pub enum MeshType {
     /// Text quad mesh - for rendering text strings
     /// Each text string generates a unique mesh with positioned quads
     TextQuad,
+    /// Spaceship mesh - player or enemy ships
+    Spaceship,
 }
 
 impl MeshType {
     /// Get all available mesh types
     pub fn all() -> &'static [MeshType] {
-        &[MeshType::Teapot, MeshType::Sphere, MeshType::Cube, MeshType::TextQuad]
+        &[MeshType::Teapot, MeshType::Sphere, MeshType::Cube, MeshType::TextQuad, MeshType::Spaceship]
     }
     
     /// Get the default mesh model path for this mesh type
@@ -34,6 +36,7 @@ impl MeshType {
             MeshType::Sphere => "models/sphere.obj",
             MeshType::Cube => "models/cube.obj",
             MeshType::TextQuad => "", // Text quads are generated procedurally, not loaded
+            MeshType::Spaceship => "models/spaceship_simple.obj",
         }
     }
     
@@ -44,6 +47,7 @@ impl MeshType {
             MeshType::Sphere => "Sphere", 
             MeshType::Cube => "Cube",
             MeshType::TextQuad => "TextQuad",
+            MeshType::Spaceship => "Spaceship",
         }
     }
 }

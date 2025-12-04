@@ -625,19 +625,32 @@ impl GraphicsEngine {
         #[allow(deprecated)]
         let shared_resources = self.create_instanced_rendering_resources(mesh, materials)?;
         
-        // Extract texture from first material
-        let texture_handle = materials.get(0)
+        // Extract textures from first material
+        let base_color_texture = materials.get(0)
             .and_then(|mat| mat.textures.base_color);
+        let emission_texture = materials.get(0)
+            .and_then(|mat| mat.textures.emission);
         
-        log::info!("Creating mesh pool for {:?} with capacity {} and texture {:?}", mesh_type, max_objects, texture_handle);
+        log::info!("Creating mesh pool for {:?} with capacity {}, base_color: {:?}, emission: {:?}", 
+                   mesh_type, max_objects, base_color_texture, emission_texture);
         
         // Now delegate to graphics_api with pre-created resources
         if let Some(ref mut mgr) = self.pool_manager {
             if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
-                let material_descriptor_set = if let Some(tex_handle) = texture_handle {
-                    vulkan_backend.create_material_descriptor_set_with_texture(tex_handle)?
-                } else {
-                    vulkan_backend.get_default_material_descriptor_set()
+                // Create descriptor set based on available textures
+                let material_descriptor_set = match (base_color_texture, emission_texture) {
+                    (Some(base_tex), Some(emission_tex)) => {
+                        log::info!("Creating descriptor set with base_color {:?} and emission {:?}", base_tex, emission_tex);
+                        vulkan_backend.create_material_descriptor_set_with_textures(base_tex, emission_tex)?
+                    }
+                    (Some(base_tex), None) => {
+                        log::info!("Creating descriptor set with base_color {:?}", base_tex);
+                        vulkan_backend.create_material_descriptor_set_with_texture(base_tex)?
+                    }
+                    _ => {
+                        log::info!("No textures, using default descriptor set");
+                        vulkan_backend.get_default_material_descriptor_set()
+                    }
                 };
                 
                 let context = vulkan_backend.get_context();
@@ -648,7 +661,7 @@ impl GraphicsEngine {
                     max_objects,
                     context,
                     material_descriptor_set,
-                    texture_handle,
+                    base_color_texture,
                 )?;
                 log::info!("Successfully created pool for {:?}", mesh_type);
                 Ok(())

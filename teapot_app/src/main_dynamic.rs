@@ -6,6 +6,7 @@
 #![allow(dead_code)] // Allow unused fields in structs for demo purposes
 
 use rust_engine::assets::obj_loader::ObjLoader;
+use rust_engine::audio::{AudioSystem, SoundHandle};
 use rust_engine::ecs::{
     World, Entity, LightFactory, LightingSystem as EcsLightingSystem, 
     TransformComponent, LightComponent,
@@ -34,7 +35,8 @@ use std::time::Instant;
 use rand::prelude::*;
 
 // Configuration constants
-const MAX_TEAPOTS: usize = 20;  // Maximum number of monkeys before oldest are despawned
+const MAX_TEAPOTS: usize = 5;   // Maximum number of monkeys before oldest are despawned
+const MAX_SPACESHIPS: usize = 10; // Maximum number of spaceships
 const MAX_LIGHTS: usize = 12;    // Maximum number of lights before oldest are despawned
 
 #[derive(Clone)]
@@ -51,6 +53,17 @@ struct TeapotInstance {
     material_index: usize,
     spawn_time: Instant, // When this instance was created
     lifetime: f32,       // How long it should live (in seconds)
+}
+
+#[derive(Clone)]
+struct SpaceshipInstance {
+    dynamic_handle: DynamicObjectHandle,
+    position: Vec3,
+    rotation: Vec3,
+    velocity: Vec3,
+    angular_velocity: Vec3,
+    spawn_time: Instant,
+    lifetime: f32,
 }
 
 #[derive(Clone)]
@@ -105,9 +118,11 @@ pub struct DynamicTeapotApp {
     
     // Dynamic content tracking
     teapot_instances: Vec<TeapotInstance>,
+    spaceship_instances: Vec<SpaceshipInstance>,
     light_instances: Vec<LightInstance>,
     teapot_mesh: Option<Mesh>,
     sphere_mesh: Option<Mesh>,
+    spaceship_mesh: Option<Mesh>,
     quad_mesh: Option<Mesh>, // Simple quad for testing
     material_ids: Vec<MaterialId>,
     
@@ -125,8 +140,10 @@ pub struct DynamicTeapotApp {
     
     // Dynamic spawning state
     last_teapot_spawn: Instant,
+    last_spaceship_spawn: Instant,
     last_light_spawn: Instant,
     max_teapots: usize,
+    max_spaceships: usize,
     max_lights: usize,
     
     // Sunlight entity
@@ -148,10 +165,56 @@ pub struct DynamicTeapotApp {
     ui_manager: rust_engine::ui::UIManager,
     fps_label_id: rust_engine::ui::UINodeId,
     test_button_id: rust_engine::ui::UINodeId,
+    high_beep_button_id: rust_engine::ui::UINodeId,
+    low_beep_button_id: rust_engine::ui::UINodeId,
+    spam_test_button_id: rust_engine::ui::UINodeId,
+    
+    // Volume control UI
+    master_vol_label_id: rust_engine::ui::UINodeId,
+    sfx_vol_label_id: rust_engine::ui::UINodeId,
+    music_vol_label_id: rust_engine::ui::UINodeId,
+    master_vol_up_id: rust_engine::ui::UINodeId,
+    master_vol_down_id: rust_engine::ui::UINodeId,
+    sfx_vol_up_id: rust_engine::ui::UINodeId,
+    sfx_vol_down_id: rust_engine::ui::UINodeId,
+    music_vol_up_id: rust_engine::ui::UINodeId,
+    music_vol_down_id: rust_engine::ui::UINodeId,
+    
+    // Music control UI
+    music_status_label_id: rust_engine::ui::UINodeId,
+    play_music_button_id: rust_engine::ui::UINodeId,
+    pause_music_button_id: rust_engine::ui::UINodeId,
+    stop_music_button_id: rust_engine::ui::UINodeId,
+    
+    // Music state
+    music_is_playing: bool,
+    music_loop_enabled: bool,
     
     // Debug tracking for UI events
     last_debug_log: Instant,
     last_mouse_pos: (f64, f64),
+    last_frame_time: Instant,
+    
+    // Audio system
+    audio: Option<AudioSystem>,
+    last_beep_sound: Option<SoundHandle>,
+    button_clicked_flag: std::rc::Rc<std::cell::RefCell<bool>>,
+    high_beep_clicked_flag: std::rc::Rc<std::cell::RefCell<bool>>,
+    low_beep_clicked_flag: std::rc::Rc<std::cell::RefCell<bool>>,
+    spam_test_clicked_flag: std::rc::Rc<std::cell::RefCell<bool>>,
+    
+    // Volume control flags
+    master_vol_up_flag: std::rc::Rc<std::cell::RefCell<bool>>,
+    master_vol_down_flag: std::rc::Rc<std::cell::RefCell<bool>>,
+    sfx_vol_up_flag: std::rc::Rc<std::cell::RefCell<bool>>,
+    sfx_vol_down_flag: std::rc::Rc<std::cell::RefCell<bool>>,
+    music_vol_up_flag: std::rc::Rc<std::cell::RefCell<bool>>,
+    music_vol_down_flag: std::rc::Rc<std::cell::RefCell<bool>>,
+    
+    // Music control flags
+    play_music_flag: std::rc::Rc<std::cell::RefCell<bool>>,
+    pause_music_flag: std::rc::Rc<std::cell::RefCell<bool>>,
+    stop_music_flag: std::rc::Rc<std::cell::RefCell<bool>>,
 }
 
 impl DynamicTeapotApp {
@@ -283,17 +346,17 @@ impl DynamicTeapotApp {
         };
         let fps_label_id = ui_manager.add_text(fps_text);
         
-        // "Click Me!" button
+        // "Click Me!" button (440Hz beep)
         let button = UIButton {
             element: rust_engine::ui::UIElement {
                 position: (100.0, 100.0),
-                size: (150.0, 40.0),
+                size: (200.0, 40.0),
                 anchor: Anchor::TopLeft,
                 visible: true,
                 z_order: 1,
             },
-            text: "Click Me!".to_string(),
-            font_size: 18.0,
+            text: "Normal Beep (440Hz)".to_string(),
+            font_size: 16.0,
             state: rust_engine::ui::ButtonState::Normal,
             normal_color: Vec4::new(0.3, 0.3, 0.3, 0.9),
             hover_color: Vec4::new(0.4, 0.5, 0.7, 0.9),
@@ -307,29 +370,466 @@ impl DynamicTeapotApp {
         };
         let test_button_id = ui_manager.add_button(button);
         
+        // "High Beep" button (880Hz)
+        let high_button = UIButton {
+            element: rust_engine::ui::UIElement {
+                position: (100.0, 150.0),
+                size: (200.0, 40.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "High Beep (880Hz)".to_string(),
+            font_size: 16.0,
+            state: rust_engine::ui::ButtonState::Normal,
+            normal_color: Vec4::new(0.3, 0.5, 0.3, 0.9),
+            hover_color: Vec4::new(0.4, 0.7, 0.4, 0.9),
+            pressed_color: Vec4::new(0.2, 0.4, 0.2, 0.9),
+            disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+            text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
+            border_width: 2.0,
+            enabled: true,
+            on_click_id: Some(2),
+        };
+        let high_beep_button_id = ui_manager.add_button(high_button);
+        
+        // "Low Beep" button (220Hz)
+        let low_button = UIButton {
+            element: rust_engine::ui::UIElement {
+                position: (100.0, 200.0),
+                size: (200.0, 40.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "Low Beep (220Hz)".to_string(),
+            font_size: 16.0,
+            state: rust_engine::ui::ButtonState::Normal,
+            normal_color: Vec4::new(0.5, 0.3, 0.3, 0.9),
+            hover_color: Vec4::new(0.7, 0.4, 0.4, 0.9),
+            pressed_color: Vec4::new(0.4, 0.2, 0.2, 0.9),
+            disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+            text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
+            border_width: 2.0,
+            enabled: true,
+            on_click_id: Some(3),
+        };
+        let low_beep_button_id = ui_manager.add_button(low_button);
+        
+        // "Spam Test" button (tests voice limiting)
+        let spam_button = UIButton {
+            element: rust_engine::ui::UIElement {
+                position: (100.0, 250.0),
+                size: (200.0, 40.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "Spam Test (5x)".to_string(),
+            font_size: 16.0,
+            state: rust_engine::ui::ButtonState::Normal,
+            normal_color: Vec4::new(0.5, 0.3, 0.5, 0.9),
+            hover_color: Vec4::new(0.7, 0.4, 0.7, 0.9),
+            pressed_color: Vec4::new(0.4, 0.2, 0.4, 0.9),
+            disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+            text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
+            border_width: 2.0,
+            enabled: true,
+            on_click_id: Some(4),
+        };
+        let spam_test_button_id = ui_manager.add_button(spam_button);
+        
+        // === VOLUME CONTROLS ===
+        
+        // Master Volume label and controls
+        let master_vol_text = UIText {
+            element: rust_engine::ui::UIElement {
+                position: (350.0, 100.0),
+                size: (0.0, 0.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "Master: 100%".to_string(),
+            font_size: 18.0,
+            color: Vec4::new(1.0, 1.0, 0.5, 1.0),
+            h_align: rust_engine::ui::HorizontalAlign::Left,
+            v_align: rust_engine::ui::VerticalAlign::Top,
+        };
+        let master_vol_label_id = ui_manager.add_text(master_vol_text);
+        
+        let master_vol_up_button = UIButton {
+            element: rust_engine::ui::UIElement {
+                position: (500.0, 95.0),
+                size: (40.0, 30.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "+".to_string(),
+            font_size: 20.0,
+            state: rust_engine::ui::ButtonState::Normal,
+            normal_color: Vec4::new(0.2, 0.6, 0.2, 0.9),
+            hover_color: Vec4::new(0.3, 0.8, 0.3, 0.9),
+            pressed_color: Vec4::new(0.1, 0.4, 0.1, 0.9),
+            disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+            text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
+            border_width: 2.0,
+            enabled: true,
+            on_click_id: Some(5),
+        };
+        let master_vol_up_id = ui_manager.add_button(master_vol_up_button);
+        
+        let master_vol_down_button = UIButton {
+            element: rust_engine::ui::UIElement {
+                position: (550.0, 95.0),
+                size: (40.0, 30.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "-".to_string(),
+            font_size: 20.0,
+            state: rust_engine::ui::ButtonState::Normal,
+            normal_color: Vec4::new(0.6, 0.2, 0.2, 0.9),
+            hover_color: Vec4::new(0.8, 0.3, 0.3, 0.9),
+            pressed_color: Vec4::new(0.4, 0.1, 0.1, 0.9),
+            disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+            text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
+            border_width: 2.0,
+            enabled: true,
+            on_click_id: Some(6),
+        };
+        let master_vol_down_id = ui_manager.add_button(master_vol_down_button);
+        
+        // SFX Volume label and controls
+        let sfx_vol_text = UIText {
+            element: rust_engine::ui::UIElement {
+                position: (350.0, 140.0),
+                size: (0.0, 0.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "SFX: 100%".to_string(),
+            font_size: 18.0,
+            color: Vec4::new(0.5, 1.0, 0.5, 1.0),
+            h_align: rust_engine::ui::HorizontalAlign::Left,
+            v_align: rust_engine::ui::VerticalAlign::Top,
+        };
+        let sfx_vol_label_id = ui_manager.add_text(sfx_vol_text);
+        
+        let sfx_vol_up_button = UIButton {
+            element: rust_engine::ui::UIElement {
+                position: (500.0, 135.0),
+                size: (40.0, 30.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "+".to_string(),
+            font_size: 20.0,
+            state: rust_engine::ui::ButtonState::Normal,
+            normal_color: Vec4::new(0.2, 0.6, 0.2, 0.9),
+            hover_color: Vec4::new(0.3, 0.8, 0.3, 0.9),
+            pressed_color: Vec4::new(0.1, 0.4, 0.1, 0.9),
+            disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+            text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
+            border_width: 2.0,
+            enabled: true,
+            on_click_id: Some(7),
+        };
+        let sfx_vol_up_id = ui_manager.add_button(sfx_vol_up_button);
+        
+        let sfx_vol_down_button = UIButton {
+            element: rust_engine::ui::UIElement {
+                position: (550.0, 135.0),
+                size: (40.0, 30.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "-".to_string(),
+            font_size: 20.0,
+            state: rust_engine::ui::ButtonState::Normal,
+            normal_color: Vec4::new(0.6, 0.2, 0.2, 0.9),
+            hover_color: Vec4::new(0.8, 0.3, 0.3, 0.9),
+            pressed_color: Vec4::new(0.4, 0.1, 0.1, 0.9),
+            disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+            text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
+            border_width: 2.0,
+            enabled: true,
+            on_click_id: Some(8),
+        };
+        let sfx_vol_down_id = ui_manager.add_button(sfx_vol_down_button);
+        
+        // Music Volume label and controls
+        let music_vol_text = UIText {
+            element: rust_engine::ui::UIElement {
+                position: (350.0, 180.0),
+                size: (0.0, 0.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "Music: 100%".to_string(),
+            font_size: 18.0,
+            color: Vec4::new(0.5, 0.5, 1.0, 1.0),
+            h_align: rust_engine::ui::HorizontalAlign::Left,
+            v_align: rust_engine::ui::VerticalAlign::Top,
+        };
+        let music_vol_label_id = ui_manager.add_text(music_vol_text);
+        
+        let music_vol_up_button = UIButton {
+            element: rust_engine::ui::UIElement {
+                position: (500.0, 175.0),
+                size: (40.0, 30.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "+".to_string(),
+            font_size: 20.0,
+            state: rust_engine::ui::ButtonState::Normal,
+            normal_color: Vec4::new(0.2, 0.6, 0.2, 0.9),
+            hover_color: Vec4::new(0.3, 0.8, 0.3, 0.9),
+            pressed_color: Vec4::new(0.1, 0.4, 0.1, 0.9),
+            disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+            text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
+            border_width: 2.0,
+            enabled: true,
+            on_click_id: Some(9),
+        };
+        let music_vol_up_id = ui_manager.add_button(music_vol_up_button);
+        
+        let music_vol_down_button = UIButton {
+            element: rust_engine::ui::UIElement {
+                position: (550.0, 175.0),
+                size: (40.0, 30.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "-".to_string(),
+            font_size: 20.0,
+            state: rust_engine::ui::ButtonState::Normal,
+            normal_color: Vec4::new(0.6, 0.2, 0.2, 0.9),
+            hover_color: Vec4::new(0.8, 0.3, 0.3, 0.9),
+            pressed_color: Vec4::new(0.4, 0.1, 0.1, 0.9),
+            disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+            text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
+            border_width: 2.0,
+            enabled: true,
+            on_click_id: Some(10),
+        };
+        let music_vol_down_id = ui_manager.add_button(music_vol_down_button);
+        
+        // === MUSIC CONTROLS ===
+        
+        // Music status label
+        let music_status_text = UIText {
+            element: rust_engine::ui::UIElement {
+                position: (350.0, 230.0),
+                size: (0.0, 0.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "Music: Stopped".to_string(),
+            font_size: 18.0,
+            color: Vec4::new(1.0, 0.8, 0.3, 1.0),
+            h_align: rust_engine::ui::HorizontalAlign::Left,
+            v_align: rust_engine::ui::VerticalAlign::Top,
+        };
+        let music_status_label_id = ui_manager.add_text(music_status_text);
+        
+        // Play/Stop music button (toggles)
+        let play_music_button = UIButton {
+            element: rust_engine::ui::UIElement {
+                position: (350.0, 260.0),
+                size: (90.0, 35.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "▶ Start".to_string(),
+            font_size: 16.0,
+            state: rust_engine::ui::ButtonState::Normal,
+            normal_color: Vec4::new(0.2, 0.6, 0.2, 0.9),
+            hover_color: Vec4::new(0.3, 0.8, 0.3, 0.9),
+            pressed_color: Vec4::new(0.1, 0.4, 0.1, 0.9),
+            disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+            text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
+            border_width: 2.0,
+            enabled: true,
+            on_click_id: Some(11),
+        };
+        let play_music_button_id = ui_manager.add_button(play_music_button);
+        
+        // Pause music button
+        let pause_music_button = UIButton {
+            element: rust_engine::ui::UIElement {
+                position: (450.0, 260.0),
+                size: (80.0, 35.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "⏸ Pause".to_string(),
+            font_size: 16.0,
+            state: rust_engine::ui::ButtonState::Normal,
+            normal_color: Vec4::new(0.5, 0.5, 0.2, 0.9),
+            hover_color: Vec4::new(0.7, 0.7, 0.3, 0.9),
+            pressed_color: Vec4::new(0.3, 0.3, 0.1, 0.9),
+            disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+            text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
+            border_width: 2.0,
+            enabled: true,
+            on_click_id: Some(12),
+        };
+        let pause_music_button_id = ui_manager.add_button(pause_music_button);
+        
+        // Loop toggle button
+        let stop_music_button = UIButton {
+            element: rust_engine::ui::UIElement {
+                position: (540.0, 260.0),
+                size: (90.0, 35.0),
+                anchor: Anchor::TopLeft,
+                visible: true,
+                z_order: 1,
+            },
+            text: "🔁 Loop: Off".to_string(),
+            font_size: 16.0,
+            state: rust_engine::ui::ButtonState::Normal,
+            normal_color: Vec4::new(0.4, 0.4, 0.5, 0.9),
+            hover_color: Vec4::new(0.5, 0.5, 0.6, 0.9),
+            pressed_color: Vec4::new(0.3, 0.3, 0.4, 0.9),
+            disabled_color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+            text_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            border_color: Vec4::new(0.8, 0.8, 0.8, 1.0),
+            border_width: 2.0,
+            enabled: true,
+            on_click_id: Some(13),
+        };
+        let stop_music_button_id = ui_manager.add_button(stop_music_button);
+        
         // Register button click event handler WITH UIManager's EventSystem
         // (NOT GraphicsEngine - UIManager has its own EventSystem!)
         log::info!("Registering UI event handlers...");
         use rust_engine::events::{Event, EventHandler, EventType};
         
-        struct ButtonClickHandler;
+        struct ButtonClickHandler {
+            button_id: u32,
+            clicked_flag: std::rc::Rc<std::cell::RefCell<bool>>,
+        }
         impl EventHandler for ButtonClickHandler {
             fn on_event(&mut self, event: &Event) -> bool {
-                if let Some(button_id) = event.get_button_id() {
-                    println!("🎉🎉🎉 BUTTON {} WAS CLICKED! 🎉🎉🎉", button_id);
-                    log::info!("🎉 Button {} was clicked!", button_id);
-                    true // Consume the event
-                } else {
-                    false
+                if let Some(event_button_id) = event.get_button_id() {
+                    if event_button_id == self.button_id {
+                        log::info!("🎉 Button {} was clicked!", event_button_id);
+                        *self.clicked_flag.borrow_mut() = true;
+                        return true; // Consume the event
+                    }
                 }
+                false
             }
         }
         
-        // Register with UIManager's event system (not GraphicsEngine!)
+        // Create shared flags for button clicks
+        let button_clicked_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let high_beep_clicked_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let low_beep_clicked_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let spam_test_clicked_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
+        
+        // Volume control flags
+        let master_vol_up_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let master_vol_down_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let sfx_vol_up_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let sfx_vol_down_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let music_vol_up_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let music_vol_down_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
+        
+        // Music control flags
+        let play_music_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let pause_music_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let stop_music_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
+        
+        // Register handlers for each button
         ui_manager.event_system_mut().register_handler(
             EventType::ButtonClicked,
-            Box::new(ButtonClickHandler)
+            Box::new(ButtonClickHandler {
+                button_id: 1,
+                clicked_flag: button_clicked_flag.clone(),
+            })
         );
+        
+        ui_manager.event_system_mut().register_handler(
+            EventType::ButtonClicked,
+            Box::new(ButtonClickHandler {
+                button_id: 2,
+                clicked_flag: high_beep_clicked_flag.clone(),
+            })
+        );
+        
+        ui_manager.event_system_mut().register_handler(
+            EventType::ButtonClicked,
+            Box::new(ButtonClickHandler {
+                button_id: 3,
+                clicked_flag: low_beep_clicked_flag.clone(),
+            })
+        );
+        
+        ui_manager.event_system_mut().register_handler(
+            EventType::ButtonClicked,
+            Box::new(ButtonClickHandler {
+                button_id: 4,
+                clicked_flag: spam_test_clicked_flag.clone(),
+            })
+        );
+        
+        // Register volume control button handlers
+        for (button_id, flag) in [
+            (5, master_vol_up_flag.clone()),
+            (6, master_vol_down_flag.clone()),
+            (7, sfx_vol_up_flag.clone()),
+            (8, sfx_vol_down_flag.clone()),
+            (9, music_vol_up_flag.clone()),
+            (10, music_vol_down_flag.clone()),
+        ] {
+            ui_manager.event_system_mut().register_handler(
+                EventType::ButtonClicked,
+                Box::new(ButtonClickHandler {
+                    button_id,
+                    clicked_flag: flag,
+                })
+            );
+        }
+        
+        // Register music control button handlers
+        for (button_id, flag) in [
+            (11, play_music_flag.clone()),
+            (12, pause_music_flag.clone()),
+            (13, stop_music_flag.clone()),
+        ] {
+            ui_manager.event_system_mut().register_handler(
+                EventType::ButtonClicked,
+                Box::new(ButtonClickHandler {
+                    button_id,
+                    clicked_flag: flag,
+                })
+            );
+        }
         
         // Register hover event handler for debugging
         struct HoverHandler;
@@ -357,9 +857,11 @@ impl DynamicTeapotApp {
             world,
             lighting_system,
             teapot_instances,
+            spaceship_instances: Vec::new(),
             light_instances,
             teapot_mesh: None,
             sphere_mesh: None,
+            spaceship_mesh: None,
             quad_mesh: None,
             material_ids,
             shared_resources: None,
@@ -372,8 +874,10 @@ impl DynamicTeapotApp {
             camera_height_oscillation: 3.0,
             last_shown_teapot_index: usize::MAX, // Initialize to invalid index
             last_teapot_spawn: now,
+            last_spaceship_spawn: now,
             last_light_spawn: now,
-            max_teapots: 10,
+            max_teapots: 5,
+            max_spaceships: 10,
             max_lights: 10,
             sunlight_entity: Some(sunlight_entity),
             font_atlas: None,
@@ -391,10 +895,56 @@ impl DynamicTeapotApp {
             ui_manager,
             fps_label_id,
             test_button_id,
+            high_beep_button_id,
+            low_beep_button_id,
+            spam_test_button_id,
+            
+            // Volume control UI
+            master_vol_label_id,
+            sfx_vol_label_id,
+            music_vol_label_id,
+            master_vol_up_id,
+            master_vol_down_id,
+            sfx_vol_up_id,
+            sfx_vol_down_id,
+            music_vol_up_id,
+            music_vol_down_id,
+            
+            // Music control UI
+            music_status_label_id,
+            play_music_button_id,
+            pause_music_button_id,
+            stop_music_button_id,
+            
+            // Music state
+            music_is_playing: false,
+            music_loop_enabled: false,
             
             // Debug tracking
             last_debug_log: Instant::now(),
             last_mouse_pos: (0.0, 0.0),
+            last_frame_time: Instant::now(),
+            
+            // Audio system
+            audio: AudioSystem::new().ok(),
+            last_beep_sound: None,
+            button_clicked_flag: button_clicked_flag.clone(),
+            high_beep_clicked_flag: high_beep_clicked_flag.clone(),
+            low_beep_clicked_flag: low_beep_clicked_flag.clone(),
+            spam_test_clicked_flag: spam_test_clicked_flag.clone(),
+            
+            // Volume control flags
+            master_vol_up_flag,
+            master_vol_down_flag,
+            sfx_vol_up_flag,
+            sfx_vol_down_flag,
+            music_vol_up_flag,
+            music_vol_down_flag,
+            
+            // Music control flags
+            play_music_flag,
+            pause_music_flag,
+            stop_music_flag,
         }
     }
     
@@ -723,8 +1273,94 @@ impl DynamicTeapotApp {
         }
     }
     
+    fn spawn_random_spaceship(&mut self) {
+        let mut rng = thread_rng();
+        
+        // Random position
+        let position = Vec3::new(
+            rng.gen_range(-15.0..15.0),
+            rng.gen_range(-2.0..6.0),
+            rng.gen_range(-15.0..15.0),
+        );
+        
+        // Random rotation
+        let rotation = Vec3::new(
+            rng.gen_range(0.0..std::f32::consts::TAU),
+            rng.gen_range(0.0..std::f32::consts::TAU),
+            rng.gen_range(0.0..std::f32::consts::TAU),
+        );
+        
+        // Random velocity (drifting motion)
+        let velocity = Vec3::new(
+            rng.gen_range(-1.0..1.0),
+            rng.gen_range(-0.5..0.5),
+            rng.gen_range(-1.0..1.0),
+        );
+        
+        // Random angular velocity (spinning)
+        let angular_velocity = Vec3::new(
+            rng.gen_range(-0.5..0.5),
+            rng.gen_range(-0.5..0.5),
+            rng.gen_range(-0.5..0.5),
+        );
+        
+        // Random lifetime between 10-20 seconds
+        let lifetime = rng.gen_range(10.0..20.0);
+        
+        // Create spaceship material with custom textures (already loaded during initialization)
+        let base_texture_handle = rust_engine::render::resources::materials::TextureHandle(4);
+        let emission_texture_handle = rust_engine::render::resources::materials::TextureHandle(5);
+        
+        let spaceship_material = Material::standard_pbr(StandardMaterialParams {
+            base_color: Vec3::new(1.0, 1.0, 1.0),
+            alpha: 1.0,
+            metallic: 0.8,
+            roughness: 0.2,
+            emission: Vec3::new(1.0, 1.0, 1.0),
+            emission_strength: rng.gen_range(3.0..8.0), // Varying engine glow
+            base_color_texture_enabled: true,  // Enable base color texture sampling
+            ..Default::default()
+        })
+        .with_base_color_texture(base_texture_handle)
+        .with_emission_texture(emission_texture_handle)
+        .with_name("Spaceship");
+        
+        // Compute transform matrix
+        let scale = rng.gen_range(1.5..3.0); // Varying sizes
+        let transform = Mat4::new_translation(&position)
+            * Mat4::from_euler_angles(rotation.x, rotation.y, rotation.z)
+            * Mat4::new_nonuniform_scaling(&Vec3::new(scale, scale, scale));
+        
+        // Spawn spaceship
+        match self.graphics_engine.allocate_from_pool(
+            MeshType::Spaceship,
+            transform,
+            spaceship_material,
+        ) {
+            Ok(dynamic_handle) => {
+                let instance = SpaceshipInstance {
+                    dynamic_handle,
+                    position,
+                    rotation,
+                    velocity,
+                    angular_velocity,
+                    spawn_time: Instant::now(),
+                    lifetime,
+                };
+                
+                self.spaceship_instances.push(instance);
+                log::info!("Spawned spaceship #{} at {:?} (lifetime: {:.1}s)", 
+                          self.spaceship_instances.len(), position, lifetime);
+            }
+            Err(e) => {
+                log::warn!("Failed to spawn spaceship: {}", e);
+            }
+        }
+    }
+    
     fn despawn_excess_objects(&mut self) {
         let initial_teapot_count = self.teapot_instances.len();
+        let initial_spaceship_count = self.spaceship_instances.len();
         let initial_light_count = self.light_instances.len();
         
         // Despawn oldest teapots if we exceed the maximum
@@ -784,13 +1420,35 @@ impl DynamicTeapotApp {
             }
         }
         
+        // Despawn oldest spaceships if we exceed the maximum
+        if self.spaceship_instances.len() > MAX_SPACESHIPS {
+            let excess_count = self.spaceship_instances.len() - MAX_SPACESHIPS;
+            
+            // Sort by spawn time to get oldest first
+            self.spaceship_instances.sort_by_key(|instance| instance.spawn_time);
+            
+            // Remove the oldest excess spaceships
+            for _ in 0..excess_count {
+                let instance = self.spaceship_instances.remove(0);
+                
+                let elapsed = instance.spawn_time.elapsed().as_secs_f32();
+                
+                if let Err(e) = self.graphics_engine.free_pool_instance(MeshType::Spaceship, instance.dynamic_handle) {
+                    log::warn!("Failed to despawn old spaceship: {}", e);
+                } else {
+                    log::info!("Despawned old spaceship (lived {:.1}s, over limit)", elapsed);
+                }
+            }
+        }
+        
         let teapots_despawned = initial_teapot_count - self.teapot_instances.len();
+        let spaceships_despawned = initial_spaceship_count - self.spaceship_instances.len();
         let lights_despawned = initial_light_count - self.light_instances.len();
         
-        if teapots_despawned > 0 || lights_despawned > 0 {
-            log::info!("Despawned {} teapots and {} lights. Active: {} teapots, {} lights",
-                      teapots_despawned, lights_despawned,
-                      self.teapot_instances.len(), self.light_instances.len());
+        if teapots_despawned > 0 || spaceships_despawned > 0 || lights_despawned > 0 {
+            log::info!("Despawned {} teapots, {} spaceships, {} lights. Active: {} teapots, {} spaceships, {} lights",
+                      teapots_despawned, spaceships_despawned, lights_despawned,
+                      self.teapot_instances.len(), self.spaceship_instances.len(), self.light_instances.len());
         }
     }
     
@@ -1032,6 +1690,18 @@ impl DynamicTeapotApp {
             }
         }
         
+        // Load spaceship mesh
+        match ObjLoader::load_obj("resources/models/spaceship_simple.obj") {
+            Ok(mesh) => {
+                log::info!("Loaded spaceship mesh successfully with {} vertices and {} indices", 
+                          mesh.vertices.len(), mesh.indices.len());
+                self.spaceship_mesh = Some(mesh);
+            }
+            Err(e) => {
+                log::warn!("Failed to load spaceship_simple.obj: {:?}", e);
+            }
+        }
+        
         // Create simple quad mesh for testing
         use rust_engine::render::Vertex;
         let quad_vertices = vec![
@@ -1132,6 +1802,59 @@ impl DynamicTeapotApp {
                 return Err(e);
             }
             log::info!("Created sphere mesh pool successfully");
+        }
+        
+        // Create spaceship mesh pool
+        if let Some(ref spaceship_mesh) = self.spaceship_mesh {
+            use rust_engine::assets::ImageData;
+            use rust_engine::render::resources::materials::TextureType;
+            
+            // Load custom spaceship textures
+            log::info!("Loading spaceship textures...");
+            let base_texture_path = "resources/textures/spaceship_simple_texture.png";
+            let emission_texture_path = "resources/textures/spaceship_simple_emission_map.png";
+            
+            let base_image = ImageData::from_file(base_texture_path)
+                .map_err(|e| format!("Failed to load spaceship base texture: {}", e))?;
+            let emission_image = ImageData::from_file(emission_texture_path)
+                .map_err(|e| format!("Failed to load spaceship emission texture: {}", e))?;
+            
+            // Upload textures to GPU
+            let base_texture_handle = self.graphics_engine.upload_texture_from_image_data(
+                base_image,
+                TextureType::BaseColor
+            )?;
+            let emission_texture_handle = self.graphics_engine.upload_texture_from_image_data(
+                emission_image,
+                TextureType::Emission
+            )?;
+            log::info!("Uploaded spaceship textures to GPU");
+            
+            // Create spaceship material with custom textures
+            let spaceship_material = Material::standard_pbr(StandardMaterialParams {
+                base_color: Vec3::new(1.0, 1.0, 1.0), // White to show texture colors
+                alpha: 1.0,
+                metallic: 0.8,
+                roughness: 0.2,
+                emission: Vec3::new(1.0, 1.0, 1.0), // White to show emission texture colors
+                emission_strength: 5.0, // Strong emission for engine glow
+                base_color_texture_enabled: false, // We're using explicit textures, not the default
+                ..Default::default()
+            })
+            .with_base_color_texture(base_texture_handle)
+            .with_emission_texture(emission_texture_handle)
+            .with_name("Spaceship");
+            
+            if let Err(e) = self.graphics_engine.create_mesh_pool(
+                MeshType::Spaceship,
+                spaceship_mesh,
+                &[spaceship_material.clone()],
+                20 // Pool for up to 20 spaceships
+            ) {
+                log::error!("Failed to create spaceship mesh pool: {}", e);
+                return Err(e);
+            }
+            log::info!("Created spaceship mesh pool successfully");
         }
         
         // Initialize text rendering test
@@ -1291,8 +2014,29 @@ impl DynamicTeapotApp {
                         self.ui_manager.update_mouse_button(ui_button, pressed);
                     }
                     WindowEvent::Key(Key::Space, _, Action::Press, _) => {
-                        // Dynamic spawning is automatic now - space key disabled
-                        log::info!("Dynamic spawning is automatic - space key no longer regenerates scene");
+                        // Play audio beep with voice management
+                        if let Some(audio) = &mut self.audio {
+                            let (active, max) = audio.get_voice_stats();
+                            log::info!("🔊 Voice stats before play: {}/{} voices active", active, max);
+                            
+                            match audio.play_audio_file_with_priority(
+                                "resources/audio/test_beep.wav",
+                                rust_engine::audio::VoicePriority::Normal,
+                                Some("space_beep".to_string()),
+                                rust_engine::audio::mixer::VolumeGroup::SFX,
+                            ) {
+                                Ok(handle) => {
+                                    log::info!("🔊 Playing beep sound!");
+                                    self.last_beep_sound = Some(handle);
+                                    
+                                    let (active, max) = audio.get_voice_stats();
+                                    log::info!("🔊 Voice stats after play: {}/{} voices active", active, max);
+                                }
+                                Err(e) => log::warn!("⚠️ Failed to play beep: {} (Instance limit or pool full)", e),
+                            }
+                        } else {
+                            log::info!("Space key pressed - audio system not available");
+                        }
                     }
                     WindowEvent::Key(Key::R, _, Action::Press, _) => {
                         // Reset camera to default position
@@ -1329,16 +2073,29 @@ impl DynamicTeapotApp {
     
     fn update_scene(&mut self) {
         let elapsed_seconds = self.start_time.elapsed().as_secs_f32();
-        let delta_time = 0.016; // Assume ~60 FPS for now
+        let now = Instant::now();
+        let delta_time = now.duration_since(self.last_frame_time).as_secs_f32();
+        self.last_frame_time = now;
+        
+        // Update audio system (cleans up finished sounds)
+        if let Some(audio) = &mut self.audio {
+            audio.update(delta_time);
+        }
         
         // Dynamic spawning with random intervals
         let mut rng = thread_rng();
         let now = Instant::now();
         
-        // Spawn teapots randomly (every 1-3 seconds)
-        if now.duration_since(self.last_teapot_spawn).as_secs_f32() > rng.gen_range(1.0..3.0) {
+        // Spawn teapots randomly (every 2-5 seconds, less frequently)
+        if now.duration_since(self.last_teapot_spawn).as_secs_f32() > rng.gen_range(2.0..5.0) {
             self.spawn_random_teapot();
             self.last_teapot_spawn = now;
+        }
+        
+        // Spawn spaceships randomly (every 1-2 seconds, more frequently)
+        if now.duration_since(self.last_spaceship_spawn).as_secs_f32() > rng.gen_range(1.0..2.0) {
+            self.spawn_random_spaceship();
+            self.last_spaceship_spawn = now;
         }
         
         // Spawn lights randomly (every 2-4 seconds)
@@ -1477,7 +2234,9 @@ impl DynamicTeapotApp {
             self.fps_update_timer = Instant::now();
         }
         
-        let delta_time = 0.016; // Approximate 60 FPS delta time
+        let now = Instant::now();
+        let delta_time = now.duration_since(self.last_frame_time).as_secs_f32();
+        self.last_frame_time = now;
         
         // BEGIN DYNAMIC FRAME: Setup and lifecycle updates
         self.graphics_engine.begin_dynamic_frame()?;
@@ -1515,6 +2274,270 @@ impl DynamicTeapotApp {
         
         // Dispatch UI events
         self.ui_manager.dispatch_events();
+        
+        // Check for button click and play audio
+        if *self.button_clicked_flag.borrow() {
+            if let Some(audio) = &mut self.audio {
+                let (active, max) = audio.get_voice_stats();
+                log::info!("🎵 Normal beep button - voice stats: {}/{} voices active", active, max);
+                
+                match audio.play_audio_file_with_priority(
+                    "resources/audio/test_beep.wav",
+                    rust_engine::audio::VoicePriority::Normal,
+                    Some("normal_beep".to_string()),
+                    rust_engine::audio::mixer::VolumeGroup::SFX,
+                ) {
+                    Ok(handle) => {
+                        log::info!("🔊 Playing normal beep (440Hz, 0.5s)");
+                        self.last_beep_sound = Some(handle);
+                    }
+                    Err(e) => log::warn!("⚠️ Failed to play normal beep: {} (Hit instance limit - max 4 per sound)", e),
+                }
+            }
+            *self.button_clicked_flag.borrow_mut() = false; // Reset flag
+        }
+        
+        // Check for high beep button
+        if *self.high_beep_clicked_flag.borrow() {
+            if let Some(audio) = &mut self.audio {
+                let (active, max) = audio.get_voice_stats();
+                log::info!("🎵 High beep button - voice stats: {}/{} voices active", active, max);
+                
+                match audio.play_audio_file_with_priority(
+                    "resources/audio/beep_high.wav",
+                    rust_engine::audio::VoicePriority::Normal,
+                    Some("high_beep".to_string()),
+                    rust_engine::audio::mixer::VolumeGroup::SFX,
+                ) {
+                    Ok(handle) => {
+                        log::info!("🔊 Playing high beep (880Hz, 1.0s)");
+                        self.last_beep_sound = Some(handle);
+                    }
+                    Err(e) => log::warn!("⚠️ Failed to play high beep: {} (Hit instance limit - max 4 per sound)", e),
+                }
+            }
+            *self.high_beep_clicked_flag.borrow_mut() = false;
+        }
+        
+        // Check for low beep button
+        if *self.low_beep_clicked_flag.borrow() {
+            if let Some(audio) = &mut self.audio {
+                let (active, max) = audio.get_voice_stats();
+                log::info!("🎵 Low beep button - voice stats: {}/{} voices active", active, max);
+                
+                match audio.play_audio_file_with_priority(
+                    "resources/audio/beep_low.wav",
+                    rust_engine::audio::VoicePriority::Normal,
+                    Some("low_beep".to_string()),
+                    rust_engine::audio::mixer::VolumeGroup::SFX,
+                ) {
+                    Ok(handle) => {
+                        log::info!("🔊 Playing low beep (220Hz, 1.5s)");
+                        self.last_beep_sound = Some(handle);
+                    }
+                    Err(e) => log::warn!("⚠️ Failed to play low beep: {} (Hit instance limit - max 4 per sound)", e),
+                }
+            }
+            *self.low_beep_clicked_flag.borrow_mut() = false;
+        }
+        
+        // Check for spam test button (plays 5 sounds rapidly to test voice limiting)
+        if *self.spam_test_clicked_flag.borrow() {
+            if let Some(audio) = &mut self.audio {
+                let (active, max) = audio.get_voice_stats();
+                log::info!("🎵🎵🎵 SPAM TEST - Playing 5 beeps rapidly! Voice stats: {}/{}", active, max);
+                
+                // Play 5 sounds rapidly - should hit instance limit
+                for i in 0..5 {
+                    match audio.play_audio_file_with_priority(
+                        "resources/audio/test_beep.wav",
+                        rust_engine::audio::VoicePriority::Normal,
+                        Some("spam_beep".to_string()),
+                        rust_engine::audio::mixer::VolumeGroup::SFX,
+                    ) {
+                        Ok(_) => log::info!("  Spam beep #{} started", i + 1),
+                        Err(e) => log::warn!("  Spam beep #{} failed: {}", i + 1, e),
+                    }
+                }
+                
+                let (active_after, max) = audio.get_voice_stats();
+                log::info!("🎵 After spam test - voice stats: {}/{} voices active", active_after, max);
+            }
+            *self.spam_test_clicked_flag.borrow_mut() = false;
+        }
+        
+        // Handle volume control buttons
+        if let Some(audio) = &mut self.audio {
+            const VOLUME_STEP: f32 = 0.1;
+            
+            // Master volume controls
+            if *self.master_vol_up_flag.borrow() {
+                let current = audio.get_group_volume(rust_engine::audio::mixer::VolumeGroup::Master);
+                let new_volume = (current + VOLUME_STEP).min(1.0);
+                audio.set_group_volume(rust_engine::audio::mixer::VolumeGroup::Master, new_volume);
+                self.ui_manager.update_text(self.master_vol_label_id, format!("Master: {}%", (new_volume * 100.0) as u32));
+                log::info!("🔊 Master volume: {}%", (new_volume * 100.0) as u32);
+                *self.master_vol_up_flag.borrow_mut() = false;
+            }
+            if *self.master_vol_down_flag.borrow() {
+                let current = audio.get_group_volume(rust_engine::audio::mixer::VolumeGroup::Master);
+                let new_volume = (current - VOLUME_STEP).max(0.0);
+                audio.set_group_volume(rust_engine::audio::mixer::VolumeGroup::Master, new_volume);
+                self.ui_manager.update_text(self.master_vol_label_id, format!("Master: {}%", (new_volume * 100.0) as u32));
+                log::info!("🔊 Master volume: {}%", (new_volume * 100.0) as u32);
+                *self.master_vol_down_flag.borrow_mut() = false;
+            }
+            
+            // SFX volume controls
+            if *self.sfx_vol_up_flag.borrow() {
+                let current = audio.get_group_volume(rust_engine::audio::mixer::VolumeGroup::SFX);
+                let new_volume = (current + VOLUME_STEP).min(1.0);
+                audio.set_group_volume(rust_engine::audio::mixer::VolumeGroup::SFX, new_volume);
+                self.ui_manager.update_text(self.sfx_vol_label_id, format!("SFX: {}%", (new_volume * 100.0) as u32));
+                log::info!("🔊 SFX volume: {}%", (new_volume * 100.0) as u32);
+                *self.sfx_vol_up_flag.borrow_mut() = false;
+            }
+            if *self.sfx_vol_down_flag.borrow() {
+                let current = audio.get_group_volume(rust_engine::audio::mixer::VolumeGroup::SFX);
+                let new_volume = (current - VOLUME_STEP).max(0.0);
+                audio.set_group_volume(rust_engine::audio::mixer::VolumeGroup::SFX, new_volume);
+                self.ui_manager.update_text(self.sfx_vol_label_id, format!("SFX: {}%", (new_volume * 100.0) as u32));
+                log::info!("🔊 SFX volume: {}%", (new_volume * 100.0) as u32);
+                *self.sfx_vol_down_flag.borrow_mut() = false;
+            }
+            
+            // Music volume controls
+            if *self.music_vol_up_flag.borrow() {
+                let current = audio.get_group_volume(rust_engine::audio::mixer::VolumeGroup::Music);
+                let new_volume = (current + VOLUME_STEP).min(1.0);
+                audio.set_group_volume(rust_engine::audio::mixer::VolumeGroup::Music, new_volume);
+                self.ui_manager.update_text(self.music_vol_label_id, format!("Music: {}%", (new_volume * 100.0) as u32));
+                log::info!("🔊 Music volume: {}%", (new_volume * 100.0) as u32);
+                *self.music_vol_up_flag.borrow_mut() = false;
+            }
+            if *self.music_vol_down_flag.borrow() {
+                let current = audio.get_group_volume(rust_engine::audio::mixer::VolumeGroup::Music);
+                let new_volume = (current - VOLUME_STEP).max(0.0);
+                audio.set_group_volume(rust_engine::audio::mixer::VolumeGroup::Music, new_volume);
+                self.ui_manager.update_text(self.music_vol_label_id, format!("Music: {}%", (new_volume * 100.0) as u32));
+                log::info!("🔊 Music volume: {}%", (new_volume * 100.0) as u32);
+                *self.music_vol_down_flag.borrow_mut() = false;
+            }
+        }
+        
+        // Handle music control buttons
+        if let Some(audio) = &mut self.audio {
+            // Start/Stop toggle button
+            if *self.play_music_flag.borrow() {
+                if self.music_is_playing {
+                    // Stop music
+                    match audio.stop_music(Some(0.5)) {
+                        Ok(_) => {
+                            self.music_is_playing = false;
+                            self.ui_manager.update_text(self.music_status_label_id, "Music: Stopped".to_string());
+                            log::info!("⏹ Stopped music");
+                        }
+                        Err(e) => log::warn!("⚠️ Failed to stop music: {}", e),
+                    }
+                } else {
+                    // Start music
+                    use rust_engine::audio::MusicTrack;
+                    
+                    let track = MusicTrack::new("background_music", "resources/audio/music.mp3")
+                        .with_fade_duration(1.0)
+                        .with_volume(0.7);
+                    
+                    match audio.play_music_track(track, Some(0.5)) {
+                        Ok(_) => {
+                            self.music_is_playing = true;
+                            self.ui_manager.update_text(self.music_status_label_id, "Music: Playing".to_string());
+                            log::info!("🎵 Started playing music.mp3");
+                        }
+                        Err(e) => {
+                            log::warn!("⚠️ Failed to play music: {}", e);
+                        }
+                    }
+                }
+                *self.play_music_flag.borrow_mut() = false;
+            }
+            
+            // Pause/Resume music
+            if *self.pause_music_flag.borrow() {
+                if audio.is_music_playing() {
+                    match audio.pause_music() {
+                        Ok(_) => {
+                            self.ui_manager.update_text(self.music_status_label_id, "Music: Paused".to_string());
+                            log::info!("⏸ Paused music");
+                        }
+                        Err(e) => log::warn!("⚠️ Failed to pause music: {}", e),
+                    }
+                } else {
+                    // Resume if paused
+                    match audio.resume_music() {
+                        Ok(_) => {
+                            self.ui_manager.update_text(self.music_status_label_id, "Music: Playing".to_string());
+                            log::info!("▶ Resumed music");
+                        }
+                        Err(e) => log::warn!("⚠️ Failed to resume music: {}", e),
+                    }
+                }
+                *self.pause_music_flag.borrow_mut() = false;
+            }
+            
+            // Loop toggle button
+            if *self.stop_music_flag.borrow() {
+                self.music_loop_enabled = !self.music_loop_enabled;
+                
+                // Update button text to reflect new state
+                let loop_text = if self.music_loop_enabled {
+                    "🔁 Loop: On"
+                } else {
+                    "🔁 Loop: Off"
+                };
+                
+                if let Some(button) = self.ui_manager.get_button_mut(self.stop_music_button_id) {
+                    button.text = loop_text.to_string();
+                }
+                
+                log::info!("🔁 Music loop: {}", if self.music_loop_enabled { "ON" } else { "OFF" });
+                *self.stop_music_flag.borrow_mut() = false;
+            }
+            
+            // Update music status label based on current state
+            use rust_engine::audio::MusicState;
+            match audio.music_state() {
+                MusicState::Playing => {
+                    let time = audio.music_playback_time();
+                    let loop_indicator = if self.music_loop_enabled { " 🔁" } else { "" };
+                    self.ui_manager.update_text(self.music_status_label_id, format!("Music: Playing ({:.1}s){}", time, loop_indicator));
+                }
+                MusicState::Crossfading => {
+                    self.ui_manager.update_text(self.music_status_label_id, "Music: Crossfading...".to_string());
+                }
+                MusicState::Paused => {
+                    self.ui_manager.update_text(self.music_status_label_id, "Music: Paused".to_string());
+                }
+                MusicState::Stopped => {
+                    // Music stopped, update state
+                    if self.music_is_playing {
+                        self.music_is_playing = false;
+                        
+                        // If looping is enabled, restart the music
+                        if self.music_loop_enabled {
+                            use rust_engine::audio::MusicTrack;
+                            let track = MusicTrack::new("background_music", "resources/audio/music.mp3")
+                                .with_fade_duration(1.0)
+                                .with_volume(0.7);
+                            
+                            if let Ok(_) = audio.play_music_track(track, Some(0.5)) {
+                                self.music_is_playing = true;
+                                log::info!("🔁 Looping music...");
+                            }
+                        }
+                    }
+                }
+            }
+        }
         
         log::debug!("UI overlay commands recorded successfully");
         
@@ -1612,30 +2635,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Create and run the application
     log::info!("Creating dynamic application instance...");
+    let mut app = DynamicTeapotApp::new();
     
-    let result = std::panic::catch_unwind(|| {
-        let mut app = DynamicTeapotApp::new();
-        log::info!("Running dynamic application...");
-        app.run()
-    });
+    log::info!("Running dynamic application...");
+    let result = app.run();
     
     match result {
-        Ok(Ok(())) => {
+        Ok(()) => {
             log::info!("Dynamic teapot demo completed successfully");
             Ok(())
         }
-        Ok(Err(e)) => {
+        Err(e) => {
             log::error!("Dynamic teapot demo failed: {:?}", e);
             Err(e)
-        }
-        Err(panic) => {
-            log::error!("Dynamic teapot demo panicked");
-            if let Some(s) = panic.downcast_ref::<String>() {
-                log::error!("Panic message: {}", s);
-            } else if let Some(s) = panic.downcast_ref::<&str>() {
-                log::error!("Panic message: {}", s);
-            }
-            Err("Application panicked".into())
         }
     }
 }

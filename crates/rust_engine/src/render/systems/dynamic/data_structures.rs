@@ -334,7 +334,7 @@ impl MaterialInstanceData {
             base_color: props.base_color,
             material_factors: [props.metallic, props.roughness, 0.0, props.alpha],
             emission_and_index: [props.emission[0], props.emission[1], props.emission[2], 0.0],
-            flags_and_padding: [0, 0, 0, 0], // TODO: Add material flags
+            flags_and_padding: [0, 0, 0, 0], // TODO: Set texture flags from material
         }
     }
     

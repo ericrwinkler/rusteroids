@@ -240,8 +240,8 @@ void main() {
     
     // Sample emission texture if enabled (additional_params.x is flag)
     if (material.additional_params.x != 0.0) {
-        vec3 emissionTex = texture(emissionTexture, fragTexCoord).rgb;
-        emissionColor *= emissionTex;
+        vec4 emissionTex = texture(emissionTexture, fragTexCoord);
+        emissionColor *= emissionTex.rgb * emissionTex.a; // Use alpha as emission mask
     }
     
     lighting_result += emissionColor * emissionStrength;

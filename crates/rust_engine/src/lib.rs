@@ -49,6 +49,9 @@
 // Core engine modules
 pub mod core;
 
+// Scene management (NEW - Proposal #1)
+pub mod scene;
+
 // Legacy module organization (maintained for compatibility)
 pub mod foundation;
 pub mod ecs;
@@ -82,6 +85,8 @@ pub mod prelude {
         render::{GraphicsEngine, Camera, Mesh, Material},
         input::{InputManager, KeyCode, MouseButton},
         events::{Event, EventType, EventArg, EventHandler, EventSystem},
+        // Scene management
+        scene::{SceneManager, SceneRenderer, SceneRendererConfig, RenderQueue},
         // New unified config system
         core::config::{ApplicationConfig, VulkanRendererConfig, ShaderConfig},
     };

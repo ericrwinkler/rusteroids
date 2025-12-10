@@ -10,8 +10,8 @@ use rust_engine::audio::{AudioSystem, SoundHandle};
 use rust_engine::ecs::{
     World, Entity, LightFactory, LightingSystem as EcsLightingSystem, 
     TransformComponent, LightComponent,
-    SceneManager,
 };
+use rust_engine::scene::SceneManager;
 use rust_engine::render::{
     Camera,
     Mesh,
@@ -29,7 +29,7 @@ use rust_engine::render::{
     TextLayout,
     systems::text::{create_lit_text_material, create_unlit_text_material, TextRenderer},
 };
-use rust_engine::foundation::math::{Vec3, Mat4};
+use rust_engine::foundation::math::{Vec3, Mat4, Quat};
 use glfw::{Action, Key, WindowEvent};
 use std::time::Instant;
 use rand::prelude::*;
@@ -42,26 +42,15 @@ const MAX_LIGHTS: usize = 12;    // Maximum number of lights before oldest are d
 #[derive(Clone)]
 struct TeapotInstance {
     entity: Option<Entity>,
-    dynamic_handle: Option<DynamicObjectHandle>, // Dynamic object handle for pooled rendering
-    position: Vec3,
-    rotation: Vec3,      // Rotation angles in radians
-    scale: f32,
-    spin_speed: Vec3,    // Angular velocity for each axis
-    orbit_radius: f32,   // Radius for orbital motion
-    orbit_speed: f32,    // Speed of orbital motion
-    orbit_center: Vec3,  // Center point for orbit
-    material_index: usize,
+    material: Material,  // Store the actual material with all properties
     spawn_time: Instant, // When this instance was created
     lifetime: f32,       // How long it should live (in seconds)
 }
 
 #[derive(Clone)]
 struct SpaceshipInstance {
-    dynamic_handle: DynamicObjectHandle,
-    position: Vec3,
-    rotation: Vec3,
-    velocity: Vec3,
-    angular_velocity: Vec3,
+    entity: Option<Entity>,
+    material: Material,  // Store the actual material with all properties
     spawn_time: Instant,
     lifetime: f32,
 }
@@ -111,6 +100,10 @@ pub struct DynamicTeapotApp {
     
     // New SceneManager for batch rendering
     scene_manager: SceneManager,
+    
+    // Entity handle tracking: Maps ECS Entity -> (MeshType, DynamicObjectHandle)
+    // This prevents re-allocation every frame and stores mesh type for efficient updates
+    entity_handles: std::collections::HashMap<Entity, (MeshType, DynamicObjectHandle)>,
     
     // Traditional lighting system (keep for compatibility)
     world: World,
@@ -854,6 +847,7 @@ impl DynamicTeapotApp {
             graphics_engine,
             camera,
             scene_manager,
+            entity_handles: std::collections::HashMap::new(),
             world,
             lighting_system,
             teapot_instances,
@@ -1102,47 +1096,27 @@ impl DynamicTeapotApp {
             }
         };
         
-        // Compute transform matrix (application responsibility)
-        let transform = Mat4::new_translation(&position)
-            * Mat4::from_euler_angles(0.0, 0.0, 0.0)
-            * Mat4::new_nonuniform_scaling(&Vec3::new(1.5, 1.5, 1.5));
+        // ✅ Use Scene Manager API to create renderable entity (Proposal #1 Phase 2)
+        use rust_engine::foundation::math::Transform;
+        let entity = self.scene_manager.create_renderable_entity(
+            &mut self.world,
+            self.teapot_mesh.as_ref().unwrap().clone(),
+            MaterialId(0), // Material ID will be managed by render system
+            Transform::from_position(position),
+        );
         
-        // Spawn dynamic object with 1.5x scale (50% bigger)
-        match self.graphics_engine.allocate_from_pool(
-            MeshType::Teapot,
-            transform,
-            selected_material.clone(),
-        ) {
-            Ok(dynamic_handle) => {
-                // Create instance tracker
-                let instance = TeapotInstance {
-                    entity: None, // No longer using SceneManager
-                    dynamic_handle: Some(dynamic_handle),
-                    position,
-                    rotation: Vec3::new(0.0, 0.0, 0.0),
-                    scale: 1.5,
-                    spin_speed: Vec3::new(
-                        rng.gen_range(-2.0..2.0),
-                        rng.gen_range(-2.0..2.0),
-                        rng.gen_range(-2.0..2.0),
-                    ),
-                    orbit_radius: rng.gen_range(2.0..8.0),
-                    orbit_speed: rng.gen_range(0.5..2.0),
-                    orbit_center: position,
-                    material_index: 0, // Not used anymore
-                    spawn_time: Instant::now(),
-                    lifetime,
-                };
-                
-                self.teapot_instances.push(instance);
-                
-                log::info!("Spawned monkey #{} at {:?} with {} material (lifetime: {:.1}s)", 
-                          self.teapot_instances.len(), position, material_name, lifetime);
-            }
-            Err(e) => {
-                log::error!("Failed to spawn dynamic teapot: {}", e);
-            }
-        }
+        // Create instance tracker for animation/lifetime management
+        let instance = TeapotInstance {
+            entity: Some(entity),
+            material: selected_material.clone(), // Store the actual material
+            spawn_time: Instant::now(),
+            lifetime,
+        };
+        
+        self.teapot_instances.push(instance);
+        
+        log::info!("Spawned monkey #{} (Entity {:?}) at {:?} with {} material (lifetime: {:.1}s)", 
+                  self.teapot_instances.len(), entity, position, material_name, lifetime);
     }
     
     fn spawn_random_light(&mut self) {
@@ -1290,22 +1264,10 @@ impl DynamicTeapotApp {
             rng.gen_range(0.0..std::f32::consts::TAU),
         );
         
-        // Random velocity (drifting motion)
-        let velocity = Vec3::new(
-            rng.gen_range(-1.0..1.0),
-            rng.gen_range(-0.5..0.5),
-            rng.gen_range(-1.0..1.0),
-        );
-        
-        // Random angular velocity (spinning)
-        let angular_velocity = Vec3::new(
-            rng.gen_range(-0.5..0.5),
-            rng.gen_range(-0.5..0.5),
-            rng.gen_range(-0.5..0.5),
-        );
-        
         // Random lifetime between 10-20 seconds
         let lifetime = rng.gen_range(10.0..20.0);
+        
+        let scale = rng.gen_range(1.5..3.0); // Varying sizes
         
         // Create spaceship material with custom textures (already loaded during initialization)
         let base_texture_handle = rust_engine::render::resources::materials::TextureHandle(4);
@@ -1325,37 +1287,31 @@ impl DynamicTeapotApp {
         .with_emission_texture(emission_texture_handle)
         .with_name("Spaceship");
         
-        // Compute transform matrix
-        let scale = rng.gen_range(1.5..3.0); // Varying sizes
-        let transform = Mat4::new_translation(&position)
-            * Mat4::from_euler_angles(rotation.x, rotation.y, rotation.z)
-            * Mat4::new_nonuniform_scaling(&Vec3::new(scale, scale, scale));
+        // ✅ Use Scene Manager API to create renderable entity (Proposal #1 Phase 2)
+        use rust_engine::foundation::math::Transform;
+        let rotation_quat = Quat::from_euler_angles(rotation.x, rotation.y, rotation.z);
+        let entity = self.scene_manager.create_renderable_entity(
+            &mut self.world,
+            self.spaceship_mesh.as_ref().unwrap().clone(),
+            MaterialId(0), // Material ID will be managed by render system
+            Transform {
+                position,
+                rotation: rotation_quat,
+                scale: Vec3::new(scale, scale, scale),
+            },
+        );
         
-        // Spawn spaceship
-        match self.graphics_engine.allocate_from_pool(
-            MeshType::Spaceship,
-            transform,
-            spaceship_material,
-        ) {
-            Ok(dynamic_handle) => {
-                let instance = SpaceshipInstance {
-                    dynamic_handle,
-                    position,
-                    rotation,
-                    velocity,
-                    angular_velocity,
-                    spawn_time: Instant::now(),
-                    lifetime,
-                };
-                
-                self.spaceship_instances.push(instance);
-                log::info!("Spawned spaceship #{} at {:?} (lifetime: {:.1}s)", 
-                          self.spaceship_instances.len(), position, lifetime);
-            }
-            Err(e) => {
-                log::warn!("Failed to spawn spaceship: {}", e);
-            }
-        }
+        // Create instance tracker for animation/lifetime management
+        let instance = SpaceshipInstance {
+            entity: Some(entity),
+            material: spaceship_material.clone(), // Store the actual material
+            spawn_time: Instant::now(),
+            lifetime,
+        };
+        
+        self.spaceship_instances.push(instance);
+        log::info!("Spawned spaceship #{} (Entity {:?}) at {:?} (lifetime: {:.1}s)", 
+                  self.spaceship_instances.len(), entity, position, lifetime);
     }
     
     fn despawn_excess_objects(&mut self) {
@@ -1376,17 +1332,17 @@ impl DynamicTeapotApp {
                 
                 let elapsed = instance.spawn_time.elapsed().as_secs_f32();
                 
-                // Handle both old entity system and new dynamic handle system
+                // ✅ Use Scene Manager API to destroy entity (Proposal #1 Phase 2)
                 if let Some(entity) = instance.entity {
-                    self.scene_manager.remove_entity(entity);
-                    log::info!("Despawned old teapot entity (lived {:.1}s)", elapsed);
-                }
-                if let Some(handle) = instance.dynamic_handle {
-                    if let Err(e) = self.graphics_engine.free_pool_instance(MeshType::Teapot, handle) {
-                        log::warn!("Failed to despawn old teapot: {}", e);
-                    } else {
-                        log::info!("Despawned old teapot (lived {:.1}s, over limit)", elapsed);
+                    // Remove handle tracking and free GPU resources
+                    if let Some((mesh_type, handle)) = self.entity_handles.remove(&entity) {
+                        if let Err(e) = self.graphics_engine.free_pool_instance(mesh_type, handle) {
+                            log::warn!("Failed to free pool instance for entity {:?}: {}", entity, e);
+                        }
                     }
+                    // Remove from Scene Manager and ECS
+                    self.scene_manager.destroy_entity(&mut self.world, entity);
+                    log::info!("Despawned old teapot entity (lived {:.1}s)", elapsed);
                 }
             }
         }
@@ -1433,10 +1389,18 @@ impl DynamicTeapotApp {
                 
                 let elapsed = instance.spawn_time.elapsed().as_secs_f32();
                 
-                if let Err(e) = self.graphics_engine.free_pool_instance(MeshType::Spaceship, instance.dynamic_handle) {
-                    log::warn!("Failed to despawn old spaceship: {}", e);
-                } else {
-                    log::info!("Despawned old spaceship (lived {:.1}s, over limit)", elapsed);
+                // ✅ Use Scene Manager API to destroy entity (Proposal #1 Phase 2)
+                if let Some(entity) = instance.entity {
+                    // Remove handle tracking and free GPU resources
+                    if let Some((mesh_type, handle)) = self.entity_handles.remove(&entity) {
+                        if let Err(e) = self.graphics_engine.free_pool_instance(mesh_type, handle) {
+                            log::warn!("Failed to free pool instance for spaceship entity {:?}: {}", entity, e);
+                        } else {
+                            log::info!("Despawned old spaceship entity (lived {:.1}s, over limit)", elapsed);
+                        }
+                    }
+                    // Remove from Scene Manager and ECS
+                    self.scene_manager.destroy_entity(&mut self.world, entity);
                 }
             }
         }
@@ -2060,7 +2024,7 @@ impl DynamicTeapotApp {
             // Update animations
             self.update_scene();
             
-            // Render frame
+            // Render frame (sync and rendering now happens inside render_frame)
             if let Err(e) = self.render_frame() {
                 log::error!("Failed to render frame: {:?}", e);
                 break;
@@ -2115,9 +2079,6 @@ impl DynamicTeapotApp {
         
         self.camera.set_position(Vec3::new(camera_x, camera_height, camera_z));
         self.camera.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
-        
-        // Update SceneManager (handles all teapot movement automatically)
-        self.scene_manager.update(delta_time, &mut self.graphics_engine);
         
         // Update light movements and effects
         for light_instance in &mut self.light_instances {
@@ -2247,6 +2208,48 @@ impl DynamicTeapotApp {
         // Build multi-light environment from entity system
         let multi_light_env = self.build_multi_light_environment_from_entities().clone();
         self.graphics_engine.set_multi_light_environment(&multi_light_env);
+        
+        // ✅ PHASE 4 COMPLETE: Render from Scene Manager with entity handle tracking
+        self.scene_manager.sync_from_world(&mut self.world);
+        let render_queue = self.scene_manager.build_render_queue();
+        
+        // Render all entities from Scene Manager with smart handle tracking
+        for batch in render_queue.opaque_batches() {
+            for obj in &batch.objects {
+                // Check if we already have a handle for this entity
+                if let Some(&(mesh_type, handle)) = self.entity_handles.get(&obj.entity) {
+                    // Existing entity - just update its transform (no lookup needed!)
+                    if let Err(e) = self.graphics_engine.update_pool_instance(mesh_type, handle, obj.transform) {
+                        log::warn!("Failed to update entity {:?} transform: {}", obj.entity, e);
+                    }
+                } else {
+                    // New entity - determine mesh type and material (only once!)
+                    let (mesh_type, material) = if let Some(inst) = self.teapot_instances.iter().find(|inst| inst.entity == Some(obj.entity)) {
+                        (MeshType::Teapot, inst.material.clone())
+                    } else if let Some(inst) = self.spaceship_instances.iter().find(|inst| inst.entity == Some(obj.entity)) {
+                        (MeshType::Spaceship, inst.material.clone())
+                    } else {
+                        continue; // Unknown entity, skip
+                    };
+                    
+                    // Allocate a handle with the stored material
+                    match self.graphics_engine.allocate_from_pool(
+                        mesh_type,
+                        obj.transform,
+                        material,
+                    ) {
+                        Ok(handle) => {
+                            self.entity_handles.insert(obj.entity, (mesh_type, handle));
+                            log::debug!("Allocated {:?} handle for entity {:?}", mesh_type, obj.entity);
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to allocate {:?} for entity {:?}: {}. Tracked handles: {}", 
+                                      mesh_type, obj.entity, e, self.entity_handles.len());
+                        }
+                    }
+                }
+            }
+        }
         
         // UPDATE DYNAMIC OBJECTS: All objects are spawned directly in spawn methods
         // No additional spawning logic needed here

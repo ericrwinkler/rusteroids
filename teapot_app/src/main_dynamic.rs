@@ -5,7 +5,7 @@
 
 #![allow(dead_code)] // Allow unused fields in structs for demo purposes
 
-use rust_engine::assets::obj_loader::ObjLoader;
+use rust_engine::assets::{ObjLoader, MaterialBuilder};
 use rust_engine::audio::{AudioSystem, SoundHandle};
 use rust_engine::ecs::{
     World, Entity, LightFactory, LightingSystem as EcsLightingSystem, 
@@ -17,8 +17,6 @@ use rust_engine::render::{
     Camera,
     Mesh,
     Material,
-    StandardMaterialParams,
-    UnlitMaterialParams,
     systems::lighting::MultiLightEnvironment,
     GraphicsEngine,
     VulkanRendererConfig,
@@ -29,7 +27,7 @@ use rust_engine::render::{
     TextLayout,
     systems::text::{create_lit_text_material, create_unlit_text_material, TextRenderer},
 };
-use rust_engine::foundation::math::{Vec3, Mat4, Quat};
+use rust_engine::foundation::math::{Vec3, Quat};
 use glfw::{Action, Key, WindowEvent};
 use std::time::Instant;
 use rand::prelude::*;
@@ -108,6 +106,14 @@ pub struct DynamicTeapotApp {
     teapot_mesh: Option<Mesh>,
     sphere_mesh: Option<Mesh>,
     spaceship_mesh: Option<Mesh>,
+    spaceship_base_texture: Option<rust_engine::render::resources::materials::TextureHandle>,
+    spaceship_emission_texture: Option<rust_engine::render::resources::materials::TextureHandle>,
+    frigate_mesh: Option<Mesh>,
+    frigate_base_texture: Option<rust_engine::render::resources::materials::TextureHandle>,
+    frigate_emission_texture: Option<rust_engine::render::resources::materials::TextureHandle>,
+    monkey_base_texture: Option<rust_engine::render::resources::materials::TextureHandle>,
+    monkey_normal_texture: Option<rust_engine::render::resources::materials::TextureHandle>,
+    monkey_emission_texture: Option<rust_engine::render::resources::materials::TextureHandle>,
     quad_mesh: Option<Mesh>, // Simple quad for testing
     material_ids: Vec<MaterialId>,
     
@@ -838,6 +844,14 @@ impl DynamicTeapotApp {
             teapot_mesh: None,
             sphere_mesh: None,
             spaceship_mesh: None,
+            spaceship_base_texture: None,
+            spaceship_emission_texture: None,
+            frigate_mesh: None,
+            frigate_base_texture: None,
+            frigate_emission_texture: None,
+            monkey_base_texture: None,
+            monkey_normal_texture: None,
+            monkey_emission_texture: None,
             quad_mesh: None,
             material_ids,
 
@@ -970,18 +984,23 @@ impl DynamicTeapotApp {
             ];
             let base_color = base_colors[rng.gen_range(0..base_colors.len())];
             
-            // Random texture application (30-40% chance for each texture)
-            let use_base_texture = rng.gen_bool(0.35);
-            let use_normal_texture = rng.gen_bool(0.35);
+            let mut material = MaterialBuilder::new()
+                .base_color(base_color)
+                .metallic(rng.gen_range(0.0..0.3))
+                .roughness(rng.gen_range(0.6..0.9))
+                .build();
             
-            Material::standard_pbr(StandardMaterialParams {
-                base_color,
-                metallic: rng.gen_range(0.0..0.3),
-                roughness: rng.gen_range(0.6..0.9),
-                base_color_texture_enabled: use_base_texture,
-                normal_texture_enabled: use_normal_texture,
-                ..Default::default()
-            })
+            // 50% chance to add base texture and normal map
+            if rng.gen_bool(0.5) {
+                if let Some(base_tex) = self.monkey_base_texture {
+                    material = material.with_base_color_texture(base_tex);
+                }
+                if let Some(normal_tex) = self.monkey_normal_texture {
+                    material = material.with_normal_texture(normal_tex);
+                }
+            }
+            
+            material
         } else if roll < 0.85 {
             // Standard PBR with emission (25%)
             let emission_colors = [
@@ -993,22 +1012,34 @@ impl DynamicTeapotApp {
                 Vec3::new(0.0, 0.5, 1.0),  // Blue
             ];
             let emission = emission_colors[rng.gen_range(0..emission_colors.len())];
-            let emission_strength = rng.gen_range(0.8..2.5); // Dynamic intensity
+            let emission_strength = rng.gen_range(0.8..2.5);
             
-            // Random texture application (30-40% chance for each texture)
-            let use_base_texture = rng.gen_bool(0.35);
-            let use_normal_texture = rng.gen_bool(0.35);
+            let mut material = MaterialBuilder::new()
+                .base_color_rgb(0.8, 0.8, 0.8)
+                .metallic(0.1)
+                .roughness(0.8)
+                .emission(emission)
+                .emission_strength(emission_strength)
+                .build();
             
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.8, 0.8, 0.8),
-                metallic: 0.1,
-                roughness: 0.8,
-                emission,
-                emission_strength,
-                base_color_texture_enabled: use_base_texture,
-                normal_texture_enabled: use_normal_texture,
-                ..Default::default()
-            })
+            // 70% chance to add emission texture on emissive materials
+            if rng.gen_bool(0.7) {
+                if let Some(emission_tex) = self.monkey_emission_texture {
+                    material = material.with_emission_texture(emission_tex);
+                }
+            }
+            
+            // 30% chance to also add base texture and normal map
+            if rng.gen_bool(0.3) {
+                if let Some(base_tex) = self.monkey_base_texture {
+                    material = material.with_base_color_texture(base_tex);
+                }
+                if let Some(normal_tex) = self.monkey_normal_texture {
+                    material = material.with_normal_texture(normal_tex);
+                }
+            }
+            
+            material
         } else if roll < 0.95 {
             // Transparent variants (10%)
             if rng.gen_bool(0.5) {
@@ -1020,13 +1051,12 @@ impl DynamicTeapotApp {
                 ];
                 let color = glass_colors[rng.gen_range(0..glass_colors.len())];
                 
-                Material::transparent_pbr(StandardMaterialParams {
-                    base_color: color,
-                    alpha: 0.3,
-                    metallic: 0.9,
-                    roughness: 0.1,
-                    ..Default::default()
-                })
+                MaterialBuilder::new()
+                    .base_color(color)
+                    .metallic(0.9)
+                    .roughness(0.1)
+                    .alpha(0.3)
+                    .build_transparent()
             } else {
                 // Transparent Unlit (ghost-like)
                 let ghost_colors = [
@@ -1036,10 +1066,12 @@ impl DynamicTeapotApp {
                 ];
                 let color = ghost_colors[rng.gen_range(0..ghost_colors.len())];
                 
-                Material::transparent_unlit(UnlitMaterialParams {
-                    color,
-                    alpha: 0.4,
-                })
+                MaterialBuilder::new()
+                    .base_color(color)
+                    .metallic(0.0)
+                    .roughness(1.0)
+                    .alpha(0.4)
+                    .build_transparent()
             }
         } else {
             // Unlit variants (5%)
@@ -1051,10 +1083,11 @@ impl DynamicTeapotApp {
             ];
             let color = bright_colors[rng.gen_range(0..bright_colors.len())];
             
-            Material::unlit(UnlitMaterialParams {
-                color,
-                alpha: 1.0,
-            })
+            MaterialBuilder::new()
+                .base_color(color)
+                .metallic(0.0)
+                .roughness(1.0)
+                .build()
         };
         
         // Get material name for logging
@@ -1193,20 +1226,23 @@ impl DynamicTeapotApp {
     /// - Reusable systems with different resource sets
     fn spawn_sphere_marker(&mut self, position: Vec3, color: Vec3) -> Option<DynamicObjectHandle> {
         // Create a transparent unlit material with the light's color
-        let sphere_material = Material::transparent_unlit(UnlitMaterialParams {
-            color,
-            alpha: 0.1, // Semi-transparent
-        });
+        let sphere_material = MaterialBuilder::new()
+            .base_color(color)
+            .metallic(0.0)
+            .roughness(1.0)
+            .alpha(0.1)
+            .build_transparent();
         
-        // Compute transform matrix (application responsibility)
-        let transform = Mat4::new_translation(&position)
-            * Mat4::from_euler_angles(0.0, 0.0, 0.0)
-            * Mat4::new_nonuniform_scaling(&Vec3::new(0.8, 0.8, 0.8));
+        // ✅ Use TransformComponent builder pattern (Proposal #3)
+        use rust_engine::ecs::components::TransformComponent;
+        let transform_component = TransformComponent::identity()
+            .with_position(position)
+            .with_uniform_scale(0.8);
         
         // Spawn sphere using multi-mesh system with appropriate scale
         match self.graphics_engine.allocate_from_pool(
             MeshType::Sphere,
-            transform,
+            transform_component.to_matrix(),
             sphere_material,
         ) {
             Ok(handle) => {
@@ -1241,23 +1277,25 @@ impl DynamicTeapotApp {
         
         let scale = rng.gen_range(1.5..3.0); // Varying sizes
         
-        // Create spaceship material with custom textures (already loaded during initialization)
-        let base_texture_handle = rust_engine::render::resources::materials::TextureHandle(4);
-        let emission_texture_handle = rust_engine::render::resources::materials::TextureHandle(5);
-        
-        let spaceship_material = Material::standard_pbr(StandardMaterialParams {
-            base_color: Vec3::new(1.0, 1.0, 1.0),
-            alpha: 1.0,
-            metallic: 0.8,
-            roughness: 0.2,
-            emission: Vec3::new(1.0, 1.0, 1.0),
-            emission_strength: rng.gen_range(3.0..8.0), // Varying engine glow
-            base_color_texture_enabled: true,  // Enable base color texture sampling
-            ..Default::default()
-        })
-        .with_base_color_texture(base_texture_handle)
-        .with_emission_texture(emission_texture_handle)
-        .with_name("Spaceship");
+        // Load spaceship material from MTL file with automatic texture loading
+        // MTL file defines: base color, metallic (from Ks), roughness (from Ns), 
+        // emission (from Ke), alpha/transparency (from d), and textures
+        let spaceship_material = rust_engine::assets::MaterialLoader::load_mtl_with_textures(
+            "resources/models/spaceship_simple.mtl",
+            "Material.001",
+            &mut self.graphics_engine
+        ).unwrap_or_else(|e| {
+            log::warn!("Failed to load spaceship material from MTL: {}. Using fallback.", e);
+            // Fallback material if MTL loading fails
+            MaterialBuilder::new()
+                .base_color_rgb(0.7, 0.75, 0.8)
+                .metallic(0.8)
+                .roughness(0.2)
+                .emission_rgb(0.2, 0.6, 1.0)
+                .emission_strength(3.0)
+                .name("Spaceship Fallback")
+                .build_transparent()
+        });
         
         // ✅ Use Scene Manager API to create renderable entity (Proposal #1 Phase 2)
         use rust_engine::foundation::math::Transform;
@@ -1281,6 +1319,56 @@ impl DynamicTeapotApp {
         
         log::info!("Spawned spaceship (Entity {:?}) at {:?} (lifetime: {:.1}s)", 
                   entity, position, lifetime);
+    }
+    
+    fn spawn_background_frigate(&mut self) {
+        // Spawn frigate in the background
+        let position = Vec3::new(0.0, 3.0, -80.0); // Higher and back
+        let scale = 3.0; // Larger since it's further away
+        
+        // Slight angle for visual interest
+        let rotation = Vec3::new(
+            -0.1, // Slight pitch down
+            0.7,  // Slight yaw
+            0.0,  // No roll
+        );
+        
+        // Load frigate material from MTL file with automatic texture loading
+        let frigate_material = rust_engine::assets::MaterialLoader::load_mtl_with_textures(
+            "resources/models/frigate.mtl",
+            "Material.001",
+            &mut self.graphics_engine
+        ).unwrap_or_else(|e| {
+            log::warn!("Failed to load frigate material from MTL: {}. Using fallback.", e);
+            // Fallback material if MTL loading fails
+            MaterialBuilder::new()
+                .base_color_rgb(1.0, 1.0, 1.0)
+                .metallic(0.6)
+                .roughness(0.3)
+                .emission_rgb(1.0, 1.0, 1.0)
+                .emission_strength(8.0)
+                .name("Frigate Fallback")
+                .build()
+        });
+        
+        // Create the frigate entity
+        use rust_engine::foundation::math::Transform;
+        let rotation_quat = Quat::from_euler_angles(rotation.x, rotation.y, rotation.z);
+        let entity = self.scene_manager.create_renderable_entity(
+            &mut self.world,
+            self.frigate_mesh.as_ref().unwrap().clone(),
+            rust_engine::render::systems::dynamic::MeshType::Frigate,
+            frigate_material,
+            Transform {
+                position,
+                rotation: rotation_quat,
+                scale: Vec3::new(scale, scale, scale),
+            },
+        );
+        
+        // Make it persistent (no LifecycleComponent, so it won't despawn)
+        log::info!("Spawned background frigate (Entity {:?}) at {:?} with scale {:.2}", 
+                  entity, position, scale);
     }
     
     fn despawn_excess_objects(&mut self) {
@@ -1355,95 +1443,92 @@ impl DynamicTeapotApp {
     }
     
     fn create_teapot_materials() -> Vec<Material> {
-        log::info!("Creating test materials for all 4 pipeline types...");
+        log::info!("Creating test materials using MaterialBuilder...");
         vec![
-            // ==== OPAQUE MATERIALS (StandardPBR + Unlit pipelines) ====
+            // 1. Red ceramic with emission glow
+            MaterialBuilder::new()
+                .base_color_rgb(0.8, 0.2, 0.2)
+                .metallic(0.1)
+                .roughness(0.3)
+                .emission_rgb(1.0, 0.5, 0.0)
+                .emission_strength(2.0)
+                .name("Red Ceramic with Emission")
+                .build(),
             
-            // 1. StandardPBR - Red ceramic (opaque with lighting)
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.8, 0.2, 0.2), // Red
-                alpha: 1.0,
-                metallic: 0.1,
-                roughness: 0.3,
-                emission: Vec3::new(1.0, 0.5, 0.0), // Orange emission glow
-                emission_strength: 2.0,
-                ..Default::default()
-            }).with_name("Opaque PBR (Red Ceramic with Emission)"),
+            // 2. Flat green unlit
+            MaterialBuilder::new()
+                .base_color_rgb(0.2, 0.8, 0.2)
+                .metallic(0.0)
+                .roughness(1.0)
+                .name("Flat Green Unlit")
+                .build(),
             
-            // 2. Unlit - Flat green (opaque, no lighting)
-            Material::unlit(UnlitMaterialParams {
-                color: Vec3::new(0.2, 0.8, 0.2), // Green
-                alpha: 1.0,
-            }).with_name("Opaque Unlit (Flat Green)"),
+            // 3. Metallic gold
+            MaterialBuilder::new()
+                .base_color_rgb(1.0, 0.8, 0.2)
+                .metallic(0.9)
+                .roughness(0.2)
+                .emission_rgb(1.0, 0.8, 0.0)
+                .emission_strength(1.5)
+                .name("Gold Metal")
+                .build(),
             
-            // 3. StandardPBR - Gold (opaque metallic)
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(1.0, 0.8, 0.2), // Golden
-                alpha: 1.0,
-                metallic: 0.9,
-                roughness: 0.2,
-                emission: Vec3::new(1.0, 0.8, 0.0), // Yellow-gold emission
-                emission_strength: 1.5,
-                ..Default::default()
-            }).with_name("Opaque PBR (Gold with Emission)"),
+            // 4. Flat magenta unlit
+            MaterialBuilder::new()
+                .base_color_rgb(0.8, 0.2, 0.8)
+                .metallic(0.0)
+                .roughness(1.0)
+                .name("Flat Magenta Unlit")
+                .build(),
             
-            // 4. Unlit - Flat magenta (opaque, no lighting)
-            Material::unlit(UnlitMaterialParams {
-                color: Vec3::new(0.8, 0.2, 0.8), // Magenta
-                alpha: 1.0,
-            }).with_name("Opaque Unlit (Flat Magenta)"),
+            // 5. Blue glass (transparent)
+            MaterialBuilder::new()
+                .base_color_rgb(0.2, 0.2, 0.8)
+                .metallic(0.1)
+                .roughness(0.1)
+                .alpha(0.5)
+                .name("Blue Glass")
+                .build_transparent(),
             
-            // ==== TRANSPARENT MATERIALS (TransparentPBR + TransparentUnlit pipelines) ====
+            // 6. Yellow ghost (transparent unlit)
+            MaterialBuilder::new()
+                .base_color_rgb(0.8, 0.8, 0.2)
+                .metallic(0.0)
+                .roughness(1.0)
+                .alpha(0.35)
+                .name("Yellow Ghost")
+                .build_transparent(),
             
-            // 5. TransparentPBR - Blue glass (semi-transparent with lighting)
-            Material::transparent_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.2, 0.2, 0.8), // Blue
-                alpha: 0.5, // 50% transparent
-                metallic: 0.1,
-                roughness: 0.1, // Smooth like glass
-                ..Default::default()
-            }).with_name("Transparent PBR (Blue Glass)"),
+            // 7. Cyan glass (highly transparent)
+            MaterialBuilder::new()
+                .base_color_rgb(0.2, 0.8, 0.8)
+                .metallic(0.2)
+                .roughness(0.4)
+                .alpha(0.3)
+                .name("Cyan Glass")
+                .build_transparent(),
             
-            // 6. TransparentUnlit - Yellow ghost (semi-transparent, no lighting)
-            Material::transparent_unlit(UnlitMaterialParams {
-                color: Vec3::new(0.8, 0.8, 0.2), // Yellow
-                alpha: 0.35, // 65% transparent
-            }).with_name("Transparent Unlit (Yellow Ghost)"),
+            // 8. Orange ghost (transparent)
+            MaterialBuilder::new()
+                .base_color_rgb(0.9, 0.5, 0.1)
+                .metallic(0.0)
+                .roughness(1.0)
+                .alpha(0.4)
+                .name("Orange Ghost")
+                .build_transparent(),
             
-            // 7. TransparentPBR - Cyan glass (highly transparent)
-            Material::transparent_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.2, 0.8, 0.8), // Cyan
-                alpha: 0.3, // 70% transparent
-                metallic: 0.2,
-                roughness: 0.4,
-                ..Default::default()
-            }).with_name("Transparent PBR (Cyan Glass)"),
+            // 9. Silver metal with emission
+            MaterialBuilder::new()
+                .base_color_rgb(0.95, 0.93, 0.88)
+                .metallic(0.9)
+                .roughness(0.1)
+                .emission_rgb(0.5, 0.7, 1.0)
+                .emission_strength(2.5)
+                .name("Silver Metal")
+                .build(),
             
-            // 8. TransparentUnlit - Orange ghost (semi-transparent, no lighting)
-            Material::transparent_unlit(UnlitMaterialParams {
-                color: Vec3::new(0.9, 0.5, 0.1), // Orange
-                alpha: 0.4, // 60% transparent
-            }).with_name("Transparent Unlit (Orange Ghost)"),
-            
-            // 9. StandardPBR - Silver (opaque metallic for contrast)
-            Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.95, 0.93, 0.88), // Silver
-                alpha: 1.0,
-                metallic: 0.9,
-                roughness: 0.1,
-                emission: Vec3::new(0.5, 0.7, 1.0), // Cool blue emission
-                emission_strength: 2.5,
-                ..Default::default()
-            }).with_name("Opaque PBR (Silver with Emission)"),
-            
-            // 10. TransparentPBR - Purple gem (medium transparency)
-            Material::transparent_pbr(StandardMaterialParams {
-                base_color: Vec3::new(0.6, 0.2, 0.8), // Purple
-                alpha: 0.4, // 60% transparent
-                metallic: 0.3,
-                roughness: 0.1,
-                ..Default::default()
-            }).with_name("Transparent PBR (Purple Gem)"),
+            // 10. Purple gem (glowing crystal)
+            MaterialBuilder::glowing_crystal(Vec3::new(0.6, 0.2, 0.8), 1.5),
         ]
     }
     
@@ -1604,6 +1689,18 @@ impl DynamicTeapotApp {
             }
         }
         
+        // Load frigate mesh
+        match ObjLoader::load_obj("resources/models/frigate.obj") {
+            Ok(mesh) => {
+                log::info!("Loaded frigate mesh successfully with {} vertices and {} indices", 
+                          mesh.vertices.len(), mesh.indices.len());
+                self.frigate_mesh = Some(mesh);
+            }
+            Err(e) => {
+                log::warn!("Failed to load frigate.obj: {:?}", e);
+            }
+        }
+        
         // Create simple quad mesh for testing
         use rust_engine::render::Vertex;
         let quad_vertices = vec![
@@ -1685,14 +1782,15 @@ impl DynamicTeapotApp {
         // Create sphere mesh pool for light markers
         if let Some(ref sphere_mesh) = self.sphere_mesh {
             // Create simple materials for spheres (light markers)
-            let sphere_materials = vec![Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(1.0, 1.0, 0.0), // Yellow for light markers
-                alpha: 1.0,
-                metallic: 0.0,
-                roughness: 0.8,
-                emission: Vec3::new(0.2, 0.2, 0.0), // Slight emission for visibility
-                ..Default::default()
-            }).with_name("Light Marker")];
+            let sphere_materials = vec![
+                MaterialBuilder::new()
+                    .base_color_rgb(1.0, 1.0, 0.0)
+                    .metallic(0.0)
+                    .roughness(0.8)
+                    .emission_rgb(0.2, 0.2, 0.0)
+                    .name("Light Marker")
+                    .build()
+            ];
             
             if let Err(e) = self.graphics_engine.create_mesh_pool(
                 MeshType::Sphere,
@@ -1732,20 +1830,21 @@ impl DynamicTeapotApp {
             )?;
             log::info!("Uploaded spaceship textures to GPU");
             
+            // Store texture handles for later use
+            self.spaceship_base_texture = Some(base_texture_handle);
+            self.spaceship_emission_texture = Some(emission_texture_handle);
+            
             // Create spaceship material with custom textures
-            let spaceship_material = Material::standard_pbr(StandardMaterialParams {
-                base_color: Vec3::new(1.0, 1.0, 1.0), // White to show texture colors
-                alpha: 1.0,
-                metallic: 0.8,
-                roughness: 0.2,
-                emission: Vec3::new(1.0, 1.0, 1.0), // White to show emission texture colors
-                emission_strength: 5.0, // Strong emission for engine glow
-                base_color_texture_enabled: false, // We're using explicit textures, not the default
-                ..Default::default()
-            })
-            .with_base_color_texture(base_texture_handle)
-            .with_emission_texture(emission_texture_handle)
-            .with_name("Spaceship");
+            let spaceship_material = MaterialBuilder::new()
+                .base_color_rgb(1.0, 1.0, 1.0) // White to show texture colors
+                .metallic(0.8)
+                .roughness(0.2)
+                .emission_rgb(1.0, 1.0, 1.0) // White to show emission texture colors
+                .emission_strength(5.0) // Strong emission for engine glow
+                .name("Spaceship")
+                .build()
+                .with_base_color_texture(base_texture_handle)
+                .with_emission_texture(emission_texture_handle);
             
             if let Err(e) = self.graphics_engine.create_mesh_pool(
                 MeshType::Spaceship,
@@ -1757,6 +1856,116 @@ impl DynamicTeapotApp {
                 return Err(e);
             }
             log::info!("Created spaceship mesh pool successfully");
+        }
+        
+        // Create frigate mesh pool
+        if let Some(ref frigate_mesh) = self.frigate_mesh {
+            use rust_engine::assets::ImageData;
+            use rust_engine::render::resources::materials::TextureType;
+            
+            // Load custom frigate textures
+            log::info!("Loading frigate textures...");
+            let base_texture_path = "resources/textures/Frigate_texture.png";
+            let emission_texture_path = "resources/textures/Frigate_emission.png";
+            
+            let base_image = ImageData::from_file(base_texture_path)
+                .map_err(|e| format!("Failed to load frigate base texture: {}", e))?;
+            let emission_image = ImageData::from_file(emission_texture_path)
+                .map_err(|e| format!("Failed to load frigate emission texture: {}", e))?;
+            
+            // Upload textures to GPU
+            let base_texture_handle = self.graphics_engine.upload_texture_from_image_data(
+                base_image,
+                TextureType::BaseColor
+            )?;
+            let emission_texture_handle = self.graphics_engine.upload_texture_from_image_data(
+                emission_image,
+                TextureType::Emission
+            )?;
+            log::info!("Uploaded frigate textures to GPU");
+            
+            // Store texture handles for later use
+            self.frigate_base_texture = Some(base_texture_handle);
+            self.frigate_emission_texture = Some(emission_texture_handle);
+            
+            // Create frigate material with custom textures
+            let frigate_material = MaterialBuilder::new()
+                .base_color_rgb(1.0, 1.0, 1.0) // White to show texture colors
+                .metallic(0.6)
+                .roughness(0.3)
+                .emission_rgb(1.0, 1.0, 1.0) // White to show emission texture colors
+                .emission_strength(8.0) // Strong emission for engines
+                .name("Frigate")
+                .build()
+                .with_base_color_texture(base_texture_handle)
+                .with_emission_texture(emission_texture_handle);
+            
+            if let Err(e) = self.graphics_engine.create_mesh_pool(
+                MeshType::Frigate,
+                frigate_mesh,
+                &[frigate_material.clone()],
+                5 // Pool for up to 5 frigates
+            ) {
+                log::error!("Failed to create frigate mesh pool: {}", e);
+                return Err(e);
+            }
+            log::info!("Created frigate mesh pool successfully");
+            
+            // Spawn a large background frigate
+            self.spawn_background_frigate();
+        }
+        
+        // Load monkey textures for material variations
+        {
+            use rust_engine::assets::ImageData;
+            use rust_engine::render::resources::materials::TextureType;
+            
+            log::info!("Loading monkey textures...");
+            
+            // Load base color texture
+            if let Ok(base_image) = ImageData::from_file("resources/textures/texture.png") {
+                if let Ok(handle) = self.graphics_engine.upload_texture_from_image_data(
+                    base_image,
+                    TextureType::BaseColor
+                ) {
+                    self.monkey_base_texture = Some(handle);
+                    log::info!("Uploaded monkey base texture to GPU");
+                } else {
+                    log::warn!("Failed to upload monkey base texture to GPU");
+                }
+            } else {
+                log::warn!("Failed to load monkey base texture from file");
+            }
+            
+            // Load normal map texture
+            if let Ok(normal_image) = ImageData::from_file("resources/textures/normal_map.png") {
+                if let Ok(handle) = self.graphics_engine.upload_texture_from_image_data(
+                    normal_image,
+                    TextureType::Normal
+                ) {
+                    self.monkey_normal_texture = Some(handle);
+                    log::info!("Uploaded monkey normal map to GPU");
+                } else {
+                    log::warn!("Failed to upload monkey normal map to GPU");
+                }
+            } else {
+                log::warn!("Failed to load monkey normal map from file");
+            }
+            
+            // Load emission map texture
+            if let Ok(emission_image) = ImageData::from_file("resources/textures/emission_map.png") {
+                if let Ok(handle) = self.graphics_engine.upload_texture_from_image_data(
+                    emission_image,
+                    TextureType::Emission
+                ) {
+                    self.monkey_emission_texture = Some(handle);
+                    log::info!("Uploaded monkey emission map to GPU");
+                } else {
+                    log::warn!("Failed to upload monkey emission map to GPU");
+                }
+            } else {
+                log::warn!("Failed to load monkey emission map from file");
+            }
         }
         
         // Initialize text rendering test
@@ -1814,14 +2023,14 @@ impl DynamicTeapotApp {
             10
         )?;
         
-        // Spawn at origin
-        let transform = Mat4::new_translation(&Vec3::new(0.0, 0.0, 0.0))
-            * Mat4::from_euler_angles(0.0, 0.0, 0.0)
-            * Mat4::new_nonuniform_scaling(&Vec3::new(0.05, 0.05, 0.05));
+        // ✅ Spawn at origin using TransformComponent (Proposal #3)
+        use rust_engine::ecs::components::TransformComponent;
+        let transform_component = TransformComponent::identity()
+            .with_uniform_scale(0.05);
         
         let test_text_handle = self.graphics_engine.allocate_from_pool(
             MeshType::TextQuad,
-            transform,
+            transform_component.to_matrix(),
             test_text_material,
         )?;
         
@@ -1848,14 +2057,14 @@ impl DynamicTeapotApp {
             10
         )?;
         
-        // Position unlit text at (5, 2, 0) - to the right
-        let transform = Mat4::new_translation(&Vec3::new(5.0, 2.0, 0.0))
-            * Mat4::from_euler_angles(0.0, 0.0, 0.0)
-            * Mat4::new_nonuniform_scaling(&Vec3::new(0.05, 0.05, 0.05));
+        // ✅ Position unlit text at (5, 2, 0) using TransformComponent (Proposal #3)
+        let transform_component = TransformComponent::identity()
+            .with_position(Vec3::new(5.0, 2.0, 0.0))
+            .with_uniform_scale(0.05);
         
         let unlit_text_handle = self.graphics_engine.allocate_from_pool(
             MeshType::Cube,
-            transform,
+            transform_component.to_matrix(),
             unlit_text_material,
         )?;
         

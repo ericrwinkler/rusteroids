@@ -21,12 +21,14 @@ pub enum MeshType {
     TextQuad,
     /// Spaceship mesh - player or enemy ships
     Spaceship,
+    /// Frigate mesh - large capital ships
+    Frigate,
 }
 
 impl MeshType {
     /// Get all available mesh types
     pub fn all() -> &'static [MeshType] {
-        &[MeshType::Teapot, MeshType::Sphere, MeshType::Cube, MeshType::TextQuad, MeshType::Spaceship]
+        &[MeshType::Teapot, MeshType::Sphere, MeshType::Cube, MeshType::TextQuad, MeshType::Spaceship, MeshType::Frigate]
     }
     
     /// Get the default mesh model path for this mesh type
@@ -37,6 +39,7 @@ impl MeshType {
             MeshType::Cube => "models/cube.obj",
             MeshType::TextQuad => "", // Text quads are generated procedurally, not loaded
             MeshType::Spaceship => "models/spaceship_simple.obj",
+            MeshType::Frigate => "models/frigate.obj",
         }
     }
     
@@ -48,6 +51,7 @@ impl MeshType {
             MeshType::Cube => "Cube",
             MeshType::TextQuad => "TextQuad",
             MeshType::Spaceship => "Spaceship",
+            MeshType::Frigate => "Frigate",
         }
     }
 }

@@ -1,12 +1,35 @@
 # Blender 4.5.3 LTS MTL File: 'simple_spaceship.blend'
 # www.blender.org
+# Modified for metallic spaceship look with emission
 
 newmtl Material.001
-Ns 250.000000
-Ka 1.000000 1.000000 1.000000
-Ks 0.500000 0.500000 0.500000
-Ke 0.000000 0.000000 0.000000
+# Specular exponent: 800 = very shiny/smooth metal (Ns → roughness = 1.0 - 800/1000 = 0.2)
+Ns 800.000000
+
+# Ambient: Neutral gray for metal
+Ka 0.800000 0.800000 0.850000
+
+# Diffuse: Light metallic gray-blue (base color for metal hull)
+Kd 0.700000 0.750000 0.800000
+
+# Specular: Bright white-blue for metallic highlights (high values = metal-like)
+# High specular brightness → high metallic factor in PBR conversion
+Ks 0.900000 0.950000 1.000000
+
+# Emissive
+Ke 1.000000 1.000000 1.000000
+
+# Index of refraction: 1.5 (not used for opaque metals, but kept for compatibility)
 Ni 1.500000
-d 1.000000
+
+# Dissolve: 1.0 = fully opaque (metals are never transparent)
+d 1.0
+
+# Illumination model: 2 = Phong shading with diffuse + specular
 illum 2
+
+# Base color texture (hull plating, panel details)
 map_Kd C:/Users/Eric_/Projects/rusteroids/resources/textures/spaceship_simple_texture.png
+
+# Emission texture (engine glow, lights - Blender extension to MTL spec)
+map_Ke C:/Users/Eric_/Projects/rusteroids/resources/textures/spaceship_simple_emission_map.png

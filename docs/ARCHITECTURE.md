@@ -60,9 +60,18 @@ rusteroids/
 │   │       │   │       └── sdf.rs           # Signed distance fields (future)
 │   │       │   ├── game_object.rs   # Static object system
 │   │       │   ├── shared_resources.rs     # Common rendering resources
-│   │       │   └── material/        # Material management
+│   │       │   └── resources/       # Render resource types (materials, meshes)
 │   │       ├── foundation/          # Math, transforms, utilities
 │   │       ├── assets/              # Asset loading & management
+│   │       │   ├── materials/       # Material creation subsystem
+│   │       │   │   ├── mtl_parser.rs        # Parse MTL files
+│   │       │   │   ├── material_loader.rs   # Load materials from files
+│   │       │   │   ├── material_builder.rs  # Procedural material creation
+│   │       │   │   ├── material_cache.rs    # Material caching & hot-reload
+│   │       │   │   ├── material_factory.rs  # Unified material API
+│   │       │   │   └── mod.rs
+│   │       │   ├── obj_loader.rs    # OBJ mesh loading
+│   │       │   └── image_loader.rs  # Image/texture loading
 │   │       ├── audio/               # Audio system (planned)
 │   │       ├── input/               # Input handling
 │   │       └── platform/            # Platform abstraction

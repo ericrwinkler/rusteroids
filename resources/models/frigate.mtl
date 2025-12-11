@@ -1,0 +1,26 @@
+# Blender 4.5.3 LTS MTL File: 'frigate.blend'
+# www.blender.org
+
+newmtl Material.001
+# Ambient color
+Ka 0.800000 0.800000 0.800000
+# Diffuse (base color) - light gray to show texture
+Kd 1.000000 1.000000 1.000000
+# Specular - medium metallic look
+Ks 0.500000 0.500000 0.500000
+# Emission - bright white to multiply with emission texture
+Ke 1.000000 1.000000 1.000000
+# Specular exponent - 500 = semi-smooth (roughness ~0.5)
+Ns 500.000000
+Ni 1.500000
+d 1.000000
+illum 2
+Pr 0.500000
+Pm 0.000000
+Ps 0.000000
+Pc 0.000000
+Pcr 0.030000
+aniso 0.000000
+anisor 0.000000
+map_Kd C:/Users/Eric_/Projects/rusteroids/resources/textures/Frigate_texture.png
+map_Ke C:/Users/Eric_/Projects/rusteroids/resources/textures/Frigate_emission.png

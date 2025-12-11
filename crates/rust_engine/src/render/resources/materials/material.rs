@@ -111,12 +111,40 @@ impl Material {
     /// Attach a base color texture
     pub fn with_base_color_texture(mut self, texture: TextureHandle) -> Self {
         self.textures.base_color = Some(texture);
+        
+        // Enable base color texture in material params
+        match &mut self.material_type {
+            MaterialType::StandardPBR(params) => {
+                params.base_color_texture_enabled = true;
+            }
+            MaterialType::Transparent { base_material, .. } => {
+                if let MaterialType::StandardPBR(params) = &mut **base_material {
+                    params.base_color_texture_enabled = true;
+                }
+            }
+            _ => {}
+        }
+        
         self
     }
 
     /// Attach a normal map texture
     pub fn with_normal_texture(mut self, texture: TextureHandle) -> Self {
         self.textures.normal = Some(texture);
+        
+        // Enable normal texture in material params
+        match &mut self.material_type {
+            MaterialType::StandardPBR(params) => {
+                params.normal_texture_enabled = true;
+            }
+            MaterialType::Transparent { base_material, .. } => {
+                if let MaterialType::StandardPBR(params) = &mut **base_material {
+                    params.normal_texture_enabled = true;
+                }
+            }
+            _ => {}
+        }
+        
         self
     }
 

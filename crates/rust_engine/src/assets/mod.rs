@@ -2,9 +2,17 @@
 
 pub mod obj_loader;
 pub mod image_loader;
+pub mod materials;
 
 pub use obj_loader::ObjLoader;
 pub use image_loader::ImageData;
+pub use materials::{
+    MtlParser, MtlData,
+    MaterialLoader, LoadedMaterial, MaterialTexturePaths,
+    MaterialBuilder,
+    MaterialCache,
+    MaterialFactory,
+};
 
 #[cfg(test)]
 mod test_texture_loading;
@@ -23,6 +31,8 @@ pub struct AssetManager {
     asset_storages: HashMap<TypeId, Box<dyn Any>>,
     #[allow(dead_code)] // Will be used for asset loading configuration
     config: AssetConfig,
+    /// Material cache for MTL file materials
+    material_cache: MaterialCache,
 }
 
 impl AssetManager {
@@ -31,13 +41,28 @@ impl AssetManager {
         Ok(Self {
             asset_storages: HashMap::new(),
             config: config.clone(),
+            material_cache: MaterialCache::new(),
         })
     }
     
     /// Update the asset manager (hot reloading, etc.)
     pub fn update(&mut self) -> Result<(), AssetError> {
-        // TODO: Implement hot reloading
+        // Check for material file updates and hot-reload
+        let reloaded_count = self.material_cache.check_for_updates();
+        if reloaded_count > 0 {
+            log::info!("Hot-reloaded {} material(s)", reloaded_count);
+        }
         Ok(())
+    }
+    
+    /// Get the material cache for loading MTL materials
+    pub fn material_cache(&self) -> &MaterialCache {
+        &self.material_cache
+    }
+    
+    /// Get mutable access to the material cache
+    pub fn material_cache_mut(&mut self) -> &mut MaterialCache {
+        &mut self.material_cache
     }
     
     /// Load an asset from disk

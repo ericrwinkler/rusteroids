@@ -86,6 +86,53 @@ impl TransformComponent {
             scale: transform.scale,
         }
     }
+    
+    /// Create from a transformation matrix (decompose TRS)
+    pub fn from_matrix(matrix: Mat4) -> Self {
+        let math_transform = MathTransform::from_matrix(matrix);
+        Self::from_math_transform(&math_transform)
+    }
+    
+    /// Convert to transformation matrix (TRS order)
+    pub fn to_matrix(&self) -> Mat4 {
+        self.to_math_transform().to_matrix()
+    }
+    
+    /// Builder pattern: Set position
+    pub fn with_position(mut self, position: Vec3) -> Self {
+        self.position = position;
+        self
+    }
+    
+    /// Builder pattern: Set rotation from quaternion
+    pub fn with_rotation(mut self, rotation: Quat) -> Self {
+        self.rotation = rotation;
+        self
+    }
+    
+    /// Builder pattern: Set rotation from Euler angles (radians, XYZ order)
+    pub fn with_rotation_euler(mut self, x: f32, y: f32, z: f32) -> Self {
+        self.rotation = Quat::from_euler_angles(x, y, z);
+        self
+    }
+    
+    /// Builder pattern: Set rotation from axis-angle
+    pub fn with_rotation_axis_angle(mut self, axis: Vec3, angle: f32) -> Self {
+        self.rotation = Quat::from_axis_angle(&nalgebra::Unit::new_normalize(axis), angle);
+        self
+    }
+    
+    /// Builder pattern: Set scale (uniform)
+    pub fn with_uniform_scale(mut self, scale: f32) -> Self {
+        self.scale = Vec3::new(scale, scale, scale);
+        self
+    }
+    
+    /// Builder pattern: Set scale (non-uniform)
+    pub fn with_scale(mut self, scale: Vec3) -> Self {
+        self.scale = scale;
+        self
+    }
 }
 
 /// Transform factory for creating common transform configurations

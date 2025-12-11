@@ -14,7 +14,8 @@ use crate::ecs::components::{TransformComponent, RenderableComponent};
 use crate::scene::{SceneGraph, SimpleListGraph, RenderableObject, RenderQueue, AABB};
 use crate::foundation::math::{Vec3, Transform};
 use crate::render::primitives::Mesh;
-use crate::render::resources::materials::MaterialId;
+use crate::render::resources::materials::Material;
+use crate::render::systems::dynamic::MeshType;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock, Mutex};
 
@@ -136,8 +137,10 @@ impl SceneManager {
                     
                     if let Some(cached_obj) = cache.get_mut(entity) {
                         // Update existing renderable
+                        cached_obj.mesh = r.mesh.clone();
+                        cached_obj.mesh_type = r.mesh_type;
                         cached_obj.transform = transform_matrix;
-                        cached_obj.material_id = r.material_id;
+                        cached_obj.material = r.material.clone();
                         cached_obj.visible = r.visible;
                         cached_obj.is_transparent = r.is_transparent;
                         cached_obj.render_layer = r.render_layer;
@@ -150,7 +153,9 @@ impl SceneManager {
                         // Create new renderable
                         let obj = RenderableObject::new(
                             *entity,
-                            r.material_id,
+                            r.mesh.clone(),
+                            r.mesh_type,
+                            r.material.clone(),
                             transform_matrix,
                             r.visible,
                             r.is_transparent,
@@ -236,7 +241,8 @@ impl SceneManager {
         &self,
         world: &mut World,
         mesh: Mesh,
-        material_id: MaterialId,
+        mesh_type: MeshType,
+        material: Material,
         transform: Transform,
     ) -> Entity {
         // Create entity
@@ -251,7 +257,7 @@ impl SceneManager {
         world.add_component(entity, transform_component);
         
         // Add Renderable component
-        let renderable = RenderableComponent::new(material_id, mesh);
+        let renderable = RenderableComponent::new(material, mesh, mesh_type);
         world.add_component(entity, renderable);
         
         // Mark dirty for next sync
@@ -304,7 +310,15 @@ impl Default for SceneManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::resources::materials::MaterialId;
+    use crate::render::resources::materials::Material;
+    use crate::foundation::math::Vec3;
+    
+    fn create_test_material() -> Material {
+        Material::unlit(crate::render::resources::materials::UnlitMaterialParams {
+            color: Vec3::new(1.0, 1.0, 1.0),
+            alpha: 1.0,
+        })
+    }
     
     #[test]
     fn test_scene_manager_creation() {
@@ -321,8 +335,9 @@ mod tests {
         let entity = world.create_entity();
         let transform = TransformComponent::from_position(Vec3::new(5.0, 0.0, 0.0));
         let renderable = RenderableComponent::new(
-            MaterialId(0),
+            create_test_material(),
             crate::render::primitives::Mesh::cube(),
+            MeshType::Cube,
         );
         
         world.add_component(entity, transform);
@@ -347,8 +362,9 @@ mod tests {
             let entity = world.create_entity();
             let transform = TransformComponent::from_position(Vec3::new(i as f32, 0.0, 0.0));
             let renderable = RenderableComponent::new(
-                MaterialId(i),
+                create_test_material(),
                 crate::render::primitives::Mesh::cube(),
+                MeshType::Cube,
             );
             
             world.add_component(entity, transform);
@@ -374,8 +390,9 @@ mod tests {
         let entity = world.create_entity();
         let transform = TransformComponent::from_position(Vec3::new(1.0, 2.0, 3.0));
         let renderable = RenderableComponent::new(
-            MaterialId(0),
+            create_test_material(),
             crate::render::primitives::Mesh::cube(),
+            MeshType::Cube,
         );
         
         world.add_component(entity, transform);
@@ -423,8 +440,9 @@ mod tests {
         let entity = world.create_entity();
         let transform = TransformComponent::from_position(Vec3::new(1.0, 0.0, 0.0));
         let mut renderable = RenderableComponent::new(
-            MaterialId(0),
+            create_test_material(),
             crate::render::primitives::Mesh::cube(),
+            MeshType::Cube,
         );
         renderable.visible = true;
         

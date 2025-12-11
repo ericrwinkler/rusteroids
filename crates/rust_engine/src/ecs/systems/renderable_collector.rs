@@ -90,13 +90,13 @@ impl RenderableCollector {
                 let command = match command_type {
                     CommandType::Opaque => RenderCommand::opaque(
                         *entity,
-                        renderable.material_id,
+                        renderable.material.id,
                         transform,
                         transform.m34, // Use Z component for depth sorting
                     ),
                     CommandType::Transparent => RenderCommand::transparent(
                         *entity,
-                        renderable.material_id,
+                        renderable.material.id,
                         transform,
                         transform.m34,
                     ),

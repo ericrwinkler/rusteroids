@@ -5,7 +5,9 @@
 
 use crate::ecs::Entity;
 use crate::foundation::math::Mat4;
-use crate::render::resources::materials::MaterialId;
+use crate::render::resources::materials::Material;
+use crate::render::primitives::Mesh;
+use crate::render::systems::dynamic::MeshType;
 
 /// Cached rendering data for an entity
 ///
@@ -17,8 +19,14 @@ pub struct RenderableObject {
     /// The ECS entity this renderable represents
     pub entity: Entity,
     
-    /// Material to use for rendering
-    pub material_id: MaterialId,
+    /// Mesh data for rendering
+    pub mesh: Mesh,
+    
+    /// The mesh type (which pool this belongs to)
+    pub mesh_type: MeshType,
+    
+    /// Material to use for rendering (full material data, not just ID)
+    pub material: Material,
     
     /// World-space transform matrix (computed from Transform component)
     pub transform: Mat4,
@@ -40,7 +48,9 @@ impl RenderableObject {
     /// Create a new renderable object
     pub fn new(
         entity: Entity,
-        material_id: MaterialId,
+        mesh: Mesh,
+        mesh_type: MeshType,
+        material: Material,
         transform: Mat4,
         visible: bool,
         is_transparent: bool,
@@ -48,7 +58,9 @@ impl RenderableObject {
     ) -> Self {
         Self {
             entity,
-            material_id,
+            mesh,
+            mesh_type,
+            material,
             transform,
             visible,
             is_transparent,
@@ -80,15 +92,23 @@ mod tests {
     #[test]
     fn test_renderable_object_creation() {
         use crate::ecs::World;
+        use crate::render::resources::materials::Material;
+        use crate::foundation::math::Vec3;
         
         let mut world = World::new();
         let entity = world.create_entity();
-        let material_id = MaterialId(0);
+        let material = Material::unlit(crate::render::resources::materials::UnlitMaterialParams {
+            color: Vec3::new(1.0, 1.0, 1.0),
+            alpha: 1.0,
+        });
         let transform = Mat4::identity();
+        let mesh = Mesh { vertices: vec![], indices: vec![] };
         
         let obj = RenderableObject::new(
             entity,
-            material_id,
+            mesh,
+            MeshType::Cube,
+            material,
             transform,
             true,
             false,
@@ -102,12 +122,21 @@ mod tests {
     #[test]
     fn test_dirty_flag() {
         use crate::ecs::World;
+        use crate::render::resources::materials::Material;
+        use crate::foundation::math::Vec3;
         
         let mut world = World::new();
         let entity = world.create_entity();
+        let mesh = Mesh { vertices: vec![], indices: vec![] };
+        let material = Material::unlit(crate::render::resources::materials::UnlitMaterialParams {
+            color: Vec3::new(1.0, 1.0, 1.0),
+            alpha: 1.0,
+        });
         let mut obj = RenderableObject::new(
             entity,
-            MaterialId(0),
+            mesh,
+            MeshType::Sphere,
+            material,
             Mat4::identity(),
             true,
             false,

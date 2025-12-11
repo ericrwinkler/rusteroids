@@ -5,8 +5,11 @@
 use super::{UIPanel, UIText, UIButton, UINodeId};
 use super::backend::UIRenderBackend;
 use crate::render::systems::text::FontAtlas;
-use crate::render::systems::ui::{UIRenderer, UIInputProcessor, UIRenderCommand};
+use crate::render::systems::ui::{UIRenderer, UIRenderCommand, UIRenderData};
+use crate::render::systems::ui::renderer::{RenderQuad, RenderText};
+use crate::input::ui_input::{UIInputProcessor, MouseButton};
 use crate::events::EventSystem;
+use crate::foundation::math::Vec2;
 use std::collections::HashMap;
 
 /// UI element storage
@@ -124,7 +127,7 @@ impl UIManager {
     }
     
     /// Update mouse button state
-    pub fn update_mouse_button(&mut self, button: crate::render::systems::ui::MouseButton, pressed: bool) {
+    pub fn update_mouse_button(&mut self, button: MouseButton, pressed: bool) {
         self.input_processor.update_mouse_button(button, pressed);
     }
     
@@ -174,6 +177,126 @@ impl UIManager {
         
         // Reset per-frame input flags AFTER processing all buttons
         self.input_processor.reset_frame_flags();
+    }
+    
+    /// Export backend-agnostic UI rendering data
+    /// 
+    /// Converts UI node hierarchy into flat rendering primitives (quads, text)
+    /// suitable for passing to GraphicsEngine.render_frame().
+    /// 
+    /// This method provides clean separation between UI state management and
+    /// rendering implementation.
+    pub fn get_render_data(&self) -> UIRenderData {
+        let mut quads = Vec::new();
+        let mut texts = Vec::new();
+        
+        // Collect and sort nodes by z-order
+        let mut sorted_nodes: Vec<(&UINodeId, &UINode)> = self.nodes.iter().collect();
+        sorted_nodes.sort_by_key(|(_, node)| {
+            match node {
+                UINode::Panel(panel) => panel.element.z_order,
+                UINode::Text(text) => text.element.z_order,
+                UINode::Button(button) => button.element.z_order,
+            }
+        });
+        
+        let (screen_width, screen_height) = self.screen_size;
+        
+        // Convert UI nodes to rendering primitives
+        for (_, node) in sorted_nodes {
+            match node {
+                UINode::Panel(panel) => {
+                    if !panel.element.visible {
+                        continue;
+                    }
+                    
+                    // Calculate screen position from anchor
+                    let (anchor_x, anchor_y) = panel.element.anchor.to_normalized();
+                    let screen_anchor_x = anchor_x * screen_width;
+                    let screen_anchor_y = anchor_y * screen_height;
+                    
+                    let final_x = screen_anchor_x + panel.element.position.0;
+                    let final_y = screen_anchor_y + panel.element.position.1;
+                    
+                    quads.push(RenderQuad {
+                        position: Vec2::new(final_x, final_y),
+                        size: Vec2::new(panel.element.size.0, panel.element.size.1),
+                        color: panel.color,
+                        texture: None,
+                        depth: panel.element.z_order as f32,
+                    });
+                }
+                UINode::Text(text) => {
+                    if !text.element.visible {
+                        continue;
+                    }
+                    
+                    // Calculate screen position from anchor
+                    let (anchor_x, anchor_y) = text.element.anchor.to_normalized();
+                    let screen_anchor_x = anchor_x * screen_width;
+                    let screen_anchor_y = anchor_y * screen_height;
+                    
+                    let final_x = screen_anchor_x + text.element.position.0;
+                    let final_y = screen_anchor_y + text.element.position.1;
+                    
+                    texts.push(RenderText {
+                        position: Vec2::new(final_x, final_y),
+                        text: text.text.clone(),
+                        font: 0, // TODO: Multi-font support
+                        color: text.color,
+                        size: text.font_size,
+                        depth: text.element.z_order as f32,
+                    });
+                }
+                UINode::Button(button) => {
+                    if !button.element.visible {
+                        continue;
+                    }
+                    
+                    // Calculate screen position from anchor
+                    let (anchor_x, anchor_y) = button.element.anchor.to_normalized();
+                    let screen_anchor_x = anchor_x * screen_width;
+                    let screen_anchor_y = anchor_y * screen_height;
+                    
+                    let final_x = screen_anchor_x + button.element.position.0;
+                    let final_y = screen_anchor_y + button.element.position.1;
+                    
+                    // Determine button color based on state
+                    use crate::render::systems::ui::ButtonState;
+                    let color = match button.state {
+                        ButtonState::Normal => button.normal_color,
+                        ButtonState::Hovered => button.hover_color,
+                        ButtonState::Pressed => button.pressed_color,
+                        ButtonState::Disabled => button.disabled_color,
+                    };
+                    
+                    // Button background quad
+                    quads.push(RenderQuad {
+                        position: Vec2::new(final_x, final_y),
+                        size: Vec2::new(button.element.size.0, button.element.size.1),
+                        color,
+                        texture: None,
+                        depth: button.element.z_order as f32,
+                    });
+                    
+                    // Button text (centered, matching old UIRenderer behavior)
+                    // Offset text position to center it within the button
+                    let text_x = final_x + 4.0; // Small padding from left
+                    let text_y = final_y + (button.element.size.1 / 2.0) + 8.0; // plus half font height
+                    
+                    texts.push(RenderText {
+                        position: Vec2::new(text_x, text_y),
+                        text: button.text.clone(),
+                        font: 0, // TODO: Multi-font support
+                        color: button.text_color,
+                        size: button.font_size,
+                        depth: button.element.z_order as f32 + 0.1,
+                    });
+                }
+            }
+        }
+        
+        UIRenderData { quads, texts }
     }
     
     /// Render UI to the backend

@@ -43,12 +43,14 @@ pub mod systems;
 pub mod backends;
 
 // High-level APIs that applications should use
-pub use api::{VulkanRendererConfig, RenderBackend, WindowBackendAccess, BackendResult, MeshHandle, MaterialHandle, ObjectResourceHandle};
+pub use api::{VulkanRendererConfig, RenderBackend, WindowBackendAccess, BackendResult, MeshHandle, MaterialHandle, ObjectResourceHandle, RenderFrameData};
 pub use resources::materials::ShaderConfig;
 pub use window::WindowHandle;
+pub use primitives::Camera;
+pub use systems::lighting::MultiLightEnvironment;
 
 // Core rendering types that applications need
-pub use primitives::{Mesh, Vertex, CoordinateSystem, CoordinateConverter, Camera};
+pub use primitives::{Mesh, Vertex, CoordinateSystem, CoordinateConverter};
 pub use resources::materials::{Material, MaterialType, MaterialId, PipelineType, AlphaMode};
 pub use systems::lighting::{Light, LightType, LightingEnvironment};
 pub use systems::dynamic::{MeshType, DynamicObjectHandle};
@@ -89,8 +91,8 @@ pub use resources::pipelines::{
 };
 pub use resources::shared::{RenderQueue, RenderCommand, CommandType, RenderCommandId};
 pub use resources::shared::ObjectUBO;  // Legitimate rendering data structure
-#[deprecated(since = "0.1.0", note = "SharedRenderingResources is now internal - use MeshHandle/MaterialHandle instead")]
-pub use resources::shared::{SharedRenderingResources, SharedRenderingResourcesBuilder};
+// SharedRenderingResources is internal only (used by dynamic rendering system)
+pub(crate) use resources::shared::SharedRenderingResources;
 pub use systems::batching::{BatchRenderer, RenderBatch, BatchError, BatchStats, BatchResult};
 
 use thiserror::Error;
@@ -98,6 +100,8 @@ use thiserror::Error;
 // use crate::engine::{RendererConfig, WindowConfig}; 
 use crate::foundation::math::{Vec3, Mat4, Mat4Ext};
 use crate::render::systems::dynamic::MeshPoolManager;
+use crate::ecs::Entity;
+use std::collections::HashMap;
 
 /// # Graphics Engine
 ///
@@ -133,6 +137,10 @@ pub struct GraphicsEngine {
     /// Dynamic object pool management system for temporary objects
     /// Manages multiple single-mesh pools for optimal rendering performance
     pool_manager: Option<MeshPoolManager>,
+    
+    /// Entity to pool handle tracking (automatic resource management)
+    /// Maps ECS entities to their (MeshType, DynamicObjectHandle) for automatic lifecycle
+    entity_handles: HashMap<Entity, (systems::dynamic::MeshType, systems::dynamic::DynamicObjectHandle)>,
     
 }
 
@@ -170,6 +178,7 @@ impl GraphicsEngine {
             current_camera: None,
             current_lighting: None,
             pool_manager: None, // Will be initialized when first needed
+            entity_handles: HashMap::new(),
         })
     }
     
@@ -188,84 +197,98 @@ impl GraphicsEngine {
         }
     }
     
-    /// Register an event handler for UI events
+    // ========================================================================
+    // Proposal #6: Simplified Frame Rendering API
+    // ========================================================================
+    
+    /// Render a complete frame (Proposal #6 - main rendering API)
     ///
-    /// DEPRECATED: Event handling should be done through the input system, not the renderer.
-    /// Use `InputSystem` or application-level event handling instead.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Event handling moved to input system. Renderer should not process events."
-    )]
-    pub fn register_event_handler(&mut self, event_type: crate::events::EventType, handler: Box<dyn crate::events::EventHandler>) {
-        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
-            vulkan_backend.register_event_handler(event_type, handler);
-        }
+    /// This is the primary rendering entry point. Application provides all frame data,
+    /// and the renderer handles the complete frame lifecycle internally:
+    /// 1. Begin frame (acquire swapchain, start render pass)
+    /// 2. Bind per-frame resources (camera, lights)
+    /// 3. Draw 3D scene
+    /// 4. Draw UI overlay
+    /// 5. End frame (submit commands, present)
+    ///
+    /// # Arguments
+    /// * `data` - Complete frame rendering data (camera, lights, UI)
+    /// * `window` - Window handle for presentation
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use rust_engine::render::{GraphicsEngine, RenderFrameData, Camera, MultiLightEnvironment, UIRenderData};
+    /// # let mut graphics_engine: GraphicsEngine = unimplemented!();
+    /// # let mut window = unimplemented!();
+    /// # let camera: Camera = unimplemented!();
+    /// # let lights: MultiLightEnvironment = unimplemented!();
+    /// # let ui_data = UIRenderData::empty();
+    /// graphics_engine.render_frame(
+    ///     &RenderFrameData {
+    ///         camera: &camera,
+    ///         lights: &lights,
+    ///         ui: &ui_data,
+    ///     },
+    ///     &mut window,
+    /// )?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Book Reference
+    /// Game Engine Architecture Chapter 8.2 - The Game Loop
+    /// > "The game loop services each subsystem in turn. The rendering engine should 
+    /// > have its own internal lifecycle—game code calls render_frame(scene) once per 
+    /// > iteration, and the renderer handles setup, draw calls, and presentation internally."
+    pub fn render_frame(
+        &mut self,
+        data: &api::RenderFrameData,
+        window: &mut WindowHandle,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // 1. Begin frame (internal)
+        self.begin_dynamic_frame()?;
+        
+        // 2. Bind per-frame resources (camera + lights)
+        self.set_camera(data.camera);
+        self.set_multi_light_environment(data.lights);
+        
+        // 3. Draw 3D scene (ECS entities rendered via Scene Manager)
+        // Note: Currently handled by record_dynamic_draws() which processes
+        // entities that were allocated via allocate_from_pool()
+        self.record_dynamic_draws()?;
+        
+        // 4. Draw UI overlay
+        self.draw_ui_internal(data.ui)?;
+        
+        // 5. End frame and present
+        self.end_dynamic_frame(window)?;
+        
+        Ok(())
     }
     
-    /// Update mouse position for UI input processing
-    ///
-    /// DEPRECATED: Mouse input handling should be done through the input system.
-    /// Use `InputSystem::update_mouse_position()` instead.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Mouse handling moved to input system. Renderer should not track input state."
-    )]
-    pub fn update_mouse_position(&mut self, x: f32, y: f32) {
-        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
-            vulkan_backend.update_mouse_position(x, y);
-        }
+    /// Internal: Draw UI overlay from backend-agnostic render data
+    /// 
+    /// Converts UIRenderData (quads, text) into vertex buffers and
+    /// submits to the Vulkan backend. Called internally by render_frame().
+    fn draw_ui_internal(&mut self, ui_data: &systems::ui::UIRenderData) -> Result<(), Box<dyn std::error::Error>> {
+        // Get Vulkan backend (for now, we need direct access)
+        // TODO: Abstract this into RenderBackend trait when adding other backends
+        let vulkan_renderer = match self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
+            Some(renderer) => renderer,
+            None => return Err("UI rendering requires Vulkan backend".into()),
+        };
+        
+        // Delegate to UI rendering bridge
+        systems::ui::renderer::render_ui_data(ui_data, vulkan_renderer)
     }
     
-    /// Update mouse button state for UI input processing
-    ///
-    /// DEPRECATED: Mouse input handling should be done through the input system.
-    /// Use `InputSystem::update_mouse_button()` instead.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Mouse handling moved to input system. Renderer should not track input state."
-    )]
-    pub fn update_mouse_button(&mut self, button: crate::render::systems::ui::MouseButton, pressed: bool) {
-        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
-            vulkan_backend.update_mouse_button(button, pressed);
-        }
-    }
-    
-    /// Update UI screen size for input collision detection
+    /// Update mouse position for UI input processingsingon
     pub fn update_ui_screen_size(&mut self, width: f32, height: f32) {
         if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
             vulkan_backend.update_ui_screen_size(width, height);
         }
     }
     
-    /// Begin new frame for UI input processing
-    ///
-    /// DEPRECATED: UI frame management and input processing should be handled separately.
-    /// Use the UI system's frame management independently from rendering.
-    #[deprecated(
-        since = "0.2.0",
-        note = "UI frame management moved out of renderer. Use UI system directly."
-    )]
-    pub fn ui_begin_frame(&mut self) {
-        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
-            vulkan_backend.ui_begin_frame();
-        }
-    }
-    
-    /// Dispatch all pending UI events
-    ///
-    /// DEPRECATED: Event handling should be done through the application's event system.
-    /// Renderer should not manage event dispatch.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Event dispatch moved to input/event system. Renderer should not handle events."
-    )]
-    pub fn dispatch_events(&mut self) {
-        if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
-            vulkan_backend.dispatch_events();
-        }
-    }
-    
-    /// Get mutable reference to the Vulkan renderer (for UI rendering)
+    /// Dispatch all pending UI eventsulkan renderer (for UI rendering)
     /// 
     /// Returns None if the backend is not Vulkan
     pub fn get_vulkan_renderer_mut(&mut self) -> Option<&mut crate::render::backends::vulkan::VulkanRenderer> {
@@ -474,25 +497,6 @@ impl GraphicsEngine {
         Ok(())
     }
     
-    // === DEPRECATED API - Scheduled for removal ===
-    
-    /// Bind shared resources for multiple objects (NEW API)
-    /// DEPRECATED: Use load_mesh instead for cleaner abstraction
-    #[deprecated(note = "Use load_mesh for cleaner abstraction")]
-    pub fn bind_shared_geometry(&mut self, shared: &SharedRenderingResources) -> Result<(), Box<dyn std::error::Error>> {
-        // Bind the shared vertex and index buffers
-        // Set the shared mesh data once for all objects
-        log::trace!("Binding shared geometry with {} vertices and {} indices", 
-                   shared.vertex_count, shared.index_count);
-        
-        // Call the backend to bind shared resources
-        #[allow(deprecated)]
-        self.backend.bind_shared_resources(shared)
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-        
-        Ok(())
-    }
-    
     /// Submit all recorded commands and present (NEW API)
     /// This replaces individual draw_frame() calls with batched submission
     pub fn submit_commands_and_present(&mut self, _window: &mut WindowHandle) -> Result<(), Box<dyn std::error::Error>> {
@@ -501,39 +505,6 @@ impl GraphicsEngine {
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         
         Ok(())
-    }
-    
-    /// Create SharedRenderingResources for efficient multi-object rendering (DEPRECATED)
-    /// This handles the complex Vulkan resource creation for shared geometry
-    #[deprecated(since = "0.1.0", note = "Use load_mesh to get MeshHandle for cleaner API")]
-    pub fn create_shared_rendering_resources(&self, mesh: &Mesh, materials: &[Material]) -> Result<resources::shared::SharedRenderingResources, Box<dyn std::error::Error>> {
-        // Access VulkanContext through backend downcasting
-        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::backends::vulkan::VulkanRenderer>() {
-            #[allow(deprecated)]
-            resources::shared::create_shared_rendering_resources(vulkan_backend, mesh, materials)
-        } else {
-            Err("Renderer is not using Vulkan backend".into())
-        }
-    }
-    
-    /// Create SharedRenderingResources for instanced dynamic object rendering (DEPRECATED)
-    /// This creates resources with an instanced pipeline for efficient batch rendering
-    #[deprecated(since = "0.1.0", note = "Use load_mesh to get MeshHandle for cleaner API")]
-    pub fn create_instanced_rendering_resources(&self, mesh: &Mesh, materials: &[Material]) -> Result<resources::shared::SharedRenderingResources, Box<dyn std::error::Error>> {
-        // Access VulkanContext through backend downcasting
-        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::backends::vulkan::VulkanRenderer>() {
-            #[allow(deprecated)]
-            resources::shared::create_instanced_rendering_resources(
-                vulkan_backend,
-                mesh,
-                materials,
-                |context, frame_layout, material_layout| {
-                    self.create_instanced_pipeline(context, frame_layout, material_layout)
-                },
-            )
-        } else {
-            Err("Renderer is not using Vulkan backend".into())
-        }
     }
     
     /// Create instanced pipeline for dynamic object rendering
@@ -551,6 +522,26 @@ impl GraphicsEngine {
             )
         } else {
             Err("Backend is not Vulkan".into())
+        }
+    }
+    
+    /// Create SharedRenderingResources for instanced dynamic object rendering (INTERNAL)
+    /// This creates resources with an instanced pipeline for efficient batch rendering
+    /// Used internally by create_mesh_pool()
+    fn create_instanced_rendering_resources(&self, mesh: &Mesh, materials: &[Material]) -> Result<resources::shared::SharedRenderingResources, Box<dyn std::error::Error>> {
+        // Access VulkanContext through backend downcasting
+        if let Some(vulkan_backend) = self.backend.as_any().downcast_ref::<crate::render::backends::vulkan::VulkanRenderer>() {
+            #[allow(deprecated)]
+            resources::shared::create_instanced_rendering_resources(
+                vulkan_backend,
+                mesh,
+                materials,
+                |context, frame_layout, material_layout| {
+                    self.create_instanced_pipeline(context, frame_layout, material_layout)
+                },
+            )
+        } else {
+            Err("Renderer is not using Vulkan backend".into())
         }
     }
     
@@ -831,6 +822,86 @@ impl GraphicsEngine {
             handle,
             transform,
         ).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    }
+
+    /// Render entities from a Scene Manager's RenderQueue (Proposal #1 - Complete API)
+    ///
+    /// This method automatically manages entity lifecycle in the rendering system:
+    /// - New entities: Allocates pool handles based on mesh_type stored in RenderableObject
+    /// - Existing entities: Updates transforms only (efficient)
+    /// - Destroyed entities: Automatically freed when no longer in queue
+    ///
+    /// Applications no longer need to manually track entity→handle mappings OR determine mesh types.
+    ///
+    /// # Arguments
+    /// * `render_queue` - Queue of renderable objects from SceneManager
+    ///
+    /// # Example
+    /// ```ignore
+    /// scene_manager.sync_from_world(&mut world);
+    /// let render_queue = scene_manager.build_render_queue();
+    /// 
+    /// // That's it! Engine handles everything automatically.
+    /// graphics_engine.render_entities_from_queue(&render_queue)?;
+    /// ```
+    pub fn render_entities_from_queue(
+        &mut self,
+        render_queue: &crate::scene::RenderQueue,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use std::collections::HashSet;
+        
+        // Track which entities are still active this frame
+        let mut active_entities = HashSet::new();
+        
+        // Process all renderable objects in the queue
+        for batch in render_queue.opaque_batches() {
+            for obj in &batch.objects {
+                active_entities.insert(obj.entity);
+                
+                // Check if we already have a handle for this entity
+                if let Some(&(mesh_type, handle)) = self.entity_handles.get(&obj.entity) {
+                    // Existing entity - just update its transform
+                    if let Err(e) = self.update_pool_instance(mesh_type, handle, obj.transform) {
+                        log::warn!("Failed to update entity {:?} transform: {}", obj.entity, e);
+                    }
+                } else {
+                    // New entity - use the mesh_type stored in RenderableObject
+                    let mesh_type = obj.mesh_type;
+                    
+                    // Allocate a handle for this entity
+                    match self.allocate_from_pool(
+                        mesh_type,
+                        obj.transform,
+                        obj.material.clone(),
+                    ) {
+                        Ok(handle) => {
+                            self.entity_handles.insert(obj.entity, (mesh_type, handle));
+                            log::debug!("Allocated {:?} handle for entity {:?}", mesh_type, obj.entity);
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to allocate {:?} for entity {:?}: {}", mesh_type, obj.entity, e);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Free handles for entities that no longer exist
+        let entities_to_remove: Vec<_> = self.entity_handles.keys()
+            .filter(|entity| !active_entities.contains(entity))
+            .copied()
+            .collect();
+        
+        for entity in entities_to_remove {
+            if let Some((mesh_type, handle)) = self.entity_handles.remove(&entity) {
+                if let Err(e) = self.free_pool_instance(mesh_type, handle) {
+                    log::warn!("Failed to free handle for destroyed entity {:?}: {}", entity, e);
+                }
+                log::debug!("Freed {:?} handle for destroyed entity {:?}", mesh_type, entity);
+            }
+        }
+        
+        Ok(())
     }
 
     /// Record dynamic object draw commands

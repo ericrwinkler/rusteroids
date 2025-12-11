@@ -4,18 +4,22 @@
 //! needed to submit them to the rendering system via the batch renderer.
 
 use crate::ecs::Component;
-use crate::render::resources::materials::MaterialId;
+use crate::render::resources::materials::Material;
 use crate::render::primitives::Mesh;
+use crate::render::systems::dynamic::MeshType;
 
 /// Component for entities that can be rendered
 #[derive(Debug, Clone)]
 pub struct RenderableComponent {
-    /// Material to use for rendering
-    pub material_id: MaterialId,
+    /// Material to use for rendering (full material data, not just ID)
+    pub material: Material,
     
     /// Mesh data for this renderable (for now we store the mesh directly)
     /// TODO: Replace with MeshHandle when we implement mesh management
     pub mesh: Mesh,
+    
+    /// The mesh type (which pool this belongs to)
+    pub mesh_type: MeshType,
     
     /// Whether this object is visible
     pub visible: bool,
@@ -29,10 +33,11 @@ pub struct RenderableComponent {
 
 impl RenderableComponent {
     /// Create a new renderable component
-    pub fn new(material_id: MaterialId, mesh: Mesh) -> Self {
+    pub fn new(material: Material, mesh: Mesh, mesh_type: MeshType) -> Self {
         Self {
-            material_id,
+            material,
             mesh,
+            mesh_type,
             visible: true,
             is_transparent: false,
             render_layer: 0,
@@ -40,10 +45,11 @@ impl RenderableComponent {
     }
     
     /// Create a transparent renderable component
-    pub fn new_transparent(material_id: MaterialId, mesh: Mesh, render_layer: u8) -> Self {
+    pub fn new_transparent(material: Material, mesh: Mesh, mesh_type: MeshType, render_layer: u8) -> Self {
         Self {
-            material_id,
+            material,
             mesh,
+            mesh_type,
             visible: true,
             is_transparent: true,
             render_layer,
@@ -61,8 +67,8 @@ impl RenderableComponent {
     }
     
     /// Set the material
-    pub fn set_material(&mut self, material_id: MaterialId) {
-        self.material_id = material_id;
+    pub fn set_material(&mut self, material: Material) {
+        self.material = material;
     }
     
     /// Set transparency
@@ -83,22 +89,23 @@ pub struct RenderableFactory;
 
 impl RenderableFactory {
     /// Create a simple opaque renderable
-    pub fn create_opaque(material_id: MaterialId, mesh: Mesh) -> RenderableComponent {
-        RenderableComponent::new(material_id, mesh)
+    pub fn create_opaque(material: Material, mesh: Mesh, mesh_type: MeshType) -> RenderableComponent {
+        RenderableComponent::new(material, mesh, mesh_type)
     }
     
     /// Create a transparent renderable with specific layer
     pub fn create_transparent(
-        material_id: MaterialId, 
-        mesh: Mesh, 
+        material: Material, 
+        mesh: Mesh,
+        mesh_type: MeshType,
         render_layer: u8
     ) -> RenderableComponent {
-        RenderableComponent::new_transparent(material_id, mesh, render_layer)
+        RenderableComponent::new_transparent(material, mesh, mesh_type, render_layer)
     }
     
     /// Create a hidden renderable (useful for pre-loading)
-    pub fn create_hidden(material_id: MaterialId, mesh: Mesh) -> RenderableComponent {
-        let mut renderable = RenderableComponent::new(material_id, mesh);
+    pub fn create_hidden(material: Material, mesh: Mesh, mesh_type: MeshType) -> RenderableComponent {
+        let mut renderable = RenderableComponent::new(material, mesh, mesh_type);
         renderable.set_visible(false);
         renderable
     }
@@ -108,6 +115,7 @@ impl RenderableFactory {
 mod tests {
     use super::*;
     use crate::render::primitives::Vertex;
+    use crate::foundation::math::Vec3;
 
     fn create_test_mesh() -> Mesh {
         Mesh::new(
@@ -119,14 +127,20 @@ mod tests {
             vec![0, 1, 2],
         )
     }
+    
+    fn create_test_material() -> Material {
+        Material::unlit(crate::render::resources::materials::UnlitMaterialParams {
+            color: Vec3::new(1.0, 1.0, 1.0),
+            alpha: 1.0,
+        })
+    }
 
     #[test]
     fn test_renderable_component_creation() {
-        let material_id = MaterialId(1);
+        let material = create_test_material();
         let mesh = create_test_mesh();
-        let renderable = RenderableComponent::new(material_id, mesh);
+        let renderable = RenderableComponent::new(material, mesh);
         
-        assert_eq!(renderable.material_id, material_id);
         assert!(renderable.visible);
         assert!(!renderable.is_transparent);
         assert_eq!(renderable.render_layer, 0);
@@ -135,11 +149,10 @@ mod tests {
 
     #[test]
     fn test_transparent_renderable() {
-        let material_id = MaterialId(2);
+        let material = create_test_material();
         let mesh = create_test_mesh();
-        let renderable = RenderableComponent::new_transparent(material_id, mesh, 5);
+        let renderable = RenderableComponent::new_transparent(material, mesh, MeshType::Sphere, 5);
         
-        assert_eq!(renderable.material_id, material_id);
         assert!(renderable.visible);
         assert!(renderable.is_transparent);
         assert_eq!(renderable.render_layer, 5);
@@ -147,9 +160,9 @@ mod tests {
 
     #[test]
     fn test_visibility_toggle() {
-        let material_id = MaterialId(3);
+        let material = create_test_material();
         let mesh = create_test_mesh();
-        let mut renderable = RenderableComponent::new(material_id, mesh);
+        let mut renderable = RenderableComponent::new(material, mesh, MeshType::Teapot);
         
         assert!(renderable.should_render());
         
@@ -162,21 +175,21 @@ mod tests {
 
     #[test]
     fn test_factory_methods() {
-        let material_id = MaterialId(4);
+        let material = create_test_material();
         let mesh = create_test_mesh();
         
         // Test opaque creation
-        let opaque = RenderableFactory::create_opaque(material_id, mesh.clone());
+        let opaque = RenderableFactory::create_opaque(material.clone(), mesh.clone(), MeshType::Cube);
         assert!(!opaque.is_transparent);
         assert!(opaque.visible);
         
         // Test transparent creation
-        let transparent = RenderableFactory::create_transparent(material_id, mesh.clone(), 3);
+        let transparent = RenderableFactory::create_transparent(material.clone(), mesh.clone(), MeshType::Sphere, 3);
         assert!(transparent.is_transparent);
         assert_eq!(transparent.render_layer, 3);
         
         // Test hidden creation
-        let hidden = RenderableFactory::create_hidden(material_id, mesh);
+        let hidden = RenderableFactory::create_hidden(material, mesh, MeshType::Teapot);
         assert!(!hidden.visible);
     }
 }

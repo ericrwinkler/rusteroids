@@ -9,9 +9,7 @@
 pub mod components;
 pub mod layout;
 pub mod renderer;
-pub mod input;
 
 pub use components::*;
 pub use layout::*;
 pub use renderer::*;
-pub use input::*;

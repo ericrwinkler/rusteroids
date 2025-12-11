@@ -10,6 +10,7 @@ use super::state::{SyncManager, SwapchainManager};
 use crate::render::backends::vulkan::*;
 use crate::render::primitives::Vertex;
 use crate::foundation::math::{Mat4, Vec3};
+use crate::input::ui_input::{UIInputProcessor, MouseButton};
 use ash::vk;
 use std::collections::HashMap;
 
@@ -71,7 +72,7 @@ pub struct VulkanRenderer {
     instance_renderer: Option<crate::render::systems::dynamic::InstanceRenderer>,
     
     // UI input processing
-    ui_input_processor: crate::render::systems::ui::UIInputProcessor,
+    ui_input_processor: UIInputProcessor,
     
     // Event system for UI interactions
     event_system: crate::events::EventSystem,
@@ -164,7 +165,7 @@ impl VulkanRenderer {
             object_resources: HashMap::new(),
             next_object_id: 1,
             instance_renderer: None, // Will be initialized when dynamic system is enabled
-            ui_input_processor: crate::render::systems::ui::UIInputProcessor::new(800.0, 600.0), // Updated on first frame
+            ui_input_processor: UIInputProcessor::new(800.0, 600.0), // Updated on first frame
             event_system: crate::events::EventSystem::new(),
             ui_pipeline: None, // Lazy initialization on first UI render
             ui_pipeline_layout: None,
@@ -255,7 +256,7 @@ impl VulkanRenderer {
     }
     
     /// Update mouse button state for UI input processing
-    pub fn update_mouse_button(&mut self, button: crate::render::systems::ui::MouseButton, pressed: bool) {
+    pub fn update_mouse_button(&mut self, button: MouseButton, pressed: bool) {
         self.ui_input_processor.update_mouse_button(button, pressed);
     }
     

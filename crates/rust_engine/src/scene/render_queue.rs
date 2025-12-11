@@ -96,8 +96,8 @@ impl RenderQueue {
         
         for obj in objects {
             batches_map
-                .entry(obj.material_id)
-                .or_insert_with(|| RenderBatch::new(obj.material_id))
+                .entry(obj.material.id)
+                .or_insert_with(|| RenderBatch::new(obj.material.id))
                 .add_object((*obj).clone());
         }
         

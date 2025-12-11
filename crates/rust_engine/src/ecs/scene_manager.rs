@@ -7,7 +7,7 @@
 use crate::ecs::{World, Entity};
 use crate::ecs::components::{RenderableComponent, MovementComponent, LifecycleComponent};
 use crate::ecs::systems::RenderableCollector;
-use crate::render::{GraphicsEngine, resources::materials::MaterialId, primitives::Mesh};
+use crate::render::{GraphicsEngine, resources::materials::{Material, MaterialId}, primitives::Mesh};
 use nalgebra::Vector3;
 use std::time::{Duration, Instant};
 
@@ -123,7 +123,16 @@ impl SceneManager {
         let entity = self.world.create_entity();
         
         // Add renderable component
-        let renderable = RenderableComponent::new(material_id, Mesh::cube()); // Using cube for now
+        // Note: This is a legacy method that still uses MaterialId - ideally should be updated to use Material
+        let material = Material::unlit(crate::render::resources::materials::UnlitMaterialParams {
+            color: crate::foundation::math::Vec3::new(1.0, 1.0, 1.0),
+            alpha: 1.0,
+        });
+        let renderable = RenderableComponent::new(
+            material,
+            Mesh::cube(),
+            crate::render::systems::dynamic::MeshType::Cube
+        ); // Using cube for now
         self.world.add_component(entity, renderable);
         
         // Add movement component for position (even if not moving)

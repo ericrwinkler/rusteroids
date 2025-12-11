@@ -9,7 +9,8 @@ use rust_engine::assets::obj_loader::ObjLoader;
 use rust_engine::audio::{AudioSystem, SoundHandle};
 use rust_engine::ecs::{
     World, Entity, LightFactory, LightingSystem as EcsLightingSystem, 
-    TransformComponent, LightComponent,
+    TransformComponent, LightComponent, LifecycleComponent,
+    components::RenderableComponent,
 };
 use rust_engine::scene::SceneManager;
 use rust_engine::render::{
@@ -23,7 +24,6 @@ use rust_engine::render::{
     VulkanRendererConfig,
     WindowHandle,
     resources::materials::{MaterialId, MaterialType},
-    SharedRenderingResources,
     systems::dynamic::{DynamicObjectHandle, MeshType},
     FontAtlas,
     TextLayout,
@@ -66,9 +66,7 @@ struct LightInstance {
     movement_pattern: MovementPattern,
     effect_pattern: EffectPattern,
     phase_offset: f32,   // Phase offset for animation variety
-    spawn_time: Instant, // When this instance was created
-    lifetime: f32,       // How long it should live (in seconds)
-    sphere_handle: Option<DynamicObjectHandle>, // Visual sphere marker for the light
+    // Removed: spawn_time, lifetime, sphere_handle - now using LifecycleComponent and automatic entity lifecycle
 }
 
 #[derive(Clone)]
@@ -101,27 +99,17 @@ pub struct DynamicTeapotApp {
     // New SceneManager for batch rendering
     scene_manager: SceneManager,
     
-    // Entity handle tracking: Maps ECS Entity -> (MeshType, DynamicObjectHandle)
-    // This prevents re-allocation every frame and stores mesh type for efficient updates
-    entity_handles: std::collections::HashMap<Entity, (MeshType, DynamicObjectHandle)>,
-    
     // Traditional lighting system (keep for compatibility)
     world: World,
     lighting_system: EcsLightingSystem,
     
     // Dynamic content tracking
-    teapot_instances: Vec<TeapotInstance>,
-    spaceship_instances: Vec<SpaceshipInstance>,
     light_instances: Vec<LightInstance>,
     teapot_mesh: Option<Mesh>,
     sphere_mesh: Option<Mesh>,
     spaceship_mesh: Option<Mesh>,
     quad_mesh: Option<Mesh>, // Simple quad for testing
     material_ids: Vec<MaterialId>,
-    
-    // Mesh resources for rendering
-    shared_resources: Option<SharedRenderingResources>, // Teapot mesh resources
-    sphere_shared_resources: Option<SharedRenderingResources>, // Sphere mesh resources
     
     // Animation state
     start_time: Instant,
@@ -276,9 +264,6 @@ impl DynamicTeapotApp {
         let material_ids: Vec<MaterialId> = (0..teapot_materials.len())
             .map(|i| MaterialId(i as u32))
             .collect();
-        
-        // Initialize empty dynamic content
-        let teapot_instances = Vec::new();
         
         // Create sunlight - one gentle directional light at an angle
         let sunlight_entity = Self::create_sunlight(&mut world);
@@ -847,19 +832,14 @@ impl DynamicTeapotApp {
             graphics_engine,
             camera,
             scene_manager,
-            entity_handles: std::collections::HashMap::new(),
             world,
             lighting_system,
-            teapot_instances,
-            spaceship_instances: Vec::new(),
             light_instances,
             teapot_mesh: None,
             sphere_mesh: None,
             spaceship_mesh: None,
             quad_mesh: None,
             material_ids,
-            shared_resources: None,
-            sphere_shared_resources: None,
 
             last_material_switch: now,
             start_time: now,
@@ -1101,22 +1081,18 @@ impl DynamicTeapotApp {
         let entity = self.scene_manager.create_renderable_entity(
             &mut self.world,
             self.teapot_mesh.as_ref().unwrap().clone(),
-            MaterialId(0), // Material ID will be managed by render system
+            rust_engine::render::systems::dynamic::MeshType::Teapot,
+            selected_material.clone(), // Pass the actual material (not MaterialId)
             Transform::from_position(position),
         );
         
-        // Create instance tracker for animation/lifetime management
-        let instance = TeapotInstance {
-            entity: Some(entity),
-            material: selected_material.clone(), // Store the actual material
-            spawn_time: Instant::now(),
-            lifetime,
-        };
+        // ✅ Add LifecycleComponent for automatic lifetime management
+        let current_time = self.start_time.elapsed().as_secs_f32();
+        let lifecycle = LifecycleComponent::new_with_lifetime(current_time, lifetime);
+        self.world.add_component(entity, lifecycle);
         
-        self.teapot_instances.push(instance);
-        
-        log::info!("Spawned monkey #{} (Entity {:?}) at {:?} with {} material (lifetime: {:.1}s)", 
-                  self.teapot_instances.len(), entity, position, material_name, lifetime);
+        log::info!("Spawned monkey (Entity {:?}) at {:?} with {} material (lifetime: {:.1}s)", 
+                  entity, position, material_name, lifetime);
     }
     
     fn spawn_random_light(&mut self) {
@@ -1190,8 +1166,7 @@ impl DynamicTeapotApp {
             },
         };
         
-        // Spawn a colored sphere marker at the light position using sphere mesh
-        let sphere_handle = self.spawn_sphere_marker(position, color);
+        // Note: Sphere markers now managed by entity lifecycle system
         
         let instance = LightInstance {
             entity,
@@ -1203,9 +1178,6 @@ impl DynamicTeapotApp {
             movement_pattern,
             effect_pattern,
             phase_offset: rng.gen_range(0.0..std::f32::consts::TAU),
-            spawn_time: Instant::now(),
-            lifetime,
-            sphere_handle,
         };
         
         self.light_instances.push(instance);
@@ -1293,7 +1265,8 @@ impl DynamicTeapotApp {
         let entity = self.scene_manager.create_renderable_entity(
             &mut self.world,
             self.spaceship_mesh.as_ref().unwrap().clone(),
-            MaterialId(0), // Material ID will be managed by render system
+            rust_engine::render::systems::dynamic::MeshType::Spaceship,
+            spaceship_material.clone(), // Pass the actual material (not MaterialId)
             Transform {
                 position,
                 rotation: rotation_quat,
@@ -1301,118 +1274,83 @@ impl DynamicTeapotApp {
             },
         );
         
-        // Create instance tracker for animation/lifetime management
-        let instance = SpaceshipInstance {
-            entity: Some(entity),
-            material: spaceship_material.clone(), // Store the actual material
-            spawn_time: Instant::now(),
-            lifetime,
-        };
+        // ✅ Add LifecycleComponent for automatic lifetime management
+        let current_time = self.start_time.elapsed().as_secs_f32();
+        let lifecycle = LifecycleComponent::new_with_lifetime(current_time, lifetime);
+        self.world.add_component(entity, lifecycle);
         
-        self.spaceship_instances.push(instance);
-        log::info!("Spawned spaceship #{} (Entity {:?}) at {:?} (lifetime: {:.1}s)", 
-                  self.spaceship_instances.len(), entity, position, lifetime);
+        log::info!("Spawned spaceship (Entity {:?}) at {:?} (lifetime: {:.1}s)", 
+                  entity, position, lifetime);
     }
     
     fn despawn_excess_objects(&mut self) {
-        let initial_teapot_count = self.teapot_instances.len();
-        let initial_spaceship_count = self.spaceship_instances.len();
-        let initial_light_count = self.light_instances.len();
+        use rust_engine::ecs::RenderableComponent;
         
-        // Despawn oldest teapots if we exceed the maximum
-        if self.teapot_instances.len() > MAX_TEAPOTS {
-            let excess_count = self.teapot_instances.len() - MAX_TEAPOTS;
-            
-            // Sort by spawn time to get oldest first
-            self.teapot_instances.sort_by_key(|instance| instance.spawn_time);
-            
-            // Remove the oldest excess teapots
-            for _ in 0..excess_count {
-                let instance = self.teapot_instances.remove(0);  // Remove first (oldest)
-                
-                let elapsed = instance.spawn_time.elapsed().as_secs_f32();
-                
-                // ✅ Use Scene Manager API to destroy entity (Proposal #1 Phase 2)
-                if let Some(entity) = instance.entity {
-                    // Remove handle tracking and free GPU resources
-                    if let Some((mesh_type, handle)) = self.entity_handles.remove(&entity) {
-                        if let Err(e) = self.graphics_engine.free_pool_instance(mesh_type, handle) {
-                            log::warn!("Failed to free pool instance for entity {:?}: {}", entity, e);
+        // ✅ Use ECS queries to count entities by mesh type
+        let current_time = self.start_time.elapsed().as_secs_f32();
+        
+        // Query all entities with RenderableComponent and LifecycleComponent
+        let entities: Vec<_> = self.world.entities().cloned().collect();
+        
+        // Separate by mesh type (Teapot vs Spaceship)
+        let mut teapots: Vec<(Entity, f32)> = Vec::new();
+        let mut spaceships: Vec<(Entity, f32)> = Vec::new();
+        
+        for entity in entities {
+            if let Some(renderable) = self.world.get_component::<RenderableComponent>(entity) {
+                if let Some(lifecycle) = self.world.get_component::<LifecycleComponent>(entity) {
+                    let spawn_time = lifecycle.spawn_time;
+                    match renderable.mesh_type {
+                        rust_engine::render::systems::dynamic::MeshType::Teapot => {
+                            teapots.push((entity, spawn_time));
                         }
+                        rust_engine::render::systems::dynamic::MeshType::Spaceship => {
+                            spaceships.push((entity, spawn_time));
+                        }
+                        _ => {}
                     }
-                    // Remove from Scene Manager and ECS
-                    self.scene_manager.destroy_entity(&mut self.world, entity);
-                    log::info!("Despawned old teapot entity (lived {:.1}s)", elapsed);
                 }
             }
         }
         
-        // Despawn oldest lights if we exceed the maximum  
-        if self.light_instances.len() > MAX_LIGHTS {
-            let excess_count = self.light_instances.len() - MAX_LIGHTS;
-            
+        // Despawn oldest teapots if we exceed the maximum
+        if teapots.len() > MAX_TEAPOTS {
+            let excess_count = teapots.len() - MAX_TEAPOTS;
             // Sort by spawn time to get oldest first
-            self.light_instances.sort_by_key(|instance| instance.spawn_time);
+            teapots.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
             
-            // Remove the oldest excess lights
-            for _ in 0..excess_count {
-                let instance = self.light_instances.remove(0);  // Remove first (oldest)
-                
-                let elapsed = instance.spawn_time.elapsed().as_secs_f32();
-                
-                // Remove light component from ECS world
-                self.world.remove_component::<LightComponent>(instance.entity);
-                
-                // Also despawn the sphere marker if it exists
-                if let Some(sphere_handle) = instance.sphere_handle {
-                    if let Err(e) = self.graphics_engine.free_pool_instance(MeshType::Sphere, sphere_handle) {
-                        log::warn!("Failed to despawn light sphere marker: {}", e);
-                    } else {
-                        log::trace!("Despawned sphere marker for old light");
-                    }
-                }
-                
-                log::info!("Despawned old light (lived {:.1}s, over limit)", elapsed);
+            for i in 0..excess_count {
+                let entity = teapots[i].0;
+                let age = current_time - teapots[i].1;
+                self.scene_manager.destroy_entity(&mut self.world, entity);
+                log::info!("Despawned old teapot entity (lived {:.1}s, over limit)", age);
             }
         }
         
         // Despawn oldest spaceships if we exceed the maximum
-        if self.spaceship_instances.len() > MAX_SPACESHIPS {
-            let excess_count = self.spaceship_instances.len() - MAX_SPACESHIPS;
-            
+        if spaceships.len() > MAX_SPACESHIPS {
+            let excess_count = spaceships.len() - MAX_SPACESHIPS;
             // Sort by spawn time to get oldest first
-            self.spaceship_instances.sort_by_key(|instance| instance.spawn_time);
+            spaceships.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
             
-            // Remove the oldest excess spaceships
-            for _ in 0..excess_count {
-                let instance = self.spaceship_instances.remove(0);
-                
-                let elapsed = instance.spawn_time.elapsed().as_secs_f32();
-                
-                // ✅ Use Scene Manager API to destroy entity (Proposal #1 Phase 2)
-                if let Some(entity) = instance.entity {
-                    // Remove handle tracking and free GPU resources
-                    if let Some((mesh_type, handle)) = self.entity_handles.remove(&entity) {
-                        if let Err(e) = self.graphics_engine.free_pool_instance(mesh_type, handle) {
-                            log::warn!("Failed to free pool instance for spaceship entity {:?}: {}", entity, e);
-                        } else {
-                            log::info!("Despawned old spaceship entity (lived {:.1}s, over limit)", elapsed);
-                        }
-                    }
-                    // Remove from Scene Manager and ECS
-                    self.scene_manager.destroy_entity(&mut self.world, entity);
-                }
+            for i in 0..excess_count {
+                let entity = spaceships[i].0;
+                let age = current_time - spaceships[i].1;
+                self.scene_manager.destroy_entity(&mut self.world, entity);
+                log::info!("Despawned old spaceship entity (lived {:.1}s, over limit)", age);
             }
         }
         
-        let teapots_despawned = initial_teapot_count - self.teapot_instances.len();
-        let spaceships_despawned = initial_spaceship_count - self.spaceship_instances.len();
-        let lights_despawned = initial_light_count - self.light_instances.len();
-        
-        if teapots_despawned > 0 || spaceships_despawned > 0 || lights_despawned > 0 {
-            log::info!("Despawned {} teapots, {} spaceships, {} lights. Active: {} teapots, {} spaceships, {} lights",
-                      teapots_despawned, spaceships_despawned, lights_despawned,
-                      self.teapot_instances.len(), self.spaceship_instances.len(), self.light_instances.len());
+        // Despawn oldest lights if we exceed the maximum
+        if self.light_instances.len() > MAX_LIGHTS {
+            let excess_count = self.light_instances.len() - MAX_LIGHTS;
+            
+            for _ in 0..excess_count {
+                let instance = self.light_instances.remove(0);
+                // Remove light component from ECS world
+                self.world.remove_component::<LightComponent>(instance.entity);
+                log::info!("Despawned old light (over limit)");
+            }
         }
     }
     
@@ -2128,43 +2066,7 @@ impl DynamicTeapotApp {
                 light_comp.intensity = current_intensity.max(0.0); // Ensure non-negative
             }
             
-            // Update sphere marker position and scale to follow the light
-            if let Some(sphere_handle) = light_instance.sphere_handle {
-                // Get the current light component to read intensity and range
-                if let Some(light_comp) = self.world.get_component::<LightComponent>(light_instance.entity) {
-                    // Calculate scale based on light intensity and range
-                    // Much smaller base scale, then multiply by intensity and a fraction of range
-                    let base_scale = 1.0;
-                    let intensity_factor = light_comp.intensity.max(0.1); // Minimum visible scale
-                    let range_factor = (light_comp.range * 0.01).max(0.1); // 1% of range, minimum 0.1
-                    let combined_scale = base_scale * intensity_factor * range_factor;
-                    let scale_vec = Vec3::new(combined_scale, combined_scale, combined_scale);
-                    
-                    // Update both position and scale
-                    let transform = Mat4::new_translation(&light_instance.current_position)
-                        * Mat4::from_euler_angles(0.0, 0.0, 0.0)
-                        * Mat4::new_nonuniform_scaling(&scale_vec);
-                    
-                    if let Err(e) = self.graphics_engine.update_pool_instance(
-                        MeshType::Sphere,
-                        sphere_handle,
-                        transform,
-                    ) {
-                        log::warn!("Failed to update sphere marker transform: {}", e);
-                    }
-                } else {
-                    // Fallback to position-only update if light component not found
-                    let transform = Mat4::new_translation(&light_instance.current_position);
-                    
-                    if let Err(e) = self.graphics_engine.update_pool_instance(
-                        MeshType::Sphere,
-                        sphere_handle,
-                        transform,
-                    ) {
-                        log::warn!("Failed to update sphere marker position: {}", e);
-                    }
-                }
-            }
+            // Note: Light sphere markers removed - use automatic entity lifecycle instead
         }
     }
     
@@ -2199,70 +2101,6 @@ impl DynamicTeapotApp {
         let delta_time = now.duration_since(self.last_frame_time).as_secs_f32();
         self.last_frame_time = now;
         
-        // BEGIN DYNAMIC FRAME: Setup and lifecycle updates
-        self.graphics_engine.begin_dynamic_frame()?;
-        
-        // Set camera for the frame (this needs to be done before any rendering)
-        self.graphics_engine.set_camera(&self.camera);
-        
-        // Build multi-light environment from entity system
-        let multi_light_env = self.build_multi_light_environment_from_entities().clone();
-        self.graphics_engine.set_multi_light_environment(&multi_light_env);
-        
-        // ✅ PHASE 4 COMPLETE: Render from Scene Manager with entity handle tracking
-        self.scene_manager.sync_from_world(&mut self.world);
-        let render_queue = self.scene_manager.build_render_queue();
-        
-        // Render all entities from Scene Manager with smart handle tracking
-        for batch in render_queue.opaque_batches() {
-            for obj in &batch.objects {
-                // Check if we already have a handle for this entity
-                if let Some(&(mesh_type, handle)) = self.entity_handles.get(&obj.entity) {
-                    // Existing entity - just update its transform (no lookup needed!)
-                    if let Err(e) = self.graphics_engine.update_pool_instance(mesh_type, handle, obj.transform) {
-                        log::warn!("Failed to update entity {:?} transform: {}", obj.entity, e);
-                    }
-                } else {
-                    // New entity - determine mesh type and material (only once!)
-                    let (mesh_type, material) = if let Some(inst) = self.teapot_instances.iter().find(|inst| inst.entity == Some(obj.entity)) {
-                        (MeshType::Teapot, inst.material.clone())
-                    } else if let Some(inst) = self.spaceship_instances.iter().find(|inst| inst.entity == Some(obj.entity)) {
-                        (MeshType::Spaceship, inst.material.clone())
-                    } else {
-                        continue; // Unknown entity, skip
-                    };
-                    
-                    // Allocate a handle with the stored material
-                    match self.graphics_engine.allocate_from_pool(
-                        mesh_type,
-                        obj.transform,
-                        material,
-                    ) {
-                        Ok(handle) => {
-                            self.entity_handles.insert(obj.entity, (mesh_type, handle));
-                            log::debug!("Allocated {:?} handle for entity {:?}", mesh_type, obj.entity);
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to allocate {:?} for entity {:?}: {}. Tracked handles: {}", 
-                                      mesh_type, obj.entity, e, self.entity_handles.len());
-                        }
-                    }
-                }
-            }
-        }
-        
-        // UPDATE DYNAMIC OBJECTS: All objects are spawned directly in spawn methods
-        // No additional spawning logic needed here
-        
-        // RECORD DYNAMIC DRAWS: Record all active dynamic objects for rendering
-        log::debug!("Recording dynamic object draw commands...");
-        self.graphics_engine.record_dynamic_draws()?;
-        log::debug!("Dynamic draw commands recorded successfully");
-        
-        // RECORD UI DRAWS: Record UI overlays AFTER 3D scene (Chapter 11.4.4)
-        // Render pass stays OPEN - we switch pipeline state within same render pass
-        log::debug!("Recording UI overlay commands...");
-        
         // Update FPS text
         let fps_text = format!("FPS: {:.1}", self.current_fps);
         self.ui_manager.update_text(self.fps_label_id, fps_text);
@@ -2270,10 +2108,29 @@ impl DynamicTeapotApp {
         // Update UI state
         self.ui_manager.update(delta_time);
         
-        // Render UI using the new clean architecture
-        if let Some(vulkan_renderer) = self.graphics_engine.get_vulkan_renderer_mut() {
-            self.ui_manager.render(vulkan_renderer)?;
-        }
+        // ✅ PHASE 4 COMPLETE: Sync ECS → Scene Manager
+        self.scene_manager.sync_from_world(&mut self.world);
+        let render_queue = self.scene_manager.build_render_queue();
+        
+        // ✅ PROPOSAL #1 COMPLETE: Engine automatically manages entity→handle lifecycle
+        // No more manual tracking! No more hacky mesh classification! Engine knows everything.
+        self.graphics_engine.render_entities_from_queue(&render_queue)?;
+        
+        // Build multi-light environment from entity system
+        let multi_light_env = self.build_multi_light_environment_from_entities().clone();
+        
+        // Export UI data for rendering
+        let ui_data = self.ui_manager.get_render_data();
+        
+        // ✅ PROPOSAL #6: Unified frame rendering (replaces ~100 lines of ceremony)
+        self.graphics_engine.render_frame(
+            &rust_engine::render::RenderFrameData {
+                camera: &self.camera,
+                lights: &multi_light_env,
+                ui: &ui_data,
+            },
+            &mut self.window,
+        )?;
         
         // Dispatch UI events
         self.ui_manager.dispatch_events();
@@ -2542,13 +2399,6 @@ impl DynamicTeapotApp {
             }
         }
         
-        log::debug!("UI overlay commands recorded successfully");
-        
-        // END DYNAMIC FRAME: Close render pass, submit and present
-        log::debug!("Ending dynamic frame...");
-        self.graphics_engine.end_dynamic_frame(&mut self.window)?;
-        log::debug!("Dynamic frame ended successfully");
-        
         // Log performance info occasionally
         static mut LAST_LOG_TIME: f32 = 0.0;
         unsafe {
@@ -2564,8 +2414,16 @@ impl DynamicTeapotApp {
                               stats.active_pools,
                               utilization_estimate as u32);
                 }
+                
+                // Count teapot entities using ECS query
+                use rust_engine::render::systems::dynamic::MeshType;
+                let teapot_count = self.world.query::<RenderableComponent>()
+                    .iter()
+                    .filter(|(_, renderable)| matches!(renderable.mesh_type, MeshType::Teapot))
+                    .count();
+                
                 log::info!("Total teapot instances: {}, {} active lights (sunlight + {} dynamic)", 
-                          self.teapot_instances.len(),
+                          teapot_count,
                           self.light_instances.len() + 1, // +1 for sunlight
                           self.light_instances.len());
                 LAST_LOG_TIME = elapsed_seconds;
@@ -2575,35 +2433,29 @@ impl DynamicTeapotApp {
         Ok(())
     }
 
-    /// Clean up expired teapot instances that were automatically despawned by the dynamic system
-    fn cleanup_expired_instances(&mut self) {
-        let now = Instant::now();
+    /// ✅ Update entity lifecycles and automatically destroy expired entities
+    fn update_lifecycle_system(&mut self) {
+        let current_time = self.start_time.elapsed().as_secs_f32();
+        let mut entities_to_destroy = Vec::new();
         
-        // Remove teapot instances that have exceeded their lifetime
-        self.teapot_instances.retain(|instance| {
-            let elapsed = now.duration_since(instance.spawn_time).as_secs_f32();
-            let should_keep = elapsed < instance.lifetime;
-            
-            if !should_keep {
-                log::debug!("Removing expired teapot instance (lived {:.1}s of {:.1}s)", 
-                           elapsed, instance.lifetime);
+        // Update all lifecycle components
+        let entities: Vec<_> = self.world.entities().cloned().collect();
+        for entity in entities {
+            if let Some(lifecycle) = self.world.get_component_mut::<LifecycleComponent>(entity) {
+                lifecycle.update(current_time, 0.016); // Use ~60 FPS delta
+                
+                // Mark expired entities for removal
+                if lifecycle.should_destroy() {
+                    entities_to_destroy.push(entity);
+                }
             }
-            
-            should_keep
-        });
+        }
         
-        // Also clean up light instances
-        self.light_instances.retain(|instance| {
-            let elapsed = now.duration_since(instance.spawn_time).as_secs_f32();
-            let should_keep = elapsed < instance.lifetime;
-            
-            if !should_keep {
-                log::debug!("Removing expired light instance (lived {:.1}s of {:.1}s)", 
-                           elapsed, instance.lifetime);
-            }
-            
-            should_keep
-        });
+        // Destroy expired entities
+        for entity in entities_to_destroy {
+            log::debug!("Destroying expired entity {:?}", entity);
+            self.scene_manager.destroy_entity(&mut self.world, entity);
+        }
     }
 }
 

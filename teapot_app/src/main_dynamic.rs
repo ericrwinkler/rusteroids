@@ -64,7 +64,7 @@ struct LightInstance {
     movement_pattern: MovementPattern,
     effect_pattern: EffectPattern,
     phase_offset: f32,   // Phase offset for animation variety
-    // Removed: spawn_time, lifetime, sphere_handle - now using LifecycleComponent and automatic entity lifecycle
+    sphere_handle: Option<DynamicObjectHandle>, // Visual sphere marker for the light
 }
 
 #[derive(Clone)]
@@ -1183,23 +1183,17 @@ impl DynamicTeapotApp {
             },
         };
         
-        // Random effect pattern
-        let effect_pattern = match rng.gen_range(0..4) {
-            0 => EffectPattern::Steady,
-            1 => EffectPattern::Pulse {
+        // Effect pattern - 70% steady, 30% pulse
+        let effect_pattern = match rng.gen_range(0..10) {
+            0..=6 => EffectPattern::Steady,
+            _ => EffectPattern::Pulse {
                 frequency: rng.gen_range(0.5..2.0),
-                amplitude: rng.gen_range(0.2..0.4), // Much more subtle pulsing
-            },
-            2 => EffectPattern::Flicker {
-                base_rate: rng.gen_range(8.0..12.0),
-                chaos: rng.gen_range(0.1..0.3), // Much more subtle flickering
-            },
-            _ => EffectPattern::Breathe {
-                frequency: rng.gen_range(0.3..1.2),
+                amplitude: rng.gen_range(0.3..0.6),
             },
         };
         
-        // Note: Sphere markers now managed by entity lifecycle system
+        // Spawn sphere marker for light visualization
+        let sphere_handle = self.spawn_sphere_marker(position, color);
         
         let instance = LightInstance {
             entity,
@@ -1211,6 +1205,7 @@ impl DynamicTeapotApp {
             movement_pattern,
             effect_pattern,
             phase_offset: rng.gen_range(0.0..std::f32::consts::TAU),
+            sphere_handle,
         };
         
         self.light_instances.push(instance);
@@ -1225,12 +1220,14 @@ impl DynamicTeapotApp {
     /// - Clear separation of concerns
     /// - Reusable systems with different resource sets
     fn spawn_sphere_marker(&mut self, position: Vec3, color: Vec3) -> Option<DynamicObjectHandle> {
-        // Create a transparent unlit material with the light's color
+        // Create unlit emissive material with the light's color (no lighting interaction)
         let sphere_material = MaterialBuilder::new()
             .base_color(color)
             .metallic(0.0)
-            .roughness(1.0)
-            .alpha(0.1)
+            .roughness(0.1)
+            .emission(color * 2.0) // Bright emission
+            .emission_strength(1.0)
+            .alpha(0.3) // Moderately transparent
             .build_transparent();
         
         // ✅ Use TransformComponent builder pattern (Proposal #3)
@@ -2260,8 +2257,16 @@ impl DynamicTeapotApp {
                     light_instance.base_intensity * (1.0 + pulse * amplitude)
                 }
                 EffectPattern::Flicker { base_rate, chaos } => {
-                    let flicker = (elapsed_seconds * base_rate + light_instance.phase_offset).sin() * chaos;
-                    light_instance.base_intensity * (1.0 + flicker)
+                    // True flickering: combine multiple sine waves at different frequencies for erratic behavior
+                    let t = elapsed_seconds + light_instance.phase_offset;
+                    let flicker1 = (t * base_rate).sin();
+                    let flicker2 = (t * base_rate * 2.3).sin(); // Prime-ish multiplier for decoherence
+                    let flicker3 = (t * base_rate * 5.7).sin(); // Higher frequency jitter
+                    let flicker4 = (t * base_rate * 11.3).sin(); // Even higher frequency
+                    // Combine with different weights for chaotic, flickering effect
+                    let combined_flicker = (flicker1 * 0.5 + flicker2 * 0.3 + flicker3 * 0.15 + flicker4 * 0.05) * chaos;
+                    // Clamp to prevent negative intensity or extreme values
+                    (light_instance.base_intensity * (1.0 + combined_flicker)).max(0.1).min(light_instance.base_intensity * 2.0)
                 }
                 EffectPattern::Breathe { frequency } => {
                     let breathe = (elapsed_seconds * frequency + light_instance.phase_offset).sin();
@@ -2275,7 +2280,37 @@ impl DynamicTeapotApp {
                 light_comp.intensity = current_intensity.max(0.0); // Ensure non-negative
             }
             
-            // Note: Light sphere markers removed - use automatic entity lifecycle instead
+            // Update sphere marker position and scale to follow the light
+            if let Some(sphere_handle) = light_instance.sphere_handle {
+                // Get the current light component to read intensity and range
+                if let Some(light_comp) = self.world.get_component::<LightComponent>(light_instance.entity) {
+                    // Calculate scale based on light intensity and range
+                    // Much smaller base scale, then multiply by intensity and a fraction of range
+                    let base_scale = 0.5;
+                    let intensity_factor = light_comp.intensity.max(0.1); // Minimum visible scale
+                    let range_factor = (light_comp.range * 0.01).max(0.1); // 1% of range, minimum 0.1
+                    let combined_scale = base_scale * intensity_factor * range_factor;
+                    let scale_vec = Vec3::new(combined_scale, combined_scale, combined_scale);
+
+                    // Build transform matrix from position and scale
+                    use rust_engine::foundation::math::{Mat4, Vector3};
+                    let pos = &light_instance.current_position;
+                    let translation = Mat4::new_translation(&Vector3::new(pos.x, pos.y, pos.z));
+                    let scale_matrix = Mat4::new_nonuniform_scaling(&Vector3::new(
+                        scale_vec.x, scale_vec.y, scale_vec.z
+                    ));
+                    let transform = translation * scale_matrix;
+
+                    // Update both position and scale
+                    if let Err(e) = self.graphics_engine.update_pool_instance(
+                        MeshType::Sphere,
+                        sphere_handle,
+                        transform,
+                    ) {
+                        log::warn!("Failed to update sphere marker transform: {}", e);
+                    }
+                }
+            }
         }
     }
     

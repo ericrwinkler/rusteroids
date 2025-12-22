@@ -363,7 +363,7 @@ pub struct SpotLightData {
 /// Maximum number of directional lights supported
 pub const MAX_DIRECTIONAL_LIGHTS: usize = 4;
 /// Maximum number of point lights supported
-pub const MAX_POINT_LIGHTS: usize = 8;
+pub const MAX_POINT_LIGHTS: usize = 64;
 /// Maximum number of spot lights supported
 pub const MAX_SPOT_LIGHTS: usize = 4;
 

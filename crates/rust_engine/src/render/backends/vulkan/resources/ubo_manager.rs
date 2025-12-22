@@ -25,7 +25,7 @@ struct MultiLightingUBO {
     spot_light_count: u32,                  // 4 bytes
     _padding: u32,                          // 4 bytes - total 16 bytes
     directional_lights: [DirectionalLightData; 4], // 4 * 32 = 128 bytes
-    point_lights: [PointLightData; 8],              // 8 * 48 = 384 bytes
+    point_lights: [PointLightData; 64],              // 64 * 48 = 3072 bytes
     spot_lights: [SpotLightData; 4],                // 4 * 64 = 256 bytes
 }
 
@@ -156,7 +156,7 @@ impl UboManager {
                 position: [0.0; 4],
                 color: [0.0; 4],
                 attenuation: [1.0, 0.0, 0.0, 0.0],
-            }; 8],
+            }; 64],
             spot_lights: [SpotLightData {
                 position: [0.0; 4],
                 direction: [0.0; 4],
@@ -634,8 +634,8 @@ impl UboManager {
             position: [0.0; 4],
             color: [0.0; 4],
             attenuation: [1.0, 0.0, 0.0, 0.0],
-        }; 8];
-        for i in 0..multi_light_env.header.point_light_count.min(8) as usize {
+        }; 64];
+        for i in 0..multi_light_env.header.point_light_count.min(64) as usize {
             let src = &multi_light_env.point_lights[i];
             point_lights[i] = PointLightData {
                 position: src.position,
@@ -718,7 +718,7 @@ impl UboManager {
                 position: [0.0; 4],
                 color: [0.0; 4],
                 attenuation: [1.0, 0.0, 0.0, 0.0],
-            }; 8],
+            }; 64],
             spot_lights: [SpotLightData {
                 position: [0.0; 4],
                 direction: [0.0; 4],

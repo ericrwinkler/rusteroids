@@ -25,6 +25,11 @@ pub struct RenderableComponent {
     pub visible: bool,
     
     /// Whether this material is transparent (affects render order)
+    /// FIXME: This flag is PARTIALLY IMPLEMENTED. It separates objects into
+    /// transparent_batches and opaque_batches in RenderQueue, but the rendering
+    /// system only processes opaque_batches(). Setting this to true will move
+    /// objects to a batch that never gets rendered, causing them to disappear.
+    /// See TODO in docs/API_REFACTORING_PLAN.md for resolution plan.
     pub is_transparent: bool,
     
     /// Rendering layer for sorting (higher values render later)
@@ -39,12 +44,16 @@ impl RenderableComponent {
             mesh,
             mesh_type,
             visible: true,
+            // FIXME: Hardcoded to false because transparent batch rendering not implemented
             is_transparent: false,
             render_layer: 0,
         }
     }
     
     /// Create a transparent renderable component
+    /// FIXME: DO NOT USE - This sets is_transparent=true which moves objects to
+    /// transparent_batches that are never rendered. Use new() instead until
+    /// transparent batch rendering is implemented.
     pub fn new_transparent(material: Material, mesh: Mesh, mesh_type: MeshType, render_layer: u8) -> Self {
         Self {
             material,

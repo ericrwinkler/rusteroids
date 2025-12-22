@@ -297,6 +297,9 @@ impl SceneManager {
         world.remove_component::<TransformComponent>(entity);
         world.remove_component::<RenderableComponent>(entity);
         
+        // CRITICAL FIX: Also remove LightComponent so lights actually despawn!
+        world.remove_component::<crate::ecs::components::LightComponent>(entity);
+        
         // Note: When World gets destroy_entity(), we'll call that here
     }
 }

@@ -159,7 +159,7 @@ impl Camera {
     pub fn set_aspect_ratio(&mut self, aspect: f32) {
         // Use a larger threshold to prevent spam during window resize
         if (self.aspect - aspect).abs() > 0.01 {
-            log::info!("Camera aspect ratio changed: {:.3} → {:.3}", self.aspect, aspect);
+            log::info!("Camera aspect ratio changed: {:.3} -> {:.3}", self.aspect, aspect);
             self.aspect = aspect;
         } else {
             // Still update the aspect ratio, just don't log it

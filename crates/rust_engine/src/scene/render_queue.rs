@@ -47,6 +47,9 @@ pub struct RenderQueue {
     opaque_batches: Vec<RenderBatch>,
     
     /// Transparent object batches (rendered back-to-front for alpha blending)
+    /// FIXME: This batch is populated but NEVER RENDERED. The rendering system in
+    /// render/mod.rs only calls opaque_batches() and never calls transparent_batches().
+    /// This is a partially implemented feature. See TODO in docs/API_REFACTORING_PLAN.md.
     transparent_batches: Vec<RenderBatch>,
 }
 
@@ -64,6 +67,8 @@ impl RenderQueue {
         let mut queue = Self::new();
         
         // Separate opaque and transparent objects
+        // FIXME: This separation logic works correctly, but transparent_objects are
+        // never rendered because render/mod.rs doesn't process transparent_batches()
         let mut opaque_objects: Vec<&RenderableObject> = objects
             .iter()
             .filter(|obj| obj.should_render() && !obj.is_transparent)

@@ -21,7 +21,7 @@ use rust_engine::render::{
     GraphicsEngine,
     VulkanRendererConfig,
     WindowHandle,
-    resources::materials::{MaterialId, MaterialType},
+    resources::materials::{MaterialId, MaterialType, UnlitMaterialParams},
     systems::dynamic::{DynamicObjectHandle, MeshType},
     FontAtlas,
     TextLayout,
@@ -965,14 +965,14 @@ impl DynamicTeapotApp {
         let lifetime = rng.gen_range(5.0..15.0);
         
         // Weighted material selection:
-        // 60% Standard PBR (no emission)
+        // 40% Standard PBR (no emission)
         // 25% Standard PBR with emission  
-        // 10% Transparent variants
+        // 30% Transparent variants (INCREASED from 10%)
         // 5% Unlit variants
         let roll = rng.gen_range(0.0..1.0);
         
-        let selected_material = if roll < 0.60 {
-            // Standard PBR without emission (60%)
+        let selected_material = if roll < 0.40 {
+            // Standard PBR without emission (40%)
             let base_colors = [
                 Vec3::new(0.8, 0.2, 0.2),  // Red
                 Vec3::new(0.2, 0.8, 0.2),  // Green
@@ -1001,7 +1001,7 @@ impl DynamicTeapotApp {
             }
             
             material
-        } else if roll < 0.85 {
+        } else if roll < 0.65 {
             // Standard PBR with emission (25%)
             let emission_colors = [
                 Vec3::new(1.0, 0.5, 0.0),  // Orange
@@ -1066,12 +1066,11 @@ impl DynamicTeapotApp {
                 ];
                 let color = ghost_colors[rng.gen_range(0..ghost_colors.len())];
                 
-                MaterialBuilder::new()
-                    .base_color(color)
-                    .metallic(0.0)
-                    .roughness(1.0)
-                    .alpha(0.4)
-                    .build_transparent()
+                // Create transparent unlit material properly
+                Material::transparent_unlit(UnlitMaterialParams {
+                    color,
+                    alpha: 0.4,
+                })
             }
         } else {
             // Unlit variants (5%)
@@ -1083,11 +1082,11 @@ impl DynamicTeapotApp {
             ];
             let color = bright_colors[rng.gen_range(0..bright_colors.len())];
             
-            MaterialBuilder::new()
-                .base_color(color)
-                .metallic(0.0)
-                .roughness(1.0)
-                .build()
+            // Create unlit material properly
+            Material::unlit(UnlitMaterialParams {
+                color,
+                alpha: 1.0,
+            })
         };
         
         // Get material name for logging

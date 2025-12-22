@@ -442,6 +442,26 @@ impl DynamicObjectManager {
         }
     }
 
+    /// Update material properties for a dynamic object instance
+    ///
+    /// Allows per-frame updates to material properties like alpha transparency,
+    /// base color, emission, metallic, and roughness.
+    ///
+    /// # Arguments
+    /// * `handle` - Handle to the object to update
+    /// * `material` - Updated material with new properties
+    pub fn update_instance_material(&mut self, handle: DynamicObjectHandle, material: Material) -> Result<(), DynamicObjectError> {
+        if let Some(object) = self.object_pool.get_mut_with_handle(handle) {
+            object.material = material;
+            Ok(())
+        } else {
+            Err(DynamicObjectError::InvalidHandle {
+                handle,
+                reason: "Object not found or generation mismatch".to_string(),
+            })
+        }
+    }
+
     
     /// Get active object count
     pub fn get_object(&self, handle: DynamicObjectHandle) -> Result<&DynamicRenderData, DynamicObjectError> {

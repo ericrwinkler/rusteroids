@@ -16,8 +16,8 @@ Kd 0.700000 0.750000 0.800000
 # High specular brightness → high metallic factor in PBR conversion
 Ks 0.900000 0.950000 1.000000
 
-# Emissive
-Ke 1.000000 1.000000 1.000000
+# Emissive - dim blue glow for engine areas (multiplied by emission texture)
+Ke 0.100000 0.300000 0.500000
 
 # Index of refraction: 1.5 (not used for opaque metals, but kept for compatibility)
 Ni 1.500000

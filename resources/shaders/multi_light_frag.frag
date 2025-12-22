@@ -2,7 +2,7 @@
 
 // Maximum light limits (must match Rust constants)
 #define MAX_DIRECTIONAL_LIGHTS 4
-#define MAX_POINT_LIGHTS 8
+#define MAX_POINT_LIGHTS 64
 #define MAX_SPOT_LIGHTS 4
 
 // Light data structures (must be defined before UBO usage)
@@ -44,7 +44,7 @@ layout(set = 0, binding = 1) uniform MultiLightUBO {
     uint spot_light_count;                                     // 4 bytes
     uint _padding;                                             // 4 bytes
     DirectionalLightData directional_lights[MAX_DIRECTIONAL_LIGHTS];  // 4 * 32 = 128 bytes
-    PointLightData point_lights[MAX_POINT_LIGHTS];             // 8 * 48 = 384 bytes
+    PointLightData point_lights[MAX_POINT_LIGHTS];             // 64 * 48 = 3072 bytes
     SpotLightData spot_lights[MAX_SPOT_LIGHTS];               // 4 * 64 = 256 bytes
 } lighting;
 

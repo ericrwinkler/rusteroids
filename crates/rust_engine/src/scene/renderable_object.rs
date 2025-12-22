@@ -35,6 +35,11 @@ pub struct RenderableObject {
     pub visible: bool,
     
     /// Whether this material is transparent (affects render order)
+    /// FIXME: This flag is PARTIALLY IMPLEMENTED. It separates objects into
+    /// transparent_batches and opaque_batches in RenderQueue, but the rendering
+    /// system only processes opaque_batches(). Setting this to true will move
+    /// objects to a batch that never gets rendered, causing them to disappear.
+    /// See TODO in docs/API_REFACTORING_PLAN.md for resolution plan.
     pub is_transparent: bool,
     
     /// Rendering layer for sorting (higher values render later)

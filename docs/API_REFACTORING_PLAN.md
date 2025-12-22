@@ -8100,3 +8100,232 @@ _Implementation and validation plans continue below..._
 
 ---
 
+## TODO: Implement Transparent Rendering Pass (Part of Proposal #4 or New Proposal)
+
+### Current Status: PARTIALLY IMPLEMENTED
+
+**Problem Discovered**: December 22, 2025
+
+The `is_transparent` flag exists throughout the codebase but the transparent rendering pass is **not implemented**. Objects with `is_transparent=true` are moved to `transparent_batches` in the RenderQueue, but the rendering system only processes `opaque_batches()`. This causes transparent objects to disappear.
+
+### Technical Details
+
+**What Works**:
+- ✅ `is_transparent` flag in `RenderableComponent` and `RenderableObject`
+- ✅ Batch separation logic in `RenderQueue::from_objects()` (separates opaque/transparent)
+- ✅ Material type system (`MaterialType::Transparent`, `MaterialType::TransparentUnlit`)
+- ✅ Pipeline selection via `Material.required_pipeline()` returns correct transparent pipelines
+
+**What's Missing**:
+- ❌ Transparent batch rendering loop in `render/mod.rs`
+- ❌ Second rendering pass for transparent objects
+- ❌ Depth sorting for back-to-front transparent rendering
+
+### Code Locations (Marked with FIXME)
+
+1. **`crates/rust_engine/src/ecs/components/renderable.rs`** (lines 26-34)
+   - `is_transparent` field with FIXME explaining partial implementation
+   - `new()` hardcoded to `is_transparent=false` with FIXME
+   - `new_transparent()` marked DO NOT USE with FIXME
+
+2. **`crates/rust_engine/src/scene/renderable_object.rs`** (lines 36-44)
+   - `is_transparent` field with FIXME
+
+3. **`crates/rust_engine/src/scene/render_queue.rs`** (lines 47-53, 67-77)
+   - `transparent_batches` field with FIXME noting never rendered
+   - `from_objects()` separation logic with FIXME explaining objects filtered correctly but not rendered
+
+4. **`crates/rust_engine/src/render/mod.rs`** (lines 896-903)
+   - `render_entities_from_queue()` only processes `opaque_batches()` with FIXME explaining missing transparent pass
+
+### How System Currently Works (By Accident)
+
+The system works because:
+1. All objects are created with `is_transparent=false` (hardcoded in `RenderableComponent::new()`)
+2. All objects go into `opaque_batches`
+3. Material type (`Material.required_pipeline()`) determines actual shader pipeline used
+4. Transparent materials (like `Material::transparent_pbr()`) work because pipeline selection is independent of `is_transparent` flag
+
+**Result**: Transparent materials render correctly in opaque batch, but no proper depth sorting for alpha blending.
+
+### Resolution Options
+
+#### Option A: Implement as Part of Proposal #4 (Resource Manager)
+
+**Justification**: Transparent rendering requires:
+- Depth sorting (camera position needed)
+- Material batching (Resource Manager handles this)
+- Two-pass rendering (opaque first for depth buffer, then transparent back-to-front)
+
+**Integration Point**: When Resource Manager is implemented, extend `render_entities_from_queue()` to:
+```rust
+pub fn render_entities_from_queue(
+    &mut self,
+    render_queue: &RenderQueue,
+    camera_position: Vec3,  // NEW: needed for depth sorting
+) -> Result<()> {
+    // Pass 1: Render opaque objects (existing code)
+    for batch in render_queue.opaque_batches() {
+        // ... existing logic ...
+    }
+    
+    // Pass 2: Render transparent objects (NEW)
+    // TODO: Sort transparent batches back-to-front from camera
+    let sorted_transparent = render_queue.transparent_batches_sorted(camera_position);
+    for batch in sorted_transparent {
+        // ... same logic as opaque but with alpha blending enabled ...
+    }
+}
+```
+
+**Book Reference**: *Game Engine Architecture Chapter 11.4.3 - Transparency*
+> "Transparent objects must be rendered back-to-front after all opaque objects. The renderer first draws opaque geometry (populating depth buffer), then draws transparent geometry sorted by distance from camera (back-to-front) with depth writes disabled."
+
+**Advantages**:
+- Clean integration with Resource Manager
+- Proper architecture (Resource Manager tracks camera for culling anyway)
+- Follows book's recommended two-pass approach
+
+**Disadvantages**:
+- Blocked on Proposal #4 implementation (Resource Manager)
+- More complex implementation
+
+---
+
+#### Option B: Standalone Proposal (Transparent Rendering Pass)
+
+**Justification**: Can be implemented independently of Resource Manager as a focused feature.
+
+**Implementation Plan**:
+
+**Phase 1: Add Transparent Batch Rendering (Week 1)**
+
+1. **Extend RenderQueue with Sorting** (`scene/render_queue.rs`)
+```rust
+impl RenderQueue {
+    /// Get transparent batches sorted back-to-front from camera
+    pub fn transparent_batches_sorted(&self, camera_position: Vec3) -> Vec<&RenderBatch> {
+        let mut sorted = self.transparent_batches.clone();
+        
+        // Sort batches by average distance from camera (back-to-front)
+        sorted.sort_by(|a, b| {
+            let dist_a = a.average_distance_from(camera_position);
+            let dist_b = b.average_distance_from(camera_position);
+            dist_b.partial_cmp(&dist_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        
+        sorted
+    }
+}
+
+impl RenderBatch {
+    fn average_distance_from(&self, camera_pos: Vec3) -> f32 {
+        let sum: f32 = self.objects.iter()
+            .map(|obj| {
+                let obj_pos = obj.transform.extract_translation();
+                (obj_pos - camera_pos).magnitude()
+            })
+            .sum();
+        sum / self.objects.len() as f32
+    }
+}
+```
+
+2. **Add Transparent Pass to Rendering Loop** (`render/mod.rs`)
+```rust
+pub fn render_entities_from_queue(
+    &mut self,
+    render_queue: &RenderQueue,
+    camera_position: Vec3,  // NEW: needed for sorting
+) -> Result<()> {
+    // ... existing active_entities tracking ...
+    
+    // Pass 1: Opaque objects (existing code)
+    for batch in render_queue.opaque_batches() {
+        // ... existing logic ...
+    }
+    
+    // Pass 2: Transparent objects (NEW)
+    for batch in render_queue.transparent_batches_sorted(camera_position) {
+        for obj in &batch.objects {
+            active_entities.insert(obj.entity);
+            
+            // Same allocation/update logic as opaque
+            if let Some(&(mesh_type, handle)) = self.entity_handles.get(&obj.entity) {
+                self.update_pool_instance(mesh_type, handle, obj.transform)?;
+            } else {
+                let handle = self.allocate_from_pool(
+                    obj.mesh_type,
+                    obj.transform,
+                    obj.material.clone(),
+                )?;
+                self.entity_handles.insert(obj.entity, (obj.mesh_type, handle));
+            }
+        }
+    }
+    
+    // ... existing cleanup logic ...
+}
+```
+
+3. **Update Application to Provide Camera Position**
+```rust
+// teapot_app/src/main_dynamic.rs
+graphics_engine.render_entities_from_queue(
+    &render_queue,
+    self.camera.position,  // NEW: pass camera position
+)?;
+```
+
+4. **Remove FIXME Comments** from all files after implementation
+
+**Acceptance Criteria**:
+- [ ] Transparent batches rendered in second pass
+- [ ] Transparent objects sorted back-to-front from camera
+- [ ] `is_transparent` flag works correctly (can set to true without objects disappearing)
+- [ ] `RenderableComponent::new_transparent()` works and is no longer marked DO NOT USE
+- [ ] All FIXME comments removed
+- [ ] Particles can fade using alpha transparency (original user request)
+
+**Book Reference**: *Game Engine Architecture Chapter 11.4 - Lighting and Materials*
+> "Transparent surfaces require special handling. They must be rendered after all opaque surfaces, and sorted back-to-front to ensure correct alpha blending. The renderer typically maintains two separate queues: opaque (sorted front-to-back for early-z) and transparent (sorted back-to-front for blending)."
+
+**Timeline**: 
+- **Week 1 (Days 1-3)**: Implement sorting and transparent pass
+- **Week 1 (Days 4-5)**: Testing and validation
+- **Week 1 (Day 5 PM)**: Remove FIXME comments
+
+**Advantages**:
+- Can be implemented immediately (not blocked)
+- Focused scope (just transparent rendering)
+- Enables particle fade feature (original user request)
+- Fixes architectural flaw discovered during investigation
+
+**Disadvantages**:
+- Requires camera position parameter added to `render_entities_from_queue()`
+- Some code duplication between opaque and transparent passes (can be refactored later)
+
+---
+
+### Recommendation
+
+**Implement Option B (Standalone Proposal)** for the following reasons:
+
+1. **Unblocks User Request**: Original request was "I want us to be able to dynamically alter the opacity" for particle fade. This requires working transparent rendering.
+
+2. **Fixes Architectural Flaw**: The partial implementation is a footgun - any developer setting `is_transparent=true` will see objects disappear with no error message.
+
+3. **Quick Win**: 1 week implementation vs waiting for full Resource Manager (6 weeks per Proposal #4).
+
+4. **Clean Integration Later**: When Resource Manager is implemented, the transparent pass can be refactored to use Resource Manager's camera tracking. No wasted work.
+
+5. **Book Alignment**: Separating transparent rendering as its own concern matches Game Engine Architecture's modular approach.
+
+**Next Steps**:
+1. Create issue: "Implement Transparent Rendering Pass"
+2. Follow Option B implementation plan
+3. When Proposal #4 (Resource Manager) is implemented, refactor transparent pass to use centralized camera from Resource Manager
+4. Consider adding Proposal #7: "Transparent Rendering" as formal addition to this document
+
+---
+

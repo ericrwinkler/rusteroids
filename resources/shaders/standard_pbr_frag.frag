@@ -46,7 +46,7 @@ layout(set = 0, binding = 1) uniform MultiLightingUBO {
     uint _padding;                         // Padding for alignment
     
     DirectionalLight directional_lights[4]; // Directional lights (up to 4)
-    PointLight point_lights[8];              // Point lights (up to 8)
+    PointLight point_lights[64];              // Point lights (up to 64)
     SpotLight spot_lights[4];                // Spot lights (up to 4)
 } lighting;
 
@@ -174,7 +174,7 @@ void main() {
     }
     
     // Process point lights
-    for (uint i = 0u; i < lighting.point_light_count && i < 8u; i++) {
+    for (uint i = 0u; i < lighting.point_light_count && i < 64u; i++) {
         vec3 lightPos = lighting.point_lights[i].position.xyz;
         float lightRange = lighting.point_lights[i].position.w;
         vec3 lightColor = lighting.point_lights[i].color.rgb; // Don't double-multiply intensity - it's already in color.w for attenuation

@@ -721,6 +721,34 @@ impl MeshPoolManager {
         }
     }
 
+    /// Update the material properties of a specific dynamic object
+    ///
+    /// Updates the material of an object identified by its handle.
+    /// The mesh type is used to locate the correct pool.
+    /// Material changes are automatically reflected in the next frame.
+    ///
+    /// # Arguments
+    /// * `mesh_type` - The type of mesh (determines which pool to search)
+    /// * `handle` - Unique handle identifying the object
+    /// * `material` - New material with updated properties
+    ///
+    /// # Returns
+    /// Result indicating success or failure with specific error details
+    pub fn update_instance_material(
+        &mut self,
+        mesh_type: MeshType,
+        handle: DynamicObjectHandle,
+        material: Material,
+    ) -> Result<(), DynamicObjectError> {
+        if let Some(pool_resources) = self.pools.get_mut(&mesh_type) {
+            pool_resources.manager.update_instance_material(handle, material)
+        } else {
+            Err(DynamicObjectError::ResourceCreationFailed(
+                format!("No pool found for mesh type: {:?}", mesh_type)
+            ))
+        }
+    }
+
 }
 
 impl Default for MeshPoolManager {

@@ -824,6 +824,45 @@ impl GraphicsEngine {
         ).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     }
 
+    /// Update the material properties of a dynamic pool instance
+    ///
+    /// Allows runtime updates to material properties such as alpha transparency,
+    /// base color, emission, metallic, and roughness. Changes take effect on the
+    /// next frame automatically.
+    ///
+    /// # Arguments
+    /// * `mesh_type` - The mesh type pool this instance belongs to
+    /// * `handle` - Handle to the pool instance to update
+    /// * `material` - New material with updated properties
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Clone existing material and update alpha for fade effect
+    /// let mut faded_material = original_material.clone();
+    /// match &mut faded_material.material_type {
+    ///     MaterialType::Transparent { base_material, .. } => {
+    ///         if let MaterialType::StandardPBR(params) = &mut **base_material {
+    ///             params.alpha = 0.5; // 50% transparent
+    ///         }
+    ///     }
+    ///     _ => {}
+    /// }
+    /// graphics_engine.update_instance_material(mesh_type, handle, faded_material)?;
+    /// ```
+    pub fn update_instance_material(
+        &mut self,
+        mesh_type: systems::dynamic::MeshType,
+        handle: systems::dynamic::DynamicObjectHandle,
+        material: resources::materials::Material,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        systems::dynamic::graphics_api::update_instance_material(
+            &mut self.pool_manager,
+            mesh_type,
+            handle,
+            material,
+        ).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    }
+
     /// Render entities from a Scene Manager's RenderQueue (Proposal #1 - Complete API)
     ///
     /// This method automatically manages entity lifecycle in the rendering system:
@@ -854,6 +893,10 @@ impl GraphicsEngine {
         let mut active_entities = HashSet::new();
         
         // Process all renderable objects in the queue
+        // FIXME: ONLY PROCESSES OPAQUE BATCHES - transparent_batches() is never called!
+        // This is why setting is_transparent=true breaks rendering - objects move to
+        // transparent batch which is never rendered. Need to add second rendering pass
+        // for transparent objects after opaque pass. See TODO in docs/API_REFACTORING_PLAN.md.
         for batch in render_queue.opaque_batches() {
             for obj in &batch.objects {
                 active_entities.insert(obj.entity);
@@ -892,12 +935,19 @@ impl GraphicsEngine {
             .copied()
             .collect();
         
+        if !entities_to_remove.is_empty() {
+            log::info!("[RENDER DEBUG] Found {} entities to remove from rendering", entities_to_remove.len());
+            log::info!("[RENDER DEBUG] Total entity_handles before cleanup: {}", self.entity_handles.len());
+            log::info!("[RENDER DEBUG] Active entities from queue: {}", active_entities.len());
+        }
+        
         for entity in entities_to_remove {
             if let Some((mesh_type, handle)) = self.entity_handles.remove(&entity) {
+                log::info!("[RENDER DEBUG] Freeing {:?} handle {:?} for destroyed entity {:?}", mesh_type, handle, entity);
                 if let Err(e) = self.free_pool_instance(mesh_type, handle) {
                     log::warn!("Failed to free handle for destroyed entity {:?}: {}", entity, e);
                 }
-                log::debug!("Freed {:?} handle for destroyed entity {:?}", mesh_type, entity);
+                log::info!("[RENDER DEBUG] Successfully freed handle for entity {:?}", entity);
             }
         }
         

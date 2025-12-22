@@ -8,8 +8,8 @@ Ka 0.800000 0.800000 0.800000
 Kd 1.000000 1.000000 1.000000
 # Specular - medium metallic look
 Ks 0.500000 0.500000 0.500000
-# Emission - bright white to multiply with emission texture
-Ke 1.000000 1.000000 1.000000
+# Emission - dim warm glow for engine areas (multiplied by emission texture)
+Ke 0.200000 0.200000 0.150000
 # Specular exponent - 500 = semi-smooth (roughness ~0.5)
 Ns 500.000000
 Ni 1.500000

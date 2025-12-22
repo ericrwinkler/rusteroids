@@ -11,6 +11,10 @@ edition = "2021"
 name = "teapot_dynamic"
 path = "src/main_dynamic.rs"
 
+[[bin]]
+name = "fleet_demo"
+path = "src/main_fleet.rs"
+
 [dependencies]
 rust_engine = { path = "../crates/rust_engine" }
 glfw = "0.55"

@@ -225,6 +225,34 @@ pub fn update_pool_instance(
     }
 }
 
+/// Update the material properties of a pool instance
+///
+/// Allows dynamic updates to material properties like alpha, colors, and emission.
+/// Changes are automatically reflected in rendering on the next frame.
+///
+/// # Arguments
+/// * `pool_manager` - Mutable reference to pool manager
+/// * `mesh_type` - The mesh type pool this instance belongs to
+/// * `handle` - Handle to the pool instance to update
+/// * `material` - New material with updated properties
+pub fn update_instance_material(
+    pool_manager: &mut Option<MeshPoolManager>,
+    mesh_type: MeshType,
+    handle: DynamicObjectHandle,
+    material: Material,
+) -> Result<(), SpawnerError> {
+    if let Some(ref mut mgr) = pool_manager {
+        mgr.update_instance_material(mesh_type, handle, material)
+            .map_err(|e| SpawnerError::InvalidParameters {
+                reason: format!("Failed to update instance material: {}", e),
+            })
+    } else {
+        Err(SpawnerError::InvalidParameters {
+            reason: "Pool manager not initialized".to_string(),
+        })
+    }
+}
+
 /// Begin dynamic frame rendering setup
 ///
 /// Prepares the dynamic rendering system for a new frame.

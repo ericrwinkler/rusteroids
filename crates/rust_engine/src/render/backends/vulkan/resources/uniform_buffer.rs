@@ -72,8 +72,8 @@ pub struct LightingUniformData {
     pub ambient_color: Vec4,
     /// Directional lights (up to 4)
     pub directional_lights: [DirectionalLightData; 4],
-    /// Point lights (up to 8)  
-    pub point_lights: [PointLightData; 8],
+    /// Point lights (up to 64)  
+    pub point_lights: [PointLightData; 64],
     /// Spot lights (up to 4)
     pub spot_lights: [SpotLightData; 4],
     /// Number of active directional lights
@@ -159,7 +159,7 @@ impl Default for LightingUniformData {
         Self {
             ambient_color: Vec4::new(0.1, 0.1, 0.1, 1.0),
             directional_lights: [DirectionalLightData::default(); 4],
-            point_lights: [PointLightData::default(); 8],
+            point_lights: [PointLightData::default(); 64],
             spot_lights: [SpotLightData::default(); 4],
             num_dir_lights: 0,
             num_point_lights: 0,

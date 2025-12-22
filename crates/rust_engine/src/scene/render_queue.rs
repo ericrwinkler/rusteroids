@@ -67,8 +67,8 @@ impl RenderQueue {
         let mut queue = Self::new();
         
         // Separate opaque and transparent objects
-        // FIXME: This separation logic works correctly, but transparent_objects are
-        // never rendered because render/mod.rs doesn't process transparent_batches()
+        // Note: Transparent rendering is handled by pool_manager.rs based on Material.required_pipeline().
+        // This separation exists for API completeness but pool_manager categorizes independently.
         let mut opaque_objects: Vec<&RenderableObject> = objects
             .iter()
             .filter(|obj| obj.should_render() && !obj.is_transparent)

@@ -100,8 +100,10 @@ use thiserror::Error;
 // use crate::engine::{RendererConfig, WindowConfig}; 
 use crate::foundation::math::{Vec3, Mat4, Mat4Ext};
 use crate::render::systems::dynamic::MeshPoolManager;
+use crate::assets::{ResourceManager, ResourceConfig};
 use crate::ecs::Entity;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// # Graphics Engine
 ///
@@ -142,6 +144,9 @@ pub struct GraphicsEngine {
     /// Maps ECS entities to their (MeshType, DynamicObjectHandle) for automatic lifecycle
     entity_handles: HashMap<Entity, (systems::dynamic::MeshType, systems::dynamic::DynamicObjectHandle)>,
     
+    /// Resource Manager for automatic pooling (Proposal #4)
+    /// Shared with SceneManager via Arc<Mutex<>>
+    resource_manager: Arc<Mutex<ResourceManager>>,
 }
 
 impl GraphicsEngine {
@@ -173,13 +178,29 @@ impl GraphicsEngine {
         let vulkan_renderer = crate::render::backends::vulkan::VulkanRenderer::new(vulkan_window, config)
             .map_err(|e| RenderError::InitializationFailed(format!("Failed to create Vulkan renderer: {:?}", e)))?;
         
+        // Create Resource Manager (CPU-side asset tracking only)
+        // Per Game Engine Architecture Ch 7.2, Resource Manager provides 
+        // unified interface to assets - it does NOT create GPU resources.
+        let resource_manager = Arc::new(Mutex::new(
+            ResourceManager::new(ResourceConfig::default())
+        ));
+        
         Ok(Self {
             backend: Box::new(vulkan_renderer),
             current_camera: None,
             current_lighting: None,
             pool_manager: None, // Will be initialized when first needed
             entity_handles: HashMap::new(),
+            resource_manager,
         })
+    }
+    
+    /// Get shared reference to Resource Manager for SceneManager integration (Proposal #4)
+    ///
+    /// This allows SceneManager to share the same ResourceManager instance for
+    /// automatic GPU resource pooling and lifecycle management.
+    pub fn resource_manager(&self) -> Arc<Mutex<ResourceManager>> {
+        Arc::clone(&self.resource_manager)
     }
     
     /// Initialize UI text rendering system
@@ -244,6 +265,9 @@ impl GraphicsEngine {
         data: &api::RenderFrameData,
         window: &mut WindowHandle,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        // 0. Create any pending GPU pools from ResourceManager
+        self.create_pending_pools()?;
+        
         // 1. Begin frame (internal)
         self.begin_dynamic_frame()?;
         
@@ -664,6 +688,54 @@ impl GraphicsEngine {
         }
     }
     
+    /// Create GPU pools for any pending ResourceManager requests
+    ///
+    /// This method implements the "pull model" for automatic pool creation:
+    /// 1. ResourceManager registers which pools are needed (metadata only)
+    /// 2. GraphicsEngine queries ResourceManager before rendering
+    /// 3. GraphicsEngine creates actual GPU resources for pending pools
+    ///
+    /// This maintains proper separation of concerns per Game Engine Architecture:
+    /// - ResourceManager: CPU-side resource tracking and lifecycle
+    /// - GraphicsEngine: GPU resource creation and rendering
+    ///
+    /// # Book Reference
+    /// Game Engine Architecture Chapter 7.2 - Resource Manager
+    /// > "The resource manager manages resources at runtime, ensuring they are
+    /// > loaded into memory in advance of being needed by the game."
+    fn create_pending_pools(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::assets::resource_manager::PoolKey;
+        
+        // Get pending pools from ResourceManager
+        let mut resource_mgr = self.resource_manager.lock().unwrap();
+        let pending: Vec<(PoolKey, crate::render::Mesh, Vec<crate::render::Material>)> = 
+            resource_mgr.pending_pools()
+                .map(|(key, mesh, mats)| (*key, mesh.clone(), mats.clone()))
+                .collect();
+        let initial_pool_size = resource_mgr.config().initial_pool_size;
+        drop(resource_mgr); // Release lock before creating pools
+        
+        // Create GPU resources for each pending pool
+        for (pool_key, mesh, materials) in pending {
+            log::info!("Creating GPU pool for {:?}", pool_key);
+            
+            // Create the mesh pool via existing infrastructure
+            self.create_mesh_pool(
+                pool_key.mesh_type,
+                &mesh,
+                &materials,
+                initial_pool_size,
+            )?;
+            
+            // Mark as created in ResourceManager
+            self.resource_manager.lock().unwrap().mark_pool_created(pool_key);
+            
+            log::info!("GPU pool {:?} created successfully", pool_key);
+        }
+        
+        Ok(())
+    }
+    
     /// Register a mesh type for multi-mesh rendering (Phase 0)
     ///
     /// This method registers a mesh type with its associated SharedRenderingResources
@@ -892,12 +964,41 @@ impl GraphicsEngine {
         // Track which entities are still active this frame
         let mut active_entities = HashSet::new();
         
-        // Process all renderable objects in the queue
-        // FIXME: ONLY PROCESSES OPAQUE BATCHES - transparent_batches() is never called!
-        // This is why setting is_transparent=true breaks rendering - objects move to
-        // transparent batch which is never rendered. Need to add second rendering pass
-        // for transparent objects after opaque pass. See TODO in docs/API_REFACTORING_PLAN.md.
+        // Process opaque batches
         for batch in render_queue.opaque_batches() {
+            for obj in &batch.objects {
+                active_entities.insert(obj.entity);
+                
+                // Check if we already have a handle for this entity
+                if let Some(&(mesh_type, handle)) = self.entity_handles.get(&obj.entity) {
+                    // Existing entity - just update its transform
+                    if let Err(e) = self.update_pool_instance(mesh_type, handle, obj.transform) {
+                        log::warn!("Failed to update entity {:?} transform: {}", obj.entity, e);
+                    }
+                } else {
+                    // New entity - use the mesh_type stored in RenderableObject
+                    let mesh_type = obj.mesh_type;
+                    
+                    // Allocate a handle for this entity
+                    match self.allocate_from_pool(
+                        mesh_type,
+                        obj.transform,
+                        obj.material.clone(),
+                    ) {
+                        Ok(handle) => {
+                            self.entity_handles.insert(obj.entity, (mesh_type, handle));
+                            log::debug!("Allocated {:?} handle for entity {:?}", mesh_type, obj.entity);
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to allocate {:?} for entity {:?}: {}", mesh_type, obj.entity, e);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Process transparent batches (pool_manager.rs handles transparent rendering via Material.required_pipeline())
+        for batch in render_queue.transparent_batches() {
             for obj in &batch.objects {
                 active_entities.insert(obj.entity);
                 

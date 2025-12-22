@@ -24,12 +24,13 @@ pub struct RenderableComponent {
     /// Whether this object is visible
     pub visible: bool,
     
-    /// Whether this material is transparent (affects render order)
-    /// FIXME: This flag is PARTIALLY IMPLEMENTED. It separates objects into
-    /// transparent_batches and opaque_batches in RenderQueue, but the rendering
-    /// system only processes opaque_batches(). Setting this to true will move
-    /// objects to a batch that never gets rendered, causing them to disappear.
-    /// See TODO in docs/API_REFACTORING_PLAN.md for resolution plan.
+    /// Whether this material is transparent (informational flag)
+    /// 
+    /// **NOTE**: This flag is set based on Material.required_pipeline() and is used
+    /// for ECS queries and gameplay logic (e.g., "is this object transparent?").
+    /// The actual transparent rendering is determined by the Material's pipeline type,
+    /// not this flag. The rendering system in pool_manager.rs categorizes objects by
+    /// Material.required_pipeline() to handle transparent vs opaque rendering.
     pub is_transparent: bool,
     
     /// Rendering layer for sorting (higher values render later)
@@ -37,23 +38,22 @@ pub struct RenderableComponent {
 }
 
 impl RenderableComponent {
-    /// Create a new renderable component
+    /// Create a new renderable component (opaque)
     pub fn new(material: Material, mesh: Mesh, mesh_type: MeshType) -> Self {
         Self {
             material,
             mesh,
             mesh_type,
             visible: true,
-            // FIXME: Hardcoded to false because transparent batch rendering not implemented
             is_transparent: false,
             render_layer: 0,
         }
     }
     
     /// Create a transparent renderable component
-    /// FIXME: DO NOT USE - This sets is_transparent=true which moves objects to
-    /// transparent_batches that are never rendered. Use new() instead until
-    /// transparent batch rendering is implemented.
+    /// 
+    /// Sets is_transparent=true for transparent materials. The actual transparency
+    /// rendering is handled by the Material's pipeline type (TransparentPBR/TransparentUnlit).
     pub fn new_transparent(material: Material, mesh: Mesh, mesh_type: MeshType, render_layer: u8) -> Self {
         Self {
             material,

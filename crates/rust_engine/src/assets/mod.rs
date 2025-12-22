@@ -3,6 +3,7 @@
 pub mod obj_loader;
 pub mod image_loader;
 pub mod materials;
+pub mod resource_manager;
 
 pub use obj_loader::ObjLoader;
 pub use image_loader::ImageData;
@@ -12,6 +13,9 @@ pub use materials::{
     MaterialBuilder,
     MaterialCache,
     MaterialFactory,
+};
+pub use resource_manager::{
+    ResourceManager, ResourceConfig, ResourceError, PoolKey,
 };
 
 #[cfg(test)]

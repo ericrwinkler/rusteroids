@@ -26,7 +26,7 @@ mod renderable_object;
 mod render_queue;
 mod scene_renderer;
 
-pub use scene_manager::SceneManager;
+pub use scene_manager::{SceneManager, SceneConfig};
 pub use scene_graph::{SceneGraph, SimpleListGraph, AABB, Frustum, Plane};
 pub use renderable_object::RenderableObject;
 pub use render_queue::{RenderQueue, RenderBatch};

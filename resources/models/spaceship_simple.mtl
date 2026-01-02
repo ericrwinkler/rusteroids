@@ -7,7 +7,7 @@ newmtl Material.001
 Ns 800.000000
 
 # Ambient: Neutral gray for metal
-Ka 0.800000 0.800000 0.850000
+Ka 1.000000 1.000000 1.000000
 
 # Diffuse: Light metallic gray-blue (base color for metal hull)
 Kd 0.700000 0.750000 0.800000
@@ -17,7 +17,7 @@ Kd 0.700000 0.750000 0.800000
 Ks 0.900000 0.950000 1.000000
 
 # Emissive - dim blue glow for engine areas (multiplied by emission texture)
-Ke 0.100000 0.300000 0.500000
+Ke 2.000000 2.000000 2.000000
 
 # Index of refraction: 1.5 (not used for opaque metals, but kept for compatibility)
 Ni 1.500000

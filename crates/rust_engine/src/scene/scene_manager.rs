@@ -16,7 +16,7 @@ use crate::foundation::math::{Vec3, Transform};
 use crate::render::primitives::Mesh;
 use crate::render::resources::materials::Material;
 use crate::render::systems::dynamic::MeshType;
-use crate::assets::ResourceManager;
+use crate::render::GraphicsEngine;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock, Mutex};
 
@@ -62,10 +62,6 @@ pub struct SceneManager {
     
     /// Active camera entity (for culling)
     active_camera: Option<Entity>,
-    
-    /// Resource Manager for automatic pooling (Proposal #4)
-    /// Shared with GraphicsEngine for GPU resource management
-    resource_manager: Option<Arc<Mutex<ResourceManager>>>,
 }
 
 impl SceneManager {
@@ -82,22 +78,6 @@ impl SceneManager {
             renderable_cache: Arc::new(RwLock::new(HashMap::new())),
             dirty_entities: Arc::new(Mutex::new(HashSet::new())),
             active_camera: None,
-            resource_manager: None,
-        }
-    }
-    
-    /// Create scene manager with Resource Manager for automatic pooling
-    pub fn with_resource_manager(
-        config: SceneConfig,
-        resource_manager: Arc<Mutex<ResourceManager>>,
-    ) -> Self {
-        Self {
-            config,
-            scene_graph: Arc::new(RwLock::new(Box::new(SimpleListGraph::new()))),
-            renderable_cache: Arc::new(RwLock::new(HashMap::new())),
-            dirty_entities: Arc::new(Mutex::new(HashSet::new())),
-            active_camera: None,
-            resource_manager: Some(resource_manager),
         }
     }
     
@@ -158,7 +138,7 @@ impl SceneManager {
                     
                     if let Some(cached_obj) = cache.get_mut(entity) {
                         // Update existing renderable
-                        let needs_gpu_update = cached_obj.dirty ||
+                        let _needs_gpu_update = cached_obj.dirty ||
                             cached_obj.transform != transform_matrix ||
                             cached_obj.material.id != r.material.id;
                         
@@ -171,19 +151,8 @@ impl SceneManager {
                         cached_obj.render_layer = r.render_layer;
                         cached_obj.mark_dirty();
                         
-                        // Update GPU resources if changed (Proposal #4 dirty tracking)
-                        if needs_gpu_update {
-                            if let Some(ref rm) = self.resource_manager {
-                                let mut resource_manager = rm.lock().unwrap();
-                                if let Err(e) = resource_manager.update_instance_if_dirty(
-                                    *entity,
-                                    transform_matrix,
-                                    r.material.clone(),
-                                ) {
-                                    log::warn!("Failed to update GPU instance for {:?}: {}", entity, e);
-                                }
-                            }
-                        }
+                        // TODO: Update GPU resources if changed (needs GraphicsEngine reference)
+                        // This will be handled during rendering for now
                         
                         // Update in scene graph
                         let bounds = self.compute_bounds(&t.position);
@@ -277,6 +246,32 @@ impl SceneManager {
     /// 4. Marks entity for sync (will be picked up on next sync_from_world)
     ///
     /// Returns the created entity ID.
+    /// Create a renderable entity with automatic GPU resource allocation
+    ///
+    /// **THIS IS THE CLEAN API**: Applications only call this method, never touch
+    /// GraphicsEngine directly. SceneManager coordinates with GraphicsEngine internally.
+    ///
+    /// # Arguments
+    /// * `world` - ECS world for entity creation
+    /// * `graphics_engine` - Graphics engine for GPU resource allocation  
+    /// * `mesh` - Mesh geometry data
+    /// * `mesh_type` - Type of mesh (determines pool)
+    /// * `material` - Material for rendering
+    /// * `transform` - Initial world transform
+    ///
+    /// # Returns
+    /// * Entity ID
+    /// Create a renderable entity with transform, mesh, and material
+    ///
+    /// Creates an ECS entity with Transform and Renderable components.
+    /// GPU resource allocation is deferred until render_entities_from_queue() is called.
+    ///
+    /// # Arguments
+    /// * `world` - ECS world to create entity in
+    /// * `mesh` - Mesh data for rendering
+    /// * `mesh_type` - Type of mesh for pool system
+    /// * `material` - Material properties
+    /// * `transform` - Initial transform (position, rotation, scale)
     pub fn create_renderable_entity(
         &self,
         world: &mut World,
@@ -298,26 +293,8 @@ impl SceneManager {
         };
         world.add_component(entity, transform_component);
         
-        // Request mesh instance from ResourceManager (automatic pool creation)
-        if let Some(ref rm) = self.resource_manager {
-            let mut resource_manager = rm.lock().unwrap();
-            match resource_manager.request_mesh_instance(
-                entity,
-                mesh_type,
-                &mesh,
-                &[material.clone()],
-                transform.to_matrix(),
-            ) {
-                Ok(handle) => {
-                    log::debug!("ResourceManager allocated instance for entity {:?}", entity);
-                    // Handle is stored in ResourceManager, no need to store in component
-                }
-                Err(e) => {
-                    log::warn!("Failed to request mesh instance from ResourceManager: {:?}", e);
-                    // Continue anyway - entity will exist but not render
-                }
-            }
-        }
+        // NOTE: GPU resource allocation is deferred until render_entities_from_queue() is called.
+        // This prevents duplicate allocation and ensures proper entity→handle tracking.
         
         // Detect transparency from Material type
         let is_transparent = matches!(
@@ -339,30 +316,94 @@ impl SceneManager {
         entity
     }
     
+    /// Create a renderable entity with specific render layer
+    ///
+    /// Same as create_renderable_entity but allows specifying render_layer.
+    /// Use render_layer = 255 for skyboxes to render them LAST.
+    ///
+    /// # Arguments
+    /// * `world` - ECS world to create entity in
+    /// * `mesh` - Mesh data for rendering
+    /// * `mesh_type` - Type of mesh for pool system
+    /// * `material` - Material properties
+    /// * `transform` - Initial transform (position, rotation, scale)
+    /// * `render_layer` - Render layer (0-255, higher = renders later)
+    pub fn create_renderable_entity_with_layer(
+        &self,
+        world: &mut World,
+        mesh: Mesh,
+        mesh_type: MeshType,
+        material: Material,
+        transform: Transform,
+        render_layer: u8,
+    ) -> Entity {
+        use crate::render::resources::materials::PipelineType;
+        
+        // Create entity
+        let entity = world.create_entity();
+        
+        // Add Transform component
+        let transform_component = TransformComponent {
+            position: transform.position,
+            rotation: transform.rotation,
+            scale: transform.scale,
+        };
+        world.add_component(entity, transform_component);
+        
+        // Detect transparency from Material
+        let pipeline_type = material.required_pipeline();
+        let _is_transparent = matches!(
+            pipeline_type,
+            PipelineType::TransparentPBR | PipelineType::TransparentUnlit
+        );
+        
+        // Add Renderable component with specified render_layer
+        let renderable = RenderableComponent::new_transparent(
+            material,
+            mesh,
+            mesh_type,
+            render_layer
+        );
+        world.add_component(entity, renderable);
+        
+        // Mark entity as dirty for next sync
+        {
+            let mut cache = self.renderable_cache.write().unwrap();
+            if let Some(obj) = cache.get_mut(&entity) {
+                obj.dirty = true;
+            }
+        }
+        
+        entity
+    }
+    
     /// Destroy an entity and remove it from the scene
     ///
     /// This implements two-phase destruction (Game Engine Architecture Ch. 16.6):
     /// 1. Mark components for removal (phase 1)
-    /// 2. Release GPU resources via ResourceManager (phase 2, can fail gracefully)
+    /// 2. Release GPU resources via GraphicsEngine (phase 2, can fail gracefully)
     /// 3. Remove from scene graph and cache
     /// 
     /// If GPU resource cleanup fails, we log error but continue to prevent ECS corruption.
     /// Better to leak GPU memory than leave entity in invalid state.
-    pub fn destroy_entity(&self, world: &mut World, entity: Entity) {
+    pub fn destroy_entity(
+        &self,
+        world: &mut World,
+        graphics_engine: &mut GraphicsEngine,
+        entity: Entity,
+    ) {
         // Phase 1: Remove components to mark entity as inactive
         // This prevents it from being rendered even if cleanup fails
         world.remove_component::<TransformComponent>(entity);
         world.remove_component::<RenderableComponent>(entity);
         world.remove_component::<crate::ecs::components::LightComponent>(entity);
         
-        // Phase 2: Release GPU resources (can fail gracefully)
-        if let Some(ref rm) = self.resource_manager {
-            let mut resource_manager = rm.lock().unwrap();
-            if let Err(e) = resource_manager.release_mesh_instance(entity) {
-                log::error!("Failed to release GPU resources for entity {:?}: {}", entity, e);
-                log::warn!("Continuing with entity destruction despite GPU cleanup failure");
-                // Continue anyway - better to leak GPU memory than corrupt ECS
-            }
+        // Phase 2: Release GPU resources via GraphicsEngine (can fail gracefully)
+        // GraphicsEngine tracks entity→(mesh_type, handle) mapping internally
+        if let Err(e) = graphics_engine.release_entity_gpu_resources(entity) {
+            log::error!("Failed to release GPU resources for entity {:?}: {}", entity, e);
+            log::warn!("Continuing with entity destruction despite GPU cleanup failure");
+            // Continue anyway - better to leak GPU memory than corrupt ECS
         }
         
         // Remove from render cache and scene graph

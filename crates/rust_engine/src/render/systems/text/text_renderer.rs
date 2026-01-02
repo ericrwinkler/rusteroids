@@ -27,7 +27,7 @@ impl TextRenderer {
     /// Create a text layout engine for this renderer's font atlas
     /// 
     /// TextLayout is cheap to create - it just holds a reference to the FontAtlas
-    pub fn create_text_layout(&self) -> TextLayout {
+    pub fn create_text_layout(&self) -> TextLayout<'_> {
         TextLayout::new(&self.font_atlas)
     }
 }

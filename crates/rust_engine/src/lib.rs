@@ -52,6 +52,9 @@ pub mod core;
 // Scene management (NEW - Proposal #1)
 pub mod scene;
 
+// Spatial partitioning structures
+pub mod spatial;
+
 // Legacy module organization (maintained for compatibility)
 pub mod foundation;
 pub mod ecs;

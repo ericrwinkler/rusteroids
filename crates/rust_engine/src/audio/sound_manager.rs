@@ -10,7 +10,9 @@ pub type SoundId = String;
 
 /// Sound bank containing multiple related sounds
 pub struct SoundBank {
+    #[allow(dead_code)]
     name: String,
+    #[allow(dead_code)]
     sounds: HashMap<SoundId, SoundAsset>,
 }
 
@@ -22,6 +24,7 @@ struct SoundAsset {
 
 /// Sound asset manager
 pub struct SoundManager {
+    #[allow(dead_code)]
     banks: HashMap<String, SoundBank>,
     loaded_sounds: HashMap<SoundId, SoundAsset>,
 }

@@ -1,4 +1,16 @@
-//! Physics system (placeholder)
+//! Physics module for collision detection and response
+//!
+//! Provides collision detection using spatial partitioning (octree/quadtree)
+//! and basic collision response for common shapes.
+
+pub mod collision;
+
+pub use collision::{
+    CollisionSystem,
+    CollisionShape,
+    CollisionEvent,
+    BoundingSphere,
+};
 
 /// Physics system placeholder
 pub struct PhysicsSystem {

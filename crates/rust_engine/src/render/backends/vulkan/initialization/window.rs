@@ -94,7 +94,7 @@ impl Window {
     }
 
     /// Get all pending events
-    pub fn flush_events(&self) -> glfw::FlushedMessages<(f64, glfw::WindowEvent)> {
+    pub fn flush_events(&self) -> glfw::FlushedMessages<'_, (f64, glfw::WindowEvent)> {
         glfw::flush_messages(&self.events)
     }
 

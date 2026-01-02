@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use rust_engine::assets::{ObjLoader, MaterialBuilder};
-use rust_engine::render::resources::materials::{Material, MaterialType};
+use rust_engine::render::resources::materials::{Material, MaterialType, UnlitMaterialParams};
 use rust_engine::ecs::{
     World, Entity, LightFactory, LightingSystem as EcsLightingSystem,
 };
@@ -82,6 +82,7 @@ pub struct DynamicTeapotApp {
     spaceship_material: Option<Material>,
     sphere_mesh: Option<Mesh>,
     sunlight_entity: Option<Entity>,
+    skybox_entity: Option<Entity>,  // Track skybox for camera-centering
     
     // Fleet entities
     frigates: Vec<FleetFrigate>,
@@ -91,10 +92,6 @@ pub struct DynamicTeapotApp {
     flyby_spawn_timer: f32,  // Time until next flyby spawn
     flyby_group_2: Option<SpaceshipFormation>,  // Second flyby formation
     flyby_spawn_timer_2: f32,  // Time until second flyby spawn
-    
-    // Debug test sphere
-    test_sphere: Option<Entity>,
-    test_sphere_fade: f32,  // Fade timer for test sphere
     
     // Camera tracking
     camera_target_position: Vec3,
@@ -178,8 +175,8 @@ impl DynamicTeapotApp {
         let mut world = World::new();
         let lighting_system = EcsLightingSystem::new();
         
-        // No sunlight - scene lit only by particle lights
-        let sunlight_entity: Option<Entity> = None;
+        // Create dim yellow sunlight in front of frigates, pointing down and back
+        let _sunlight_entity = Some(Self::create_sunlight(&mut world));
         
         // Initialize audio system and start music loop
         let mut audio = rust_engine::audio::AudioSystem::new().ok();
@@ -241,6 +238,7 @@ impl DynamicTeapotApp {
             spaceship_material: None,
             sphere_mesh: None,
             sunlight_entity: None,
+            skybox_entity: None,
             fps_update_timer: Instant::now(),
             frame_count: 0,
             current_fps: 60.0,
@@ -255,8 +253,6 @@ impl DynamicTeapotApp {
             flyby_spawn_timer: 5.0,  // First flyby after 5 seconds
             flyby_group_2: None,
             flyby_spawn_timer_2: 8.0,  // Second group starts 8 seconds in
-            test_sphere: None,
-            test_sphere_fade: 3.0,  // Wait 3 seconds before starting fade
             camera_target_position: Vec3::new(80.0, 30.0, 120.0),
             camera_target_lookat: Vec3::new(0.0, 0.0, 0.0),
             start_time,
@@ -275,17 +271,22 @@ impl DynamicTeapotApp {
     }
     
     fn create_sunlight(world: &mut World) -> Entity {
-        // Create a gentle directional sunlight at an angle
+        // Create a dim yellow sunlight more level with frigates, pointing slightly down and back
         let sunlight_entity = world.create_entity();
         
+        // Direction: more level with frigates, slight downward angle and backward
+        // Y component reduced from -0.6 to -0.2 for less steep angle
+        // Increased Z component for more backward direction
+        let direction = Vec3::new(-1.0, -0.9, -1.6).normalize(); // Points slightly down and mostly backward
+        
         let sunlight = LightFactory::directional(
-            Vec3::new(-1.0, -1.5, -1.0).normalize(), // Direction (angled from top-left-front)
-            Vec3::new(1.0, 0.95, 0.8), // Warm sunlight color (slightly yellowish)
-            0.8 // Strong sunlight to illuminate the scene
+            direction,
+            Vec3::new(0.9, 0.7, 0.9), // Dim yellow color (reduced blue component)
+            0.5 // Dim intensity to not overpower particle lights
         );
         
         world.add_component(sunlight_entity, sunlight);
-        log::info!("Created gentle sunlight at angle");
+        log::info!("Created dim yellow sunlight more level with frigates, pointing slightly down and back");
         sunlight_entity
     }
     
@@ -297,7 +298,7 @@ impl DynamicTeapotApp {
             let z_offset = ((i % 2) as f32) * -30.0;
             let position = Vec3::new(x_offset, 0.0, z_offset);
             
-            // Load frigate material
+            // Load frigate material from MTL
             let frigate_material = rust_engine::assets::MaterialLoader::load_mtl_with_textures(
                 "resources/models/frigate.mtl",
                 "Material.001",
@@ -309,7 +310,7 @@ impl DynamicTeapotApp {
                     .metallic(0.6)
                     .roughness(0.3)
                     .emission_rgb(1.0, 1.0, 1.0)
-                    .emission_strength(12.0)  // Increased from 8.0
+                    .emission_strength(12.0)  // Fallback needs high emission
                     .name("Frigate Fallback")
                     .build()
             });
@@ -435,61 +436,6 @@ impl DynamicTeapotApp {
         
         log::info!("Spawned {} escort ships in V formations", self.formations.iter().map(|f| f.ships.len()).sum::<usize>());
     }
-    
-    fn spawn_test_sphere(&mut self) {
-        let camera_pos = self.camera.position;
-        let camera_forward = Vec3::new(
-            -self.camera_yaw.sin() * self.camera_pitch.cos(),
-            self.camera_pitch.sin(),
-            -self.camera_yaw.cos() * self.camera_pitch.cos()
-        ).normalize();
-        
-        // Spawn 30 units in front of camera
-        let position = camera_pos + camera_forward * 30.0;
-        
-        log::info!("[TEST SPHERE] Spawning at {:?} (30 units from camera)", position);
-        
-        // Create large bright red sphere
-        let material = MaterialBuilder::new()
-            .base_color_rgb(1.0, 0.0, 0.0)  // Bright red
-            .metallic(0.0)
-            .roughness(1.0)
-            .emission_rgb(1.0, 0.0, 0.0)
-            .emission_strength(5.0)
-            .alpha(1.0)  // Start fully opaque
-            .name("Test Sphere")
-            .build_transparent();  // Use transparent material so alpha works
-        
-        let mesh = self.sphere_mesh.clone().expect("Sphere mesh not loaded");
-        
-        use rust_engine::foundation::math::Transform;
-        let transform = Transform::from_position(position);
-        let transform_scaled = Transform {
-            position: transform.position,
-            rotation: transform.rotation,
-            scale: Vec3::new(5.0, 5.0, 5.0),  // Large sphere
-        };
-        
-        let entity = self.scene_manager.create_renderable_entity(
-            &mut self.world,
-            mesh,
-            rust_engine::render::systems::dynamic::MeshType::Sphere,
-            material,
-            transform_scaled
-        );
-        
-        // Add a point light to make it glow
-        let light = LightFactory::point(
-            position,
-            Vec3::new(1.0, 0.0, 0.0),  // Red light
-            10.0,  // Intensity
-            30.0   // Range
-        );
-        self.world.add_component(entity, light);
-        
-        self.test_sphere = Some(entity);
-        log::info!("[TEST SPHERE] Created entity {:?}", entity);
-    }
 
     fn spawn_flyby_formation(&mut self, frigate_index: usize, spawn_z: f32) {
         if frigate_index >= self.frigates.len() {
@@ -575,6 +521,18 @@ impl DynamicTeapotApp {
         use rand::Rng;
         let mut rng = rand::thread_rng();
         
+        // Color palette for varied particles - MATCH MONKEY DEMO APPROACH
+        let colors = [
+            Vec3::new(1.0, 0.4, 0.2),  // Orange-red
+            Vec3::new(1.0, 0.8, 0.2),  // Yellow
+            Vec3::new(0.2, 0.6, 1.0),  // Blue
+            Vec3::new(0.3, 1.0, 0.8),  // Cyan
+            Vec3::new(0.8, 0.3, 1.0),  // Purple
+            Vec3::new(0.4, 1.0, 0.3),  // Green
+            Vec3::new(1.0, 0.5, 0.8),  // Pink
+            Vec3::new(1.0, 0.3, 0.3),  // Red
+        ];
+        
         // Spawn a batch of particle lights
         for _ in 0..count {
             let x = rng.gen_range(-PARTICLE_SPREAD..PARTICLE_SPREAD);
@@ -582,16 +540,16 @@ impl DynamicTeapotApp {
             let z = z_position + rng.gen_range(-20.0..20.0);  // Add Z variance
             let position = Vec3::new(x, y, z);
             
-            // Create small emissive sphere - USE TRANSPARENT MATERIAL for alpha fade
-            let material = MaterialBuilder::new()
-                .base_color_rgb(1.0, 1.0, 0.8)
-                .metallic(0.0)
-                .roughness(1.0)
-                .emission_rgb(1.0, 0.9, 0.6)
-                .emission_strength(10.0)
-                .alpha(1.0)  // Start fully opaque
-                .name("Particle")
-                .build_transparent();  // Use transparent material so alpha updates work
+            // Pick a random color from the palette
+            let color = colors[rng.gen_range(0..colors.len())];
+            
+            // Create small emissive sphere - UNLIT so not affected by other lights!
+            // Unlit materials don't have emission, so we just use the color directly
+            let material = Material::transparent_unlit(UnlitMaterialParams {
+                color: color * 2.0,  // Brighten the color for visibility
+                alpha: 0.8,
+            })
+            .with_name("Particle");
             
             // Use sphere mesh for particles
             let mesh = self.sphere_mesh.clone().expect("Sphere mesh not loaded");
@@ -611,12 +569,10 @@ impl DynamicTeapotApp {
                 transform_scaled
             );
             
-            log::info!("Created particle entity {:?} at z={:.1}", entity, position.z);
-            
-            // Add a point light at the particle position
+            // Add a point light at the particle position matching the sphere's color
             let light = LightFactory::point(
                 position,
-                Vec3::new(1.0, 0.9, 0.6),
+                color,                       // Use the Vec3 color directly
                 30.0,  // High intensity to reach frigates
                 60.0   // Large range to cover frigate spacing
             );
@@ -729,7 +685,7 @@ impl DynamicTeapotApp {
                 .metallic(0.6)
                 .roughness(0.3)
                 .emission_rgb(1.0, 1.0, 1.0)
-                .emission_strength(12.0)  // Increased from 8.0
+                .emission_strength(12.0)  // Higher value needed because emission texture multiplies this
                 .name("Frigate")
                 .build()
                 .with_base_color_texture(base_texture_handle)
@@ -754,15 +710,13 @@ impl DynamicTeapotApp {
                           mesh.vertices.len(), mesh.indices.len());
                 self.sphere_mesh = Some(mesh.clone());
                 
-                // Create sphere mesh pool for particles
-                let sphere_material = MaterialBuilder::new()
-                    .base_color_rgb(1.0, 1.0, 0.8)
-                    .metallic(0.0)
-                    .roughness(1.0)
-                    .emission_rgb(1.0, 0.9, 0.6)
-                    .emission_strength(10.0)
-                    .name("Particle Sphere")
-                    .build();
+                // Create sphere mesh pool with UNLIT TRANSPARENT base (particles not affected by lights)
+                // Per-instance materials will completely override this
+                let sphere_material = Material::transparent_unlit(UnlitMaterialParams {
+                    color: Vec3::new(1.0, 1.0, 1.0),  // Pure white neutral
+                    alpha: 0.8,                       // Match particle transparency
+                })
+                .with_name("Particle Sphere Base");
                 
                 if let Err(e) = self.graphics_engine.create_mesh_pool(
                     MeshType::Sphere,
@@ -773,13 +727,65 @@ impl DynamicTeapotApp {
                     log::error!("Failed to create sphere mesh pool: {}", e);
                     return Err(e);
                 }
-                log::info!("Created sphere mesh pool successfully");
+                log::info!("Created sphere mesh pool successfully (transparent, neutral base)");
             }
             Err(e) => {
                 log::warn!("Failed to load sphere.obj: {:?}", e);
                 return Err(e.into());
             }
         }
+        
+        // Create skybox
+        let skybox_mesh = Mesh::skybox();
+        
+        // Load skybox texture
+        use rust_engine::assets::ImageData;
+        use rust_engine::render::resources::materials::TextureType;
+        
+        let skybox_image = ImageData::from_file("resources/textures/skybox.png")
+            .map_err(|e| format!("Failed to load skybox texture: {}", e))?;
+        
+        let skybox_texture_handle = self.graphics_engine.upload_texture_from_image_data(
+            skybox_image,
+            TextureType::BaseColor
+        )?;
+        
+        // Create skybox material
+        let skybox_material = Material::skybox(UnlitMaterialParams {
+            color: Vec3::new(1.0, 1.0, 1.0),
+            alpha: 1.0,
+        })
+        .with_name("Skybox")
+        .with_base_color_texture(skybox_texture_handle);
+        
+        // Create skybox mesh pool
+        if let Err(e) = self.graphics_engine.create_mesh_pool(
+            MeshType::Cube,
+            &skybox_mesh,
+            &[skybox_material.clone()],
+            1
+        ) {
+            log::error!("Failed to create skybox mesh pool: {}", e);
+            return Err(e);
+        }
+        
+        // Spawn skybox entity (follows camera)
+        use rust_engine::foundation::math::Transform;
+        let skybox_transform = Transform {
+            position: self.camera.position,
+            rotation: Quat::identity(),
+            scale: Vec3::new(1.0, 1.0, 1.0),
+        };
+        
+        let skybox_entity = self.scene_manager.create_renderable_entity_with_layer(
+            &mut self.world,
+            skybox_mesh,
+            MeshType::Cube,
+            skybox_material,
+            skybox_transform,
+            255,  // Skybox layer (renders after opaque, before transparent)
+        );
+        self.skybox_entity = Some(skybox_entity);
         
         // Load spaceship mesh
         match ObjLoader::load_obj("resources/models/spaceship_simple.obj") {
@@ -852,9 +858,6 @@ impl DynamicTeapotApp {
             self.spawn_particle_lights(z);
         }
         log::info!("Initial spawn complete. Total particles: {}", self.particles.len());
-        
-        // Spawn test debug sphere at camera center
-        self.spawn_test_sphere();
 
         Ok(())
     }
@@ -1010,6 +1013,15 @@ impl DynamicTeapotApp {
         let look_target = camera_pos + forward;
         self.camera.look_at(look_target, Vec3::new(0.0, 1.0, 0.0));
         
+        // Update skybox to follow camera position (camera-centered skybox)
+        if let Some(skybox_entity) = self.skybox_entity {
+            use rust_engine::ecs::components::TransformComponent;
+            if let Some(transform) = self.world.get_component_mut::<TransformComponent>(skybox_entity) {
+                transform.position = camera_pos;  // Skybox always centered on camera
+                self.scene_manager.mark_entity_dirty(skybox_entity);
+            }
+        }
+        
         // Update FPS counter
         self.frame_count += 1;
         let fps_elapsed = self.fps_update_timer.elapsed();
@@ -1089,40 +1101,9 @@ impl DynamicTeapotApp {
         // Sync all entity transforms to scene manager for rendering
         self.scene_manager.sync_from_world(&mut self.world);
         
-        // Update test sphere fade
-        if let Some(test_entity) = self.test_sphere {
-            self.test_sphere_fade -= delta_time;
-            
-            if self.test_sphere_fade > 0.0 {
-                // Still waiting to start fade
-                log::info!("[TEST SPHERE] Waiting to fade: {:.2}s remaining", self.test_sphere_fade);
-            } else {
-                // Calculate scale (fade over 2 seconds after wait period)
-                let fade_progress = -self.test_sphere_fade;  // 0.0 to 2.0+
-                let scale_factor = (1.0 - (fade_progress / 2.0)).max(0.0);  // 1.0 to 0.0 over 2 seconds
-                
-                log::info!("[TEST SPHERE] Fading: scale={:.2}, progress={:.2}s", scale_factor, fade_progress);
-                
-                if scale_factor > 0.01 {
-                    // Update transform scale
-                    if let Some(transform) = self.world.get_component_mut::<rust_engine::ecs::components::TransformComponent>(test_entity) {
-                        transform.scale = Vec3::new(5.0 * scale_factor, 5.0 * scale_factor, 5.0 * scale_factor);
-                        self.scene_manager.mark_entity_dirty(test_entity);
-                        log::info!("[TEST SPHERE] Updated scale to {:.2}", scale_factor * 5.0);
-                    }
-                    
-                    // Also fade the light intensity
-                    if let Some(light) = self.world.get_component_mut::<LightComponent>(test_entity) {
-                        light.intensity = 10.0 * scale_factor;
-                    }
-                } else {
-                    // Fade complete, despawn
-                    log::info!("[TEST SPHERE] Fade complete, despawning");
-                    self.scene_manager.destroy_entity(&mut self.world, test_entity);
-                    self.test_sphere = None;
-                }
-            }
-        }
+        // Note: GPU handle allocation and transform updates are handled automatically
+        // by render_entities_from_queue() in render_frame()
+        
         
         // Update flyby formation timer and spawn
         self.flyby_spawn_timer -= delta_time;
@@ -1168,7 +1149,7 @@ impl DynamicTeapotApp {
             if all_past_camera {
                 log::info!("Flyby formation passed camera, despawning");
                 for ship in &flyby.ships {
-                    self.scene_manager.destroy_entity(&mut self.world, ship.entity);
+                    self.scene_manager.destroy_entity(&mut self.world, &mut self.graphics_engine, ship.entity);
                 }
                 self.flyby_group = None;
             }
@@ -1204,7 +1185,7 @@ impl DynamicTeapotApp {
             if all_past_camera {
                 log::info!("Flyby formation 2 passed camera, despawning");
                 for ship in &flyby.ships {
-                    self.scene_manager.destroy_entity(&mut self.world, ship.entity);
+                    self.scene_manager.destroy_entity(&mut self.world, &mut self.graphics_engine, ship.entity);
                 }
                 self.flyby_group_2 = None;
             }
@@ -1355,7 +1336,7 @@ impl DynamicTeapotApp {
         
         for entity in destroyed_entities {
             self.world.remove_component::<LightComponent>(entity);
-            self.scene_manager.destroy_entity(&mut self.world, entity);
+            self.scene_manager.destroy_entity(&mut self.world, &mut self.graphics_engine, entity);
         }
         
         // Spawn new particles in front of ships (off-camera)
@@ -1379,22 +1360,49 @@ impl DynamicTeapotApp {
     }
     
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let now = Instant::now();
-        let delta_time = now.duration_since(self.last_frame_time).as_secs_f32();
-        self.last_frame_time = now;
-        
         // Update FPS text
         let fps_text = format!("FPS: {:.1}", self.current_fps);
         self.ui_manager.update_text(self.fps_label_id, fps_text);
         
         // Update UI state
-        self.ui_manager.update(delta_time);
+        self.ui_manager.update(0.016);
         
-        // Sync ECS → Scene Manager
-        self.scene_manager.sync_from_world(&mut self.world);
+        // DEBUG: Check RANDOM particle materials before rendering to see variety!
+        if self.frame_count % 60 == 0 && self.particles.len() >= 5 {
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+            log::info!("DEBUG: Checking 5 random particles out of {} total", self.particles.len());
+            for _ in 0..5 {
+                let i = rng.gen_range(0..self.particles.len());
+                let particle = &self.particles[i];
+                if let Some(renderable) = self.world.get_component::<RenderableComponent>(particle.entity) {
+                    log::info!("  Particle idx={} (Entity {:?}): base_color={:?}, emission={:?}", 
+                              i, particle.entity,
+                              match &renderable.material.material_type {
+                                  MaterialType::Transparent { base_material, .. } => {
+                                      match base_material.as_ref() {
+                                          MaterialType::StandardPBR(params) => params.base_color,
+                                          _ => [0.0, 0.0, 0.0].into()
+                                      }
+                                  }
+                                  _ => [0.0, 0.0, 0.0].into()
+                              },
+                              match &renderable.material.material_type {
+                                  MaterialType::Transparent { base_material, .. } => {
+                                      match base_material.as_ref() {
+                                          MaterialType::StandardPBR(params) => params.emission,
+                                          _ => [0.0, 0.0, 0.0].into()
+                                      }
+                                  }
+                                  _ => [0.0, 0.0, 0.0].into()
+                              });
+                }
+            }
+        }
+        
+        // CRITICAL: Sync entities to render queue and allocate/update GPU handles
+        // This must be called before render_frame() to ensure entities have GPU resources
         let render_queue = self.scene_manager.build_render_queue();
-        
-        // Render entities
         self.graphics_engine.render_entities_from_queue(&render_queue)?;
         
         // Build multi-light environment from entity system
@@ -1403,9 +1411,6 @@ impl DynamicTeapotApp {
             Vec3::new(0.15, 0.12, 0.18),
             0.1
         ).clone();
-        
-        log::info!("Frame: {} point lights active, {} particles tracked", 
-                   multi_light_env.point_lights.len(), self.particles.len());
         
         // Export UI data for rendering
         let ui_data = self.ui_manager.get_render_data();

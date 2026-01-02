@@ -52,6 +52,35 @@ impl AABB {
         self.min.y <= other.max.y && self.max.y >= other.min.y &&
         self.min.z <= other.max.z && self.max.z >= other.min.z
     }
+    
+    /// Test ray intersection with this AABB using slab method
+    /// Returns the distance to the entry point if the ray intersects, None otherwise
+    /// Based on "An Efficient and Robust Ray–Box Intersection Algorithm"
+    pub fn intersect_ray(&self, ray_origin: Vec3, ray_dir: Vec3) -> Option<f32> {
+        let inv_dir = Vec3::new(
+            if ray_dir.x != 0.0 { 1.0 / ray_dir.x } else { f32::INFINITY },
+            if ray_dir.y != 0.0 { 1.0 / ray_dir.y } else { f32::INFINITY },
+            if ray_dir.z != 0.0 { 1.0 / ray_dir.z } else { f32::INFINITY },
+        );
+        
+        let t1 = (self.min.x - ray_origin.x) * inv_dir.x;
+        let t2 = (self.max.x - ray_origin.x) * inv_dir.x;
+        let t3 = (self.min.y - ray_origin.y) * inv_dir.y;
+        let t4 = (self.max.y - ray_origin.y) * inv_dir.y;
+        let t5 = (self.min.z - ray_origin.z) * inv_dir.z;
+        let t6 = (self.max.z - ray_origin.z) * inv_dir.z;
+        
+        let tmin = t1.min(t2).max(t3.min(t4)).max(t5.min(t6));
+        let tmax = t1.max(t2).min(t3.max(t4)).min(t5.max(t6));
+        
+        // Ray intersects if tmax >= tmin and tmax >= 0
+        if tmax >= tmin && tmax >= 0.0 {
+            // Return entry point distance (or 0 if we're inside the box)
+            Some(tmin.max(0.0))
+        } else {
+            None
+        }
+    }
 }
 
 /// Frustum for visibility culling

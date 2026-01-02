@@ -120,6 +120,8 @@ pub struct DynamicSpawnParams {
     pub transform: Mat4,
     /// Material properties for this object
     pub material: Material,
+    /// Render layer for sorting (0-255, higher renders later). Default 0.
+    pub render_layer: u8,
 }
 
 impl DynamicSpawnParams {
@@ -128,6 +130,16 @@ impl DynamicSpawnParams {
         Self {
             transform,
             material,
+            render_layer: 0, // Default layer
+        }
+    }
+    
+    /// Create spawn parameters with a specific render layer
+    pub fn from_matrix_with_layer(transform: Mat4, material: Material, render_layer: u8) -> Self {
+        Self {
+            transform,
+            material,
+            render_layer,
         }
     }
     
@@ -145,6 +157,7 @@ impl DynamicSpawnParams {
         Self {
             transform,
             material,
+            render_layer: 0,
         }
     }
 }
@@ -176,6 +189,10 @@ pub struct DynamicRenderData {
     pub generation: u32,
     /// Current allocation and rendering state
     pub state: ResourceState,
+    
+    /// Render layer for sorting (0-255, higher = renders later)
+    /// Default is 0 for normal objects. Use 255 for skyboxes.
+    pub render_layer: u8,
 }
 
 impl Default for DynamicRenderData {
@@ -186,6 +203,7 @@ impl Default for DynamicRenderData {
             spawn_time: Instant::now(),
             generation: 0,
             state: ResourceState::Available,
+            render_layer: 0,
         }
     }
 }
@@ -384,6 +402,7 @@ impl DynamicObjectManager {
                 object.spawn_time = Instant::now();
                 object.generation = generation;
                 object.state = ResourceState::Active;
+                object.render_layer = params.render_layer; // Set render layer from params
             }
             
             let handle = DynamicObjectHandle::new(index as u32, generation);

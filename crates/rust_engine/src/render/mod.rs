@@ -100,10 +100,8 @@ use thiserror::Error;
 // use crate::engine::{RendererConfig, WindowConfig}; 
 use crate::foundation::math::{Vec3, Mat4, Mat4Ext};
 use crate::render::systems::dynamic::MeshPoolManager;
-use crate::assets::{ResourceManager, ResourceConfig};
 use crate::ecs::Entity;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 /// # Graphics Engine
 ///
@@ -123,30 +121,24 @@ use std::sync::{Arc, Mutex};
 /// The GraphicsEngine acts as a facade pattern implementation, providing a simplified
 /// interface over the complex Vulkan rendering pipeline. It maintains minimal
 /// state and delegates actual rendering work to the Vulkan backend.
+///
+/// **CLEAN ARCHITECTURE**: Applications NEVER touch GraphicsEngine directly.
+/// They only use SceneManager, which internally coordinates with GraphicsEngine.
 pub struct GraphicsEngine {
     /// Backend abstraction for graphics rendering
-    /// FIXME: Should support dynamic backend selection at runtime
     backend: Box<dyn RenderBackend>,
     
     /// Currently active camera for 3D rendering
-    /// FIXME: Should support multiple cameras for multi-viewport rendering
     current_camera: Option<Camera>,
     
     /// Current lighting environment
-    /// FIXME: Should be integrated with scene management system
     current_lighting: Option<LightingEnvironment>,
     
-    /// Dynamic object pool management system for temporary objects
-    /// Manages multiple single-mesh pools for optimal rendering performance
+    /// Dynamic object pool management system
     pool_manager: Option<MeshPoolManager>,
     
     /// Entity to pool handle tracking (automatic resource management)
-    /// Maps ECS entities to their (MeshType, DynamicObjectHandle) for automatic lifecycle
     entity_handles: HashMap<Entity, (systems::dynamic::MeshType, systems::dynamic::DynamicObjectHandle)>,
-    
-    /// Resource Manager for automatic pooling (Proposal #4)
-    /// Shared with SceneManager via Arc<Mutex<>>
-    resource_manager: Arc<Mutex<ResourceManager>>,
 }
 
 impl GraphicsEngine {
@@ -178,29 +170,13 @@ impl GraphicsEngine {
         let vulkan_renderer = crate::render::backends::vulkan::VulkanRenderer::new(vulkan_window, config)
             .map_err(|e| RenderError::InitializationFailed(format!("Failed to create Vulkan renderer: {:?}", e)))?;
         
-        // Create Resource Manager (CPU-side asset tracking only)
-        // Per Game Engine Architecture Ch 7.2, Resource Manager provides 
-        // unified interface to assets - it does NOT create GPU resources.
-        let resource_manager = Arc::new(Mutex::new(
-            ResourceManager::new(ResourceConfig::default())
-        ));
-        
         Ok(Self {
             backend: Box::new(vulkan_renderer),
             current_camera: None,
             current_lighting: None,
-            pool_manager: None, // Will be initialized when first needed
+            pool_manager: None,
             entity_handles: HashMap::new(),
-            resource_manager,
         })
-    }
-    
-    /// Get shared reference to Resource Manager for SceneManager integration (Proposal #4)
-    ///
-    /// This allows SceneManager to share the same ResourceManager instance for
-    /// automatic GPU resource pooling and lifecycle management.
-    pub fn resource_manager(&self) -> Arc<Mutex<ResourceManager>> {
-        Arc::clone(&self.resource_manager)
     }
     
     /// Initialize UI text rendering system
@@ -216,6 +192,60 @@ impl GraphicsEngine {
         } else {
             Err("Backend doesn't support UI text rendering".into())
         }
+    }
+    
+    // ========================================================================
+    // ENTITY GPU RESOURCE MANAGEMENT (for SceneManager)
+    // ========================================================================
+    
+    /// Allocate GPU resources for an entity
+    ///
+    /// **INTERNAL API**: Only SceneManager should call this.
+    /// Applications use SceneManager::create_renderable_entity().
+    ///
+    /// This automatically allocates from the appropriate pool based on mesh_type.
+    ///
+    /// # Arguments
+    /// * `entity` - ECS entity
+    /// * `mesh_type` - Type of mesh (determines pool)
+    /// * `transform` - Initial world transform
+    /// * `material` - Material for rendering
+    ///
+    /// # Returns
+    /// * `Ok(())` - Successfully allocated
+    /// * `Err(...)` - Allocation failed
+    pub fn allocate_entity_gpu_resources(
+        &mut self,
+        entity: Entity,
+        mesh_type: systems::dynamic::MeshType,
+        transform: Mat4,
+        material: resources::materials::Material,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Allocate from pool
+        let handle = self.allocate_from_pool(mesh_type, transform, material)?;
+        
+        // Track entity→(mesh_type, handle) mapping
+        self.entity_handles.insert(entity, (mesh_type, handle));
+        
+        log::debug!("Allocated GPU resources for entity {:?}: {:?} pool, handle {:?}", 
+                   entity, mesh_type, handle);
+        Ok(())
+    }
+
+    /// Release GPU resources for an entity
+    ///
+    /// **INTERNAL API**: Only SceneManager should call this.
+    ///
+    /// Looks up the entity's pool handle and frees it.
+    ///
+    /// # Arguments
+    /// * `entity` - ECS entity to release
+    pub fn release_entity_gpu_resources(&mut self, entity: Entity) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some((mesh_type, handle)) = self.entity_handles.remove(&entity) {
+            self.free_pool_instance(mesh_type, handle)?;
+            log::debug!("Released GPU resources for entity {:?}", entity);
+        }
+        Ok(())
     }
     
     // ========================================================================
@@ -265,9 +295,6 @@ impl GraphicsEngine {
         data: &api::RenderFrameData,
         window: &mut WindowHandle,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // 0. Create any pending GPU pools from ResourceManager
-        self.create_pending_pools()?;
-        
         // 1. Begin frame (internal)
         self.begin_dynamic_frame()?;
         
@@ -693,48 +720,6 @@ impl GraphicsEngine {
     /// This method implements the "pull model" for automatic pool creation:
     /// 1. ResourceManager registers which pools are needed (metadata only)
     /// 2. GraphicsEngine queries ResourceManager before rendering
-    /// 3. GraphicsEngine creates actual GPU resources for pending pools
-    ///
-    /// This maintains proper separation of concerns per Game Engine Architecture:
-    /// - ResourceManager: CPU-side resource tracking and lifecycle
-    /// - GraphicsEngine: GPU resource creation and rendering
-    ///
-    /// # Book Reference
-    /// Game Engine Architecture Chapter 7.2 - Resource Manager
-    /// > "The resource manager manages resources at runtime, ensuring they are
-    /// > loaded into memory in advance of being needed by the game."
-    fn create_pending_pools(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        use crate::assets::resource_manager::PoolKey;
-        
-        // Get pending pools from ResourceManager
-        let mut resource_mgr = self.resource_manager.lock().unwrap();
-        let pending: Vec<(PoolKey, crate::render::Mesh, Vec<crate::render::Material>)> = 
-            resource_mgr.pending_pools()
-                .map(|(key, mesh, mats)| (*key, mesh.clone(), mats.clone()))
-                .collect();
-        let initial_pool_size = resource_mgr.config().initial_pool_size;
-        drop(resource_mgr); // Release lock before creating pools
-        
-        // Create GPU resources for each pending pool
-        for (pool_key, mesh, materials) in pending {
-            log::info!("Creating GPU pool for {:?}", pool_key);
-            
-            // Create the mesh pool via existing infrastructure
-            self.create_mesh_pool(
-                pool_key.mesh_type,
-                &mesh,
-                &materials,
-                initial_pool_size,
-            )?;
-            
-            // Mark as created in ResourceManager
-            self.resource_manager.lock().unwrap().mark_pool_created(pool_key);
-            
-            log::info!("GPU pool {:?} created successfully", pool_key);
-        }
-        
-        Ok(())
-    }
     
     /// Register a mesh type for multi-mesh rendering (Phase 0)
     ///
@@ -935,6 +920,53 @@ impl GraphicsEngine {
         ).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     }
 
+    /// Update the transform of an entity tracked by the graphics engine
+    ///
+    /// This method bridges the ECS layer to GPU buffer updates. After updating
+    /// ECS components (TransformComponent), call this method to push the changes
+    /// to GPU buffers for rendering.
+    ///
+    /// # Arguments
+    /// * `entity` - The entity whose transform should be updated
+    /// * `transform` - The new transformation matrix
+    ///
+    /// # Returns
+    /// Ok(()) if the update succeeded, or an error if the entity has no GPU handle
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Update ECS component
+    /// if let Some(transform) = world.get_component_mut::<TransformComponent>(entity) {
+    ///     transform.position = new_position;
+    ///     scene_manager.mark_entity_dirty(entity);
+    /// }
+    /// 
+    /// // Sync to scene manager cache
+    /// scene_manager.sync_from_world(&mut world);
+    /// 
+    /// // Push to GPU buffers
+    /// if let Some(transform) = world.get_component::<TransformComponent>(entity) {
+    ///     graphics_engine.update_entity_transform(
+    ///         entity,
+    ///         transform.to_math_transform().to_matrix()
+    ///     )?;
+    /// }
+    /// ```
+    pub fn update_entity_transform(
+        &mut self,
+        entity: Entity,
+        transform: Mat4,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some((mesh_type, handle)) = self.entity_handles.get(&entity) {
+            log::debug!("[GPU UPDATE] Updating entity {:?} ({:?}, handle {:?})", entity, mesh_type, handle);
+            self.update_pool_instance(*mesh_type, *handle, transform)?;
+            Ok(())
+        } else {
+            log::warn!("[GPU UPDATE] Entity {:?} has no GPU handle - skipping update", entity);
+            Err(format!("Entity {:?} has no GPU handle", entity).into())
+        }
+    }
+
     /// Render entities from a Scene Manager's RenderQueue (Proposal #1 - Complete API)
     ///
     /// This method automatically manages entity lifecycle in the rendering system:
@@ -971,9 +1003,17 @@ impl GraphicsEngine {
                 
                 // Check if we already have a handle for this entity
                 if let Some(&(mesh_type, handle)) = self.entity_handles.get(&obj.entity) {
-                    // Existing entity - just update its transform
+                    // Existing entity - update both transform and material
                     if let Err(e) = self.update_pool_instance(mesh_type, handle, obj.transform) {
                         log::warn!("Failed to update entity {:?} transform: {}", obj.entity, e);
+                    }
+                    // Update material (critical for alpha fade effects)
+                    if let Err(e) = self.pool_manager.as_mut().unwrap().update_instance_material(
+                        mesh_type,
+                        handle,
+                        obj.material.clone()
+                    ) {
+                        log::warn!("Failed to update entity {:?} material: {}", obj.entity, e);
                     }
                 } else {
                     // New entity - use the mesh_type stored in RenderableObject
@@ -1004,9 +1044,17 @@ impl GraphicsEngine {
                 
                 // Check if we already have a handle for this entity
                 if let Some(&(mesh_type, handle)) = self.entity_handles.get(&obj.entity) {
-                    // Existing entity - just update its transform
+                    // Existing entity - update both transform and material
                     if let Err(e) = self.update_pool_instance(mesh_type, handle, obj.transform) {
                         log::warn!("Failed to update entity {:?} transform: {}", obj.entity, e);
+                    }
+                    // Update material (critical for alpha fade effects)
+                    if let Err(e) = self.pool_manager.as_mut().unwrap().update_instance_material(
+                        mesh_type,
+                        handle,
+                        obj.material.clone()
+                    ) {
+                        log::warn!("Failed to update entity {:?} material: {}", obj.entity, e);
                     }
                 } else {
                     // New entity - use the mesh_type stored in RenderableObject

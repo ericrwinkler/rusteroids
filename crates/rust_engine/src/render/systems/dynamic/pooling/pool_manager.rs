@@ -22,6 +22,7 @@ struct TransparentObjectInfo {
     handle: DynamicObjectHandle,
     render_data: DynamicRenderData,
     depth: f32,
+    render_layer: u8,
 }
 
 /// Resources associated with a single mesh pool
@@ -464,6 +465,7 @@ impl MeshPoolManager {
         let camera_forward = (camera_target - camera_position).normalize();
         let mut opaque_by_pool: HashMap<MeshType, Vec<(DynamicObjectHandle, DynamicRenderData)>> = HashMap::new();
         let mut transparent_objects: Vec<TransparentObjectInfo> = Vec::new();
+        let mut skybox_by_pool: HashMap<MeshType, Vec<(DynamicObjectHandle, DynamicRenderData)>> = HashMap::new();
         
         for (mesh_type, pool_resources) in &self.pools {
             if pool_resources.manager.active_count() > 0 {
@@ -471,38 +473,49 @@ impl MeshPoolManager {
                 
                 for (handle, render_data) in active_objects {
                     let pipeline_type = render_data.material.required_pipeline();
-                    let is_transparent = matches!(
+                    
+                    // Check if skybox first
+                    let is_skybox = matches!(
                         pipeline_type,
-                        crate::render::resources::materials::PipelineType::TransparentPBR | 
-                        crate::render::resources::materials::PipelineType::TransparentUnlit
+                        crate::render::resources::materials::PipelineType::Skybox
                     );
                     
-                    if is_transparent {
-                        // Calculate view-space depth for sorting
-                        // Extract position from transform matrix
-                        let position = render_data.transform.column(3).xyz();
-                        let to_object = position - camera_position;
-                        let depth = to_object.dot(&camera_forward);
-                        
-                        transparent_objects.push(TransparentObjectInfo {
-                            mesh_type: *mesh_type,
-                            handle,
-                            render_data: render_data.clone(),
-                            depth,
-                        });
-                    } else {
-                        // Opaque object
-                        opaque_by_pool.entry(*mesh_type)
+                    if is_skybox {
+                        // Skybox object - render last
+                        skybox_by_pool.entry(*mesh_type)
                             .or_insert_with(Vec::new)
                             .push((handle, render_data.clone()));
+                    } else {
+                        let is_transparent = matches!(
+                            pipeline_type,
+                            crate::render::resources::materials::PipelineType::TransparentPBR | 
+                            crate::render::resources::materials::PipelineType::TransparentUnlit
+                        );
+                        
+                        if is_transparent {
+                            // Calculate view-space depth for sorting
+                            // Extract position from transform matrix
+                            let position = render_data.transform.column(3).xyz();
+                            let to_object = position - camera_position;
+                            let depth = to_object.dot(&camera_forward);
+                            
+                            transparent_objects.push(TransparentObjectInfo {
+                                mesh_type: *mesh_type,
+                                handle,
+                                render_data: render_data.clone(),
+                                depth,
+                                render_layer: render_data.render_layer,
+                            });
+                        } else {
+                            // Opaque object
+                            opaque_by_pool.entry(*mesh_type)
+                                .or_insert_with(Vec::new)
+                                .push((handle, render_data.clone()));
+                        }
                     }
                 }
             }
         }
-        
-        log::debug!("Categorized {} opaque and {} transparent objects", 
-                   opaque_by_pool.values().map(|v| v.len()).sum::<usize>(),
-                   transparent_objects.len());
         
         // ========== PHASE 3: RENDER OPAQUE OBJECTS (BATCHED BY POOL) ==========
         for (mesh_type, objects) in opaque_by_pool {
@@ -523,14 +536,45 @@ impl MeshPoolManager {
             }
         }
         
-        // ========== PHASE 4: RENDER TRANSPARENT OBJECTS (GLOBALLY SORTED) ==========
+        // ========== PHASE 4: RENDER SKYBOX OBJECTS (BEFORE TRANSPARENT) ==========
+        // Skybox renders after opaque geometry but before transparent objects
+        // Uses depth test (LESS_OR_EQUAL) but no depth write to fill background pixels
+        // This ensures transparent objects in front of skybox are not occluded
+        for (mesh_type, objects) in skybox_by_pool {
+            if let Some(pool_resources) = self.pools.get_mut(&mesh_type) {
+                if let Some(instance_renderer) = &mut pool_resources.instance_renderer {
+                    if let Some(indices) = pool_indices.get(&mesh_type) {
+                        log::debug!("Rendering {} skybox objects from {:?} pool (depth test on, write off)", 
+                                   objects.len(), mesh_type);
+                        
+                        vulkan_renderer.render_uploaded_objects_subset(
+                            instance_renderer,
+                            &pool_resources.shared_resources,
+                            pool_resources.material_descriptor_set,
+                            &objects,
+                            indices
+                        ).map_err(|e| format!("Failed to render skybox {:?}: {}", mesh_type, e))?;
+                    }
+                }
+            }
+        }
+        
+        // ========== PHASE 5: RENDER TRANSPARENT OBJECTS (GLOBALLY SORTED, LAST) ==========
         if !transparent_objects.is_empty() {
-            // Sort back-to-front for correct alpha blending
+            // Sort by render_layer first (higher = renders later), then by depth (back-to-front)
+            // This ensures skyboxes (layer 255) render LAST regardless of depth
             transparent_objects.sort_by(|a, b| {
-                b.depth.partial_cmp(&a.depth).unwrap_or(std::cmp::Ordering::Equal)
+                // First compare by render layer (ascending - lower layers first)
+                match a.render_layer.cmp(&b.render_layer) {
+                    std::cmp::Ordering::Equal => {
+                        // Same layer: sort by depth (back-to-front for alpha blending)
+                        b.depth.partial_cmp(&a.depth).unwrap_or(std::cmp::Ordering::Equal)
+                    }
+                    other => other,
+                }
             });
             
-            log::debug!("Sorted {} transparent objects by depth", transparent_objects.len());
+            log::debug!("Sorted {} transparent objects by layer+depth", transparent_objects.len());
             
             // Batch consecutive objects from same pool for efficiency
             let mut current_batch_type = transparent_objects[0].mesh_type;

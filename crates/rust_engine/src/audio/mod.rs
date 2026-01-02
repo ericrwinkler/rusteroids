@@ -62,6 +62,7 @@ use std::path::Path;
 /// Main audio system coordinating all audio subsystems
 pub struct AudioSystem {
     backend: Box<dyn AudioBackend>,
+    #[allow(dead_code)]
     sound_manager: SoundManager,
     voice_manager: VoiceManager,
     mixer: MixerSystem,

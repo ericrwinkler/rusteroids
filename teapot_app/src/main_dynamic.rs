@@ -1406,7 +1406,7 @@ impl DynamicTeapotApp {
             for i in 0..excess_count {
                 let entity = teapots[i].0;
                 let age = current_time - teapots[i].1;
-                self.scene_manager.destroy_entity(&mut self.world, entity);
+                self.scene_manager.destroy_entity(&mut self.world, &mut self.graphics_engine, entity);
                 log::info!("Despawned old teapot entity (lived {:.1}s, over limit)", age);
             }
         }
@@ -1420,7 +1420,7 @@ impl DynamicTeapotApp {
             for i in 0..excess_count {
                 let entity = spaceships[i].0;
                 let age = current_time - spaceships[i].1;
-                self.scene_manager.destroy_entity(&mut self.world, entity);
+                self.scene_manager.destroy_entity(&mut self.world, &mut self.graphics_engine, entity);
                 log::info!("Despawned old spaceship entity (lived {:.1}s, over limit)", age);
             }
         }
@@ -2697,7 +2697,7 @@ impl DynamicTeapotApp {
         // Destroy expired entities
         for entity in entities_to_destroy {
             log::debug!("Destroying expired entity {:?}", entity);
-            self.scene_manager.destroy_entity(&mut self.world, entity);
+            self.scene_manager.destroy_entity(&mut self.world, &mut self.graphics_engine, entity);
         }
     }
 }

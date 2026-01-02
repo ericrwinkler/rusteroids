@@ -244,6 +244,174 @@ impl Mesh {
 
         Self::new(vertices, indices)
     }
+    
+    /// Create a skybox cube mesh with proper UV mapping for cubemap textures
+    /// 
+    /// Generates a large cube (size 500.0) centered at the origin designed to be rendered
+    /// as a skybox. The cube should be rendered LAST (use render_layer = 255) with depth
+    /// testing configured appropriately for skybox rendering.
+    /// 
+    /// # UV Mapping Layout
+    /// 
+    /// The UV coordinates are mapped to a cross-layout skybox texture:
+    /// ```text
+    ///     [TOP]
+    /// [L] [F] [R] [BK]
+    ///     [BOT]
+    /// ```
+    /// 
+    /// Layout breakdown:
+    /// - **Top face**: Uses top 1/3 height, 1/4 width (starting at x=0.25)
+    /// - **Middle faces** (Front, Right, Back, Left): Use middle 1/3 height
+    ///   - Front: x=0.25-0.50
+    ///   - Right: x=0.50-0.75  
+    ///   - Back: x=0.75-1.00
+    ///   - Left: x=0.00-0.25
+    /// - **Bottom face**: Uses bottom 1/3 height, 1/4 width (starting at x=0.25)
+    /// 
+    /// # Coordinate System
+    /// - Interior faces visible (normals point inward)
+    /// - Y-up orientation
+    /// - Size: 500.0 units (large enough to encompass typical scenes)
+    /// 
+    /// # Usage
+    /// ```rust
+    /// use rust_engine::render::primitives::Mesh;
+    /// use rust_engine::render::resources::materials::{Material, UnlitMaterialParams};
+    /// use rust_engine::foundation::math::Vec3;
+    /// use rust_engine::render::systems::dynamic::MeshType;
+    /// 
+    /// // Create the skybox mesh
+    /// let skybox_mesh = Mesh::skybox();
+    /// 
+    /// // Load your skybox texture (should be a cross-layout cubemap)
+    /// // You can use resources/textures/skybox.png as an example
+    /// let skybox_texture = texture_manager.load("resources/textures/skybox.png")?;
+    /// 
+    /// // Create an unlit material for the skybox
+    /// // Skyboxes should be unlit since they represent distant environment lighting
+    /// let skybox_material = Material::unlit(UnlitMaterialParams {
+    ///     color: Vec3::new(1.0, 1.0, 1.0), // White to show texture colors
+    ///     alpha: 1.0,
+    /// })
+    /// .with_albedo_texture(skybox_texture)
+    /// .with_name("Skybox");
+    /// 
+    /// // Optional: Add emission texture if your skybox has glowing elements
+    /// // let skybox_material = skybox_material.with_emission_texture(emission_texture);
+    /// 
+    /// // Create a renderable component with render_layer = 255 to render LAST
+    /// // This ensures the skybox is drawn after all other objects
+    /// let skybox_renderable = RenderableComponent::new(
+    ///     skybox_material,
+    ///     skybox_mesh,
+    ///     MeshType::Cube, // Or create a MeshType::Skybox if needed
+    /// );
+    /// skybox_renderable.set_render_layer(255); // Maximum value = renders last
+    /// 
+    /// // Add to your ECS world
+    /// let skybox_entity = world.create_entity();
+    /// world.add_component(skybox_entity, skybox_renderable);
+    /// world.add_component(skybox_entity, TransformComponent::identity());
+    /// 
+    /// // The skybox will now render as the background of your scene
+    /// ```
+    /// 
+    /// # Important Rendering Notes
+    /// 
+    /// For proper skybox rendering, you may need to configure your renderer:
+    /// 
+    /// 1. **Depth Testing**: Skyboxes should use `LESS_OR_EQUAL` depth test to ensure
+    ///    they render behind all geometry but don't Z-fight with the far plane.
+    /// 
+    /// 2. **Camera Transform**: When rendering the skybox, remove camera translation
+    ///    (only rotation should apply). This keeps the skybox infinitely distant.
+    ///    ```rust
+    ///    // Pseudo-code for skybox rendering:
+    ///    let view_no_translation = view_matrix;
+    ///    view_no_translation.set_translation(Vec3::zero());
+    ///    ```
+    /// 
+    /// 3. **Render Order**: Using `render_layer = 255` ensures the skybox renders last,
+    ///    taking advantage of early-Z rejection for optimal performance.
+    /// 
+    /// 4. **Culling**: Disable backface culling or render interior faces since the camera
+    ///    is inside the skybox cube.
+    /// 
+    /// # Rendering Notes
+    /// - Should be rendered with depth test set to LESS_OR_EQUAL
+    /// - Camera translation should be removed (only rotation applies)
+    /// - Typically uses unlit material with skybox texture
+    pub fn skybox() -> Self {
+        let size = 500.0;
+        
+        // UV mapping for cross-layout skybox (4x3 grid)
+        // Horizontal sections: Left(0.00-0.25), Front(0.25-0.50), Right(0.50-0.75), Back(0.75-1.00)
+        // Vertical sections: Top(2/3-1.00), Middle(1/3-2/3), Bottom(0.00-1/3)
+        // Using precise fractions: 1/3 = 0.333333..., 2/3 = 0.666666...
+        // UV inset to prevent texture filtering from sampling adjacent faces
+        
+        const ONE_THIRD: f32 = 1.0 / 3.0;
+        const TWO_THIRDS: f32 = 2.0 / 3.0;
+        const UV_INSET: f32 = 0.002; // Small inset to avoid edge bleeding
+        
+        let vertices = vec![
+            // Front face (+Z) - Middle section, x=0.25-0.50, y=1/3-2/3
+            Vertex::new([-size, -size, size], [0.0, 0.0, -1.0], [0.25 + UV_INSET, ONE_THIRD + UV_INSET]),
+            Vertex::new([size, -size, size], [0.0, 0.0, -1.0], [0.50 - UV_INSET, ONE_THIRD + UV_INSET]),
+            Vertex::new([size, size, size], [0.0, 0.0, -1.0], [0.50 - UV_INSET, TWO_THIRDS - UV_INSET]),
+            Vertex::new([-size, size, size], [0.0, 0.0, -1.0], [0.25 + UV_INSET, TWO_THIRDS - UV_INSET]),
+            
+            // Back face (-Z) - Middle section, x=0.75-1.00, y=1/3-2/3
+            Vertex::new([size, -size, -size], [0.0, 0.0, 1.0], [0.75 + UV_INSET, ONE_THIRD + UV_INSET]),
+            Vertex::new([-size, -size, -size], [0.0, 0.0, 1.0], [1.00 - UV_INSET, ONE_THIRD + UV_INSET]),
+            Vertex::new([-size, size, -size], [0.0, 0.0, 1.0], [1.00 - UV_INSET, TWO_THIRDS - UV_INSET]),
+            Vertex::new([size, size, -size], [0.0, 0.0, 1.0], [0.75 + UV_INSET, TWO_THIRDS - UV_INSET]),
+            
+            // Left face (-X) - Middle section, x=0.00-0.25, y=1/3-2/3
+            Vertex::new([-size, -size, -size], [1.0, 0.0, 0.0], [0.00 + UV_INSET, ONE_THIRD + UV_INSET]),
+            Vertex::new([-size, -size, size], [1.0, 0.0, 0.0], [0.25 - UV_INSET, ONE_THIRD + UV_INSET]),
+            Vertex::new([-size, size, size], [1.0, 0.0, 0.0], [0.25 - UV_INSET, TWO_THIRDS - UV_INSET]),
+            Vertex::new([-size, size, -size], [1.0, 0.0, 0.0], [0.00 + UV_INSET, TWO_THIRDS - UV_INSET]),
+            
+            // Right face (+X) - Middle section, x=0.50-0.75, y=1/3-2/3
+            Vertex::new([size, -size, size], [-1.0, 0.0, 0.0], [0.50 + UV_INSET, ONE_THIRD + UV_INSET]),
+            Vertex::new([size, -size, -size], [-1.0, 0.0, 0.0], [0.75 - UV_INSET, ONE_THIRD + UV_INSET]),
+            Vertex::new([size, size, -size], [-1.0, 0.0, 0.0], [0.75 - UV_INSET, TWO_THIRDS - UV_INSET]),
+            Vertex::new([size, size, size], [-1.0, 0.0, 0.0], [0.50 + UV_INSET, TWO_THIRDS - UV_INSET]),
+            
+            // Top face (+Y) - Top section, x=0.25-0.50, y=2/3-1.00
+            Vertex::new([-size, size, size], [0.0, -1.0, 0.0], [0.25 + UV_INSET, TWO_THIRDS + UV_INSET]),
+            Vertex::new([size, size, size], [0.0, -1.0, 0.0], [0.50 - UV_INSET, TWO_THIRDS + UV_INSET]),
+            Vertex::new([size, size, -size], [0.0, -1.0, 0.0], [0.50 - UV_INSET, 1.00 - UV_INSET]),
+            Vertex::new([-size, size, -size], [0.0, -1.0, 0.0], [0.25 + UV_INSET, 1.00 - UV_INSET]),
+            
+            // Bottom face (-Y) - Bottom section, x=0.25-0.50, y=0.00-1/3
+            Vertex::new([-size, -size, -size], [0.0, 1.0, 0.0], [0.25 + UV_INSET, 0.00 + UV_INSET]),
+            Vertex::new([size, -size, -size], [0.0, 1.0, 0.0], [0.50 - UV_INSET, 0.00 + UV_INSET]),
+            Vertex::new([size, -size, size], [0.0, 1.0, 0.0], [0.50 - UV_INSET, ONE_THIRD - UV_INSET]),
+            Vertex::new([-size, -size, size], [0.0, 1.0, 0.0], [0.25 + UV_INSET, ONE_THIRD - UV_INSET]),
+        ];
+
+        // REVERSED winding order for viewing from INSIDE the cube
+        // Counter-clockwise when viewed from inside = clockwise from outside
+        let indices = vec![
+            // Front face - REVERSED
+            0, 3, 2, 2, 1, 0,
+            // Back face - REVERSED
+            4, 7, 6, 6, 5, 4,
+            // Left face - REVERSED
+            8, 11, 10, 10, 9, 8,
+            // Right face - REVERSED
+            12, 15, 14, 14, 13, 12,
+            // Top face - REVERSED
+            16, 19, 18, 18, 17, 16,
+            // Bottom face - REVERSED
+            20, 23, 22, 22, 21, 20,
+        ];
+
+        Self::new(vertices, indices)
+    }
 }
 
 impl Asset for Mesh {
@@ -281,5 +449,106 @@ impl Asset for Mesh {
     {
         // TODO: Implement OBJ loading from bytes
         Err(AssetError::NotFound("Mesh loading not implemented".to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_skybox_mesh_structure() {
+        let skybox = Mesh::skybox();
+        
+        // Skybox should have 24 vertices (4 per face * 6 faces)
+        assert_eq!(skybox.vertices.len(), 24, "Skybox should have 24 vertices");
+        
+        // Skybox should have 36 indices (2 triangles per face * 3 vertices per triangle * 6 faces)
+        assert_eq!(skybox.indices.len(), 36, "Skybox should have 36 indices");
+        
+        // Verify all indices are valid (less than vertex count)
+        for &idx in &skybox.indices {
+            assert!(idx < skybox.vertices.len() as u32, "Index {} is out of bounds", idx);
+        }
+    }
+
+    #[test]
+    fn test_skybox_uv_mapping() {
+        let skybox = Mesh::skybox();
+        
+        // Verify UV coordinates are within valid range [0.0, 1.0]
+        for (i, vertex) in skybox.vertices.iter().enumerate() {
+            assert!(vertex.tex_coord[0] >= 0.0 && vertex.tex_coord[0] <= 1.0,
+                "Vertex {} U coordinate {} is out of range [0.0, 1.0]", i, vertex.tex_coord[0]);
+            assert!(vertex.tex_coord[1] >= 0.0 && vertex.tex_coord[1] <= 1.0,
+                "Vertex {} V coordinate {} is out of range [0.0, 1.0]", i, vertex.tex_coord[1]);
+        }
+        
+        // Test specific UV mapping for front face (first 4 vertices)
+        // Front face should use x=0.25-0.50, y=1/3-2/3
+        let front_verts = &skybox.vertices[0..4];
+        let one_third = 1.0 / 3.0;
+        let two_thirds = 2.0 / 3.0;
+        for vertex in front_verts {
+            assert!(vertex.tex_coord[0] >= 0.25 && vertex.tex_coord[0] <= 0.50,
+                "Front face U coordinate should be in range [0.25, 0.50]");
+            assert!(vertex.tex_coord[1] >= one_third - 0.01 && vertex.tex_coord[1] <= two_thirds + 0.01,
+                "Front face V coordinate should be in range [1/3, 2/3]");
+        }
+        
+        // Test back face (vertices 4-7) should use x=0.75-1.00
+        let back_verts = &skybox.vertices[4..8];
+        for vertex in back_verts {
+            assert!(vertex.tex_coord[0] >= 0.75 && vertex.tex_coord[0] <= 1.00,
+                "Back face U coordinate should be in range [0.75, 1.00]");
+        }
+    }
+
+    #[test]
+    fn test_skybox_size() {
+        let skybox = Mesh::skybox();
+        let expected_size = 500.0;
+        
+        // Check that vertices are at the expected distance
+        for vertex in &skybox.vertices {
+            let pos = vertex.position;
+            // Each component should be ±expected_size
+            assert!(pos[0].abs() == expected_size, "X coordinate should be ±{}", expected_size);
+            assert!(pos[1].abs() == expected_size, "Y coordinate should be ±{}", expected_size);
+            assert!(pos[2].abs() == expected_size, "Z coordinate should be ±{}", expected_size);
+        }
+    }
+
+    #[test]
+    fn test_skybox_normals_point_inward() {
+        let skybox = Mesh::skybox();
+        
+        // Skybox normals should point inward (opposite of standard cube)
+        // Front face (+Z) should have normals pointing in -Z direction
+        let front_normal = skybox.vertices[0].normal;
+        assert!(front_normal[2] < 0.0, "Front face normal should point inward (-Z)");
+        
+        // Back face (-Z) should have normals pointing in +Z direction
+        let back_normal = skybox.vertices[4].normal;
+        assert!(back_normal[2] > 0.0, "Back face normal should point inward (+Z)");
+        
+        // Left face (-X) should have normals pointing in +X direction
+        let left_normal = skybox.vertices[8].normal;
+        assert!(left_normal[0] > 0.0, "Left face normal should point inward (+X)");
+        
+        // Right face (+X) should have normals pointing in -X direction
+        let right_normal = skybox.vertices[12].normal;
+        assert!(right_normal[0] < 0.0, "Right face normal should point inward (-X)");
+    }
+
+    #[test]
+    fn test_cube_mesh_structure() {
+        let cube = Mesh::cube();
+        
+        // Cube should have 8 vertices
+        assert_eq!(cube.vertices.len(), 8, "Cube should have 8 vertices");
+        
+        // Cube should have 36 indices (6 faces * 2 triangles * 3 vertices)
+        assert_eq!(cube.indices.len(), 36, "Cube should have 36 indices");
     }
 }

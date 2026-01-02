@@ -3,13 +3,14 @@
 
 newmtl Material.001
 # Ambient color
-Ka 0.800000 0.800000 0.800000
+Ka 1.000000 1.000000 1.000000
 # Diffuse (base color) - light gray to show texture
 Kd 1.000000 1.000000 1.000000
 # Specular - medium metallic look
 Ks 0.500000 0.500000 0.500000
-# Emission - dim warm glow for engine areas (multiplied by emission texture)
-Ke 0.200000 0.200000 0.150000
+# Emission - bright warm glow for engine areas (multiplied by emission texture)
+# Note: Increased from 0.2 to compensate for shader's multiplicative blending
+Ke 2.00000 2.00000 2.00000
 # Specular exponent - 500 = semi-smooth (roughness ~0.5)
 Ns 500.000000
 Ni 1.500000

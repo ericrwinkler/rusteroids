@@ -5,6 +5,39 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[derive(Debug, Clone, Copy)]
+enum CompilerType {
+    Glslc,
+    GlslangValidator,
+}
+
+fn find_system_compiler() -> (String, CompilerType) {
+    // Try glslc first
+    if let Ok(output) = Command::new("which").arg("glslc").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return (path, CompilerType::Glslc);
+            }
+        }
+    }
+    
+    // Try glslangValidator
+    if let Ok(output) = Command::new("which").arg("glslangValidator").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return (path, CompilerType::GlslangValidator);
+            }
+        }
+    }
+    
+    eprintln!("error: No shader compiler found!");
+    eprintln!("hint: Install glslang-tools (for glslangValidator) or Vulkan SDK (for glslc)");
+    eprintln!("hint: Run: sudo apt install glslang-tools");
+    panic!("Shader compiler not found");
+}
+
 fn main() {
     // Tell cargo to rerun this build script if any shader files change
     println!("cargo:rerun-if-changed=../../resources/shaders");
@@ -17,29 +50,29 @@ fn main() {
         return;
     }
 
-    // Check for Vulkan SDK
-    let vulkan_sdk = match env::var("VULKAN_SDK") {
-        Ok(sdk) => sdk,
-        Err(_) => {
-            println!("cargo:rerun-if-env-changed=VULKAN_SDK");
-            eprintln!("warning: VULKAN_SDK not set, shader compilation skipped");
-            eprintln!("hint: Install Vulkan SDK and set VULKAN_SDK environment variable");
-            return;
+    // Try to find a shader compiler
+    // Priority: 1. glslc from VULKAN_SDK, 2. system glslc, 3. glslangValidator
+    let compiler = if let Ok(vulkan_sdk) = env::var("VULKAN_SDK") {
+        println!("cargo:rerun-if-env-changed=VULKAN_SDK");
+        let glslc = if cfg!(target_os = "windows") {
+            format!("{}\\Bin\\glslc.exe", vulkan_sdk)
+        } else {
+            format!("{}/bin/glslc", vulkan_sdk)
+        };
+        if Path::new(&glslc).exists() {
+            (glslc, CompilerType::Glslc)
+        } else {
+            eprintln!("warning: glslc not found in VULKAN_SDK, trying alternatives...");
+            find_system_compiler()
         }
-    };
-
-    let glslc = if cfg!(target_os = "windows") {
-        format!("{}\\Bin\\glslc.exe", vulkan_sdk)
     } else {
-        format!("{}/bin/glslc", vulkan_sdk)
+        println!("cargo:rerun-if-env-changed=VULKAN_SDK");
+        eprintln!("info: VULKAN_SDK not set, trying system shader compilers...");
+        find_system_compiler()
     };
 
-    // Verify glslc exists
-    if !Path::new(&glslc).exists() {
-        eprintln!("error: glslc not found at: {}", glslc);
-        eprintln!("hint: Ensure Vulkan SDK is properly installed");
-        panic!("Shader compiler not found");
-    }
+    let (compiler_path, compiler_type) = compiler;
+    eprintln!("info: Using shader compiler: {:?} ({:?})", compiler_path, compiler_type);
 
     let shader_dir = PathBuf::from("../../resources/shaders");
     let target_dir = PathBuf::from("../../target/shaders");
@@ -87,11 +120,23 @@ fn main() {
                 };
 
                 if needs_compile {
-                    let status = Command::new(&glslc)
-                        .arg(&path)
-                        .arg("-o")
-                        .arg(&out_file)
-                        .status();
+                    let status = match compiler_type {
+                        CompilerType::Glslc => {
+                            Command::new(&compiler_path)
+                                .arg(&path)
+                                .arg("-o")
+                                .arg(&out_file)
+                                .status()
+                        }
+                        CompilerType::GlslangValidator => {
+                            Command::new(&compiler_path)
+                                .arg("-V")  // Vulkan semantics
+                                .arg(&path)
+                                .arg("-o")
+                                .arg(&out_file)
+                                .status()
+                        }
+                    };
 
                     match status {
                         Ok(s) if s.success() => {
@@ -99,11 +144,11 @@ fn main() {
                             compiled_count += 1;
                         }
                         Ok(s) => {
-                            eprintln!("error: glslc failed for {:?} with exit code: {}", path, s.code().unwrap_or(-1));
+                            eprintln!("error: Shader compilation failed for {:?} with exit code: {}", path, s.code().unwrap_or(-1));
                             panic!("Shader compilation failed");
                         }
                         Err(e) => {
-                            eprintln!("error: Failed to run glslc for {:?}: {}", path, e);
+                            eprintln!("error: Failed to run shader compiler for {:?}: {}", path, e);
                             panic!("Failed to execute shader compiler");
                         }
                     }

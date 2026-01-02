@@ -398,7 +398,9 @@ impl LogicalDevice {
 
         let required_extensions = [SwapchainLoader::name().as_ptr()];
 
-        let device_features = vk::PhysicalDeviceFeatures::builder().build();
+        let device_features = vk::PhysicalDeviceFeatures::builder()
+            .sampler_anisotropy(true)  // Enable anisotropic filtering for better texture quality
+            .build();
 
         let create_info = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&queue_infos)

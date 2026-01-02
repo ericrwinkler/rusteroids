@@ -119,7 +119,7 @@ impl SceneManager {
     }
     
     /// Create a static teapot entity in the scene
-    pub fn create_teapot(&mut self, material_id: MaterialId, position: Vector3<f32>) -> Entity {
+    pub fn create_teapot(&mut self, _material_id: MaterialId, position: Vector3<f32>) -> Entity {
         let entity = self.world.create_entity();
         
         // Add renderable component

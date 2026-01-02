@@ -243,6 +243,69 @@ impl Camera {
         // This follows Johannes Unterguggenberger's academic approach
         projection_matrix * coord_transform * view_matrix
     }
+
+    /// Convert screen coordinates to a world-space ray
+    ///
+    /// Takes normalized device coordinates (NDC) and generates a ray in world space
+    /// that originates at the camera position and points through the screen position.
+    ///
+    /// # Arguments
+    /// * `screen_x` - Screen X coordinate in NDC (-1 to 1, left to right)
+    /// * `screen_y` - Screen Y coordinate in NDC (-1 to 1, bottom to top)
+    ///
+    /// # Returns
+    /// Ray in world space originating at camera position
+    ///
+    /// # Mathematical Process
+    /// 1. Convert NDC to clip space (add Z = -1 for near plane, W = 1)
+    /// 2. Inverse projection: clip → view space
+    /// 3. Inverse view: view → world space
+    /// 4. Normalize direction vector
+    ///
+    /// # Usage Example
+    /// ```rust
+    /// // Convert mouse position to NDC first (range -1 to 1)
+    /// let ndc_x = (mouse_x / window_width) * 2.0 - 1.0;
+    /// let ndc_y = 1.0 - (mouse_y / window_height) * 2.0; // Flip Y
+    /// let ray = camera.screen_to_world_ray(ndc_x, ndc_y);
+    /// ```
+    pub fn screen_to_world_ray(&self, screen_x: f32, screen_y: f32) -> crate::physics::collision::Ray {
+        use crate::foundation::math::Vec4;
+        
+        // Get the combined view-projection matrix and invert it
+        // Matrix order: P × X × V, so inverse is: inv(V) × inv(X) × inv(P)
+        let view_proj = self.get_view_projection_matrix();
+        let inv_view_proj = view_proj.try_inverse().expect("Failed to invert view-projection matrix");
+        
+        // Create NDC points at near and far planes
+        let ndc_near = Vec4::new(screen_x, screen_y, -1.0, 1.0); // Near plane (Vulkan: Z=-1)
+        let ndc_far = Vec4::new(screen_x, screen_y, 1.0, 1.0);   // Far plane (Vulkan: Z=+1)
+        
+        // Unproject both points from NDC to world space
+        let world_near_h = inv_view_proj * ndc_near;
+        let world_far_h = inv_view_proj * ndc_far;
+        
+        // Perspective divide to get 3D world coordinates
+        let world_near = Vec3::new(
+            world_near_h.x / world_near_h.w,
+            world_near_h.y / world_near_h.w,
+            world_near_h.z / world_near_h.w,
+        );
+        let world_far = Vec3::new(
+            world_far_h.x / world_far_h.w,
+            world_far_h.y / world_far_h.w,
+            world_far_h.z / world_far_h.w,
+        );
+        
+        // Ray direction from near to far
+        let ray_direction = (world_far - world_near).normalize();
+        
+        // For perspective camera, origin is camera position
+        // Direction points from camera through the clicked point into the scene
+        let ray_origin = self.position;
+        
+        crate::physics::collision::Ray::new(ray_origin, ray_direction)
+    }
 }
 
 impl Default for Camera {

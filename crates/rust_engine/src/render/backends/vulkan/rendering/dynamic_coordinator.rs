@@ -167,6 +167,24 @@ impl DynamicCoordinator {
             )?;
         }
         
+        // PHASE 3: Render skybox LAST (after all geometry)
+        // Skybox has depth test enabled but depth write disabled, so it only fills "holes"
+        // No sorting needed - skybox is always at infinite distance
+        if let Some(skybox_objects) = pipeline_groups.get(&PipelineType::Skybox) {
+            log::debug!("Rendering {} skybox objects (last, depth test enabled, write disabled)", skybox_objects.len());
+            Self::render_pipeline_group(
+                context,
+                pipeline_manager,
+                instance_renderer,
+                shared_resources,
+                frame_descriptor_set,
+                pool_material_descriptor_set,
+                PipelineType::Skybox,
+                skybox_objects,
+                &object_indices
+            )?;
+        }
+        
         log::trace!("Recorded dynamic draws for {} total objects across {} pipelines", dynamic_objects.len(), pipeline_groups.len());
         Ok(())
     }

@@ -11,7 +11,7 @@ use crate::render::backends::vulkan::{
     VulkanContext, GraphicsPipeline, ShaderModule, VulkanResult, VulkanVertexLayout,
 };
 use crate::render::resources::materials::{MaterialType, PipelineType};
-use super::pipeline_config::{PipelineConfig, CullMode};
+use super::pipeline_config::{PipelineConfig, CullMode, DepthCompareOp};
 
 /// Manages multiple graphics pipelines for different material types
 pub struct PipelineManager {
@@ -95,11 +95,24 @@ impl PipelineManager {
             binding_descs,
             attr_descs,
         )?;
+        
+        // Skybox pipeline - unlit opaque rendering with special depth handling
+        // Renders LAST (after all geometry), depth test enabled, depth write disabled
+        log::info!("Initializing skybox rendering pipeline...");
+        let (binding_descs, attr_descs) = Self::create_vertex_input_info();
+        self.create_pipeline(
+            context,
+            render_pass,
+            PipelineConfig::skybox(),
+            descriptor_set_layouts,
+            binding_descs,
+            attr_descs,
+        )?;
 
         // Set StandardPBR as default active pipeline to use material UBO system
         self.active_pipeline = Some(PipelineType::StandardPBR);
         
-        log::info!("Successfully initialized 4 rendering pipelines: StandardPBR, Unlit, TransparentPBR, TransparentUnlit");
+        log::info!("Successfully initialized 5 rendering pipelines: StandardPBR, Unlit, TransparentPBR, TransparentUnlit, Skybox");
 
         Ok(())
     }
@@ -227,10 +240,15 @@ impl PipelineManager {
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
             
         // Depth and stencil testing with configuration
+        let depth_compare_op = match config.depth_compare_op {
+            DepthCompareOp::Less => vk::CompareOp::LESS,
+            DepthCompareOp::LessOrEqual => vk::CompareOp::LESS_OR_EQUAL,
+        };
+        
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::builder()
             .depth_test_enable(config.depth_test)
             .depth_write_enable(config.depth_write)
-            .depth_compare_op(vk::CompareOp::LESS)
+            .depth_compare_op(depth_compare_op)
             .depth_bounds_test_enable(false)
             .stencil_test_enable(false);
             

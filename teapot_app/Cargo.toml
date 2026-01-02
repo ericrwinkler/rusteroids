@@ -15,6 +15,10 @@ path = "src/main_dynamic.rs"
 name = "fleet_demo"
 path = "src/main_fleet.rs"
 
+[[bin]]
+name = "octree_demo"
+path = "src/main_octree.rs"
+
 [dependencies]
 rust_engine = { path = "../crates/rust_engine" }
 glfw = "0.55"

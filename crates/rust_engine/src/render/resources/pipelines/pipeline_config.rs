@@ -67,6 +67,15 @@ pub struct DepthBiasConfig {
     pub clamp: f32,
 }
 
+/// Depth comparison operation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DepthCompareOp {
+    /// Fragment passes if its depth is less than stored depth (normal geometry)
+    Less,
+    /// Fragment passes if its depth is less than or equal to stored depth (skybox at far plane)
+    LessOrEqual,
+}
+
 /// Configuration for a graphics pipeline
 #[derive(Debug, Clone)]
 pub struct PipelineConfig {
@@ -80,6 +89,8 @@ pub struct PipelineConfig {
     pub depth_test: bool,
     /// Enable depth writing
     pub depth_write: bool,
+    /// Depth compare operation (LESS for normal geometry, LESS_OR_EQUAL for skybox)
+    pub depth_compare_op: DepthCompareOp,
     /// Enable alpha blending
     pub alpha_blending: bool,
     /// Cull mode for backface culling
@@ -122,6 +133,7 @@ impl PipelineConfig {
             fragment_shader_path: "target/shaders/standard_pbr_frag.spv".to_string(),
             depth_test: true,
             depth_write: true,
+            depth_compare_op: DepthCompareOp::Less,
             alpha_blending: false,
             cull_mode: CullMode::Back,
         }
@@ -136,6 +148,7 @@ impl PipelineConfig {
             fragment_shader_path: "target/shaders/unlit_frag.spv".to_string(),
             depth_test: true,
             depth_write: true,
+            depth_compare_op: DepthCompareOp::Less,
             alpha_blending: false,
             cull_mode: CullMode::Back,
         }
@@ -150,6 +163,7 @@ impl PipelineConfig {
             fragment_shader_path: "target/shaders/standard_pbr_frag.spv".to_string(),
             depth_test: true,
             depth_write: false, // Don't write to depth buffer for transparency
+            depth_compare_op: DepthCompareOp::Less,
             alpha_blending: true,
             cull_mode: CullMode::Back, // Cull back faces for single-sided quads
         }
@@ -164,8 +178,29 @@ impl PipelineConfig {
             fragment_shader_path: "target/shaders/unlit_frag.spv".to_string(),
             depth_test: true,
             depth_write: false, // Don't write to depth buffer for transparency
+            depth_compare_op: DepthCompareOp::Less,
             alpha_blending: true,
             cull_mode: CullMode::Back, // Cull back faces (single-sided rendering)
+        }
+    }
+    
+    /// Create configuration for Skybox pipeline
+    /// Skybox renders LAST with special depth handling:
+    /// - Depth test ENABLED (only render where nothing else rendered)
+    /// - Depth write DISABLED (don't update depth buffer)
+    /// - Depth compare LEQUAL (render at far plane)
+    /// - Cull BACK faces (skybox has reversed winding, so back faces are the exterior we DON'T want to see)
+    pub fn skybox() -> Self {
+        Self {
+            pipeline_type: PipelineType::Skybox,
+            // Reuse instanced vertex + unlit fragment shaders
+            vertex_shader_path: "target/shaders/standard_pbr_vert.spv".to_string(),
+            fragment_shader_path: "target/shaders/unlit_frag.spv".to_string(),
+            depth_test: true,                            // Test against existing depth
+            depth_write: false,                          // Don't write depth (optimization)
+            depth_compare_op: DepthCompareOp::LessOrEqual,  // Allow rendering at far plane (depth=1.0)
+            alpha_blending: false,                       // Opaque rendering
+            cull_mode: CullMode::Back,                   // Cull back faces (skybox has reversed winding)
         }
     }
 }

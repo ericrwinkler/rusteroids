@@ -101,6 +101,16 @@ impl Material {
             name: None,
         }
     }
+    
+    /// Create a new skybox material (unlit, opaque, renders last with special depth handling)
+    pub fn skybox(params: UnlitMaterialParams) -> Self {
+        Self {
+            material_type: MaterialType::Unlit(params),  // Use standard unlit, but will use Skybox pipeline
+            textures: MaterialTextures::new(),
+            id: MaterialId(0),
+            name: Some("Skybox".to_string()),
+        }
+    }
 
     /// Set the material name for debugging
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
@@ -173,7 +183,7 @@ impl Material {
     }
 
     /// Get the pipeline type required for this material
-    pub fn required_pipeline(&self) -> PipelineType {
+    pub fn required_pipeline(&self) -> PipelineType {        
         match &self.material_type {
             MaterialType::StandardPBR(_) => PipelineType::StandardPBR,
             MaterialType::Unlit(_) => PipelineType::Unlit,
@@ -219,6 +229,8 @@ pub enum PipelineType {
     TransparentPBR,
     /// Transparent unlit with alpha blending
     TransparentUnlit,
+    /// Skybox rendering (unlit, depth test enabled, depth write disabled, renders last)
+    Skybox,
 }
 
 impl PipelineType {
@@ -229,6 +241,7 @@ impl PipelineType {
             PipelineType::Unlit => "unlit",
             PipelineType::TransparentPBR => "transparent_pbr",
             PipelineType::TransparentUnlit => "transparent_unlit",
+            PipelineType::Skybox => "unlit",  // Skybox reuses unlit shaders
         }
     }
 

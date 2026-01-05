@@ -413,7 +413,7 @@ impl Octree {
     }
     
     /// Find an entity in the octree and return its data
-    fn find_entity(&self, entity_id: Entity) -> Option<OctreeEntity> {
+    pub fn find_entity(&self, entity_id: Entity) -> Option<OctreeEntity> {
         self.root.find_entity(entity_id)
     }
     

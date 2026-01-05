@@ -196,6 +196,9 @@ impl ObjLoader {
             unique_vertices, total_vertex_references, deduplication_ratio
         );
         
+        // Auto-center the mesh at origin for consistent collision detection
+        Self::center_mesh(&mut vertices);
+        
         // Calculate tangents for normal mapping
         Self::calculate_tangents(&mut vertices, &indices);
         
@@ -262,6 +265,54 @@ impl ObjLoader {
                 // Fallback for degenerate normals (standard Y-up convention)
                 *normal = [0.0, 1.0, 0.0];
             }
+        }
+    }
+    
+    /// Center the mesh at the origin by calculating AABB center and translating all vertices
+    /// 
+    /// This ensures collision shapes and rendering are properly aligned, as the collision
+    /// system assumes models are centered at their local origin. Most game engines do this
+    /// automatically during asset import.
+    fn center_mesh(vertices: &mut [Vertex]) {
+        if vertices.is_empty() {
+            return;
+        }
+        
+        // Calculate AABB (axis-aligned bounding box)
+        let mut min = vertices[0].position;
+        let mut max = vertices[0].position;
+        
+        for vertex in vertices.iter() {
+            let pos = vertex.position;
+            min[0] = min[0].min(pos[0]);
+            min[1] = min[1].min(pos[1]);
+            min[2] = min[2].min(pos[2]);
+            max[0] = max[0].max(pos[0]);
+            max[1] = max[1].max(pos[1]);
+            max[2] = max[2].max(pos[2]);
+        }
+        
+        // Calculate center offset
+        let center = [
+            (min[0] + max[0]) * 0.5,
+            (min[1] + max[1]) * 0.5,
+            (min[2] + max[2]) * 0.5,
+        ];
+        
+        // Only log if there's a significant offset (> 0.01 units)
+        let offset_magnitude = (center[0]*center[0] + center[1]*center[1] + center[2]*center[2]).sqrt();
+        if offset_magnitude > 0.01 {
+            log::info!(
+                "Auto-centering mesh: offset [{:.3}, {:.3}, {:.3}] (magnitude: {:.3})",
+                center[0], center[1], center[2], offset_magnitude
+            );
+        }
+        
+        // Translate all vertices to center the mesh at origin
+        for vertex in vertices.iter_mut() {
+            vertex.position[0] -= center[0];
+            vertex.position[1] -= center[1];
+            vertex.position[2] -= center[2];
         }
     }
     

@@ -55,6 +55,9 @@ pub mod scene;
 // Spatial partitioning structures
 pub mod spatial;
 
+// Debug visualization
+pub mod debug;
+
 // Legacy module organization (maintained for compatibility)
 pub mod foundation;
 pub mod ecs;

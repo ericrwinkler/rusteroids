@@ -4,6 +4,8 @@
 //! and basic collision response for common shapes.
 
 pub mod collision;
+pub mod collision_layers;
+pub mod collision_system;
 
 pub use collision::{
     CollisionSystem,
@@ -11,6 +13,8 @@ pub use collision::{
     CollisionEvent,
     BoundingSphere,
 };
+pub use collision_layers::CollisionLayers;
+pub use collision_system::{PhysicsCollisionSystem, CollisionPair};
 
 /// Physics system placeholder
 pub struct PhysicsSystem {

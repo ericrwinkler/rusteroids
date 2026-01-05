@@ -2,6 +2,7 @@
 
 pub mod ui_input;
 pub mod collision;
+pub mod picking;
 
 /// Input manager
 pub struct InputManager {

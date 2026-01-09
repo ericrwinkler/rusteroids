@@ -8,10 +8,11 @@ pub mod collision_layers;
 pub mod collision_system;
 
 pub use collision::{
-    CollisionSystem,
     CollisionShape,
-    CollisionEvent,
     BoundingSphere,
+    Ray,
+    RayHit,
+    Triangle,
 };
 pub use collision_layers::CollisionLayers;
 pub use collision_system::{PhysicsCollisionSystem, CollisionPair};

@@ -233,8 +233,10 @@ impl OctreeNode {
         // Check entities in this node
         for entity in &self.entities {
             let entity_distance_sq = (entity.position - center).magnitude_squared();
-            let combined_radius = radius + entity.radius;
             
+            // Check if entity's bounding sphere intersects query sphere
+            // Distance between centers must be <= sum of radii
+            let combined_radius = radius + entity.radius;
             if entity_distance_sq <= combined_radius * combined_radius {
                 results.push(*entity);
             }
@@ -401,9 +403,9 @@ impl Octree {
     pub fn query_nearby(&self, entity_id: Entity) -> Vec<Entity> {
         // First, find the entity in the octree
         if let Some(entity_data) = self.find_entity(entity_id) {
-            // Query using the entity's position and radius, plus some buffer for safety
-            let query_radius = entity_data.radius * 2.0; // Query double the radius
-            let results = self.query_radius(entity_data.position, query_radius);
+            // Query using the entity's position and radius
+            // query_radius() will check: distance <= query_radius + other_entity.radius
+            let results = self.query_radius(entity_data.position, entity_data.radius);
             
             // Convert to just Entity IDs
             results.into_iter().map(|e| e.id).collect()

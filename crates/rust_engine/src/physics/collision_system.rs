@@ -9,7 +9,8 @@
 //! ecs/systems/collision_system.rs
 
 use crate::spatial::spatial_query::SpatialQuery;
-use crate::ecs::Entity;
+use crate::ecs::{Entity, World};
+use crate::ecs::components::TransformComponent;
 use crate::physics::collision::CollisionShape;
 use crate::physics::collision_layers::CollisionLayers;
 use std::collections::{HashMap, HashSet};
@@ -83,20 +84,18 @@ impl PhysicsCollisionSystem {
         mask: u32,
         is_trigger: bool,
         bounding_radius: f32,
+        initial_position: crate::foundation::math::Vec3,
     ) {
-        // Get position from shape center
-        let position = shape.center();
-        
-        // Add to spatial structure
-        self.spatial_query.insert(entity, position, bounding_radius);
-        
-        // Store collider data
+        // Store collider data (shape in model space)
         self.colliders.insert(entity, ColliderData {
             shape,
             layer,
             mask,
             is_trigger,
         });
+        
+        // Insert into spatial query with initial position
+        self.spatial_query.insert(entity, initial_position, bounding_radius);
     }
     
     /// Unregister a collider (called when ColliderComponent is removed)
@@ -106,24 +105,21 @@ impl PhysicsCollisionSystem {
     }
     
     /// Update a collider's position (called when TransformComponent changes)
+    /// Note: With model-space shapes, we only need to update spatial query position
     pub fn update_collider_position(
         &mut self,
         entity: Entity,
-        shape: CollisionShape,
+        position: crate::foundation::math::Vec3,
         bounding_radius: f32,
     ) {
-        let position = shape.center();
         self.spatial_query.update(entity, position, bounding_radius);
-        
-        // Update stored shape
-        if let Some(collider) = self.colliders.get_mut(&entity) {
-            collider.shape = shape;
-        }
+        // Shape remains in model space, no update needed
     }
     
     /// Perform collision detection update (broad-phase + narrow-phase)
+    /// Now takes World reference to access TransformComponents
     /// Returns collision pairs for this frame
-    pub fn detect_collisions(&mut self) -> &HashSet<CollisionPair> {
+    pub fn detect_collisions(&mut self, world: &World) -> &HashSet<CollisionPair> {
         // Move current pairs to previous
         std::mem::swap(&mut self.current_pairs, &mut self.previous_pairs);
         self.current_pairs.clear();
@@ -131,8 +127,8 @@ impl PhysicsCollisionSystem {
         // Phase 1: Broad-phase - get potential collision pairs from spatial query
         let potential_pairs = self.broad_phase();
         
-        // Phase 2: Narrow-phase - test actual shape intersections
-        self.narrow_phase(potential_pairs);
+        // Phase 2: Narrow-phase - test actual shape intersections using transforms
+        self.narrow_phase(potential_pairs, world);
         
         &self.current_pairs
     }
@@ -176,11 +172,11 @@ impl PhysicsCollisionSystem {
         potential_pairs.into_iter().collect()
     }
     
-    /// Narrow-phase: Test actual shape intersections
+    /// Narrow-phase: Test actual shape intersections using TransformComponents
     /// GEA 13.3.4: "The narrow phase performs detailed shape-to-shape tests"
-    fn narrow_phase(&mut self, potential_pairs: Vec<CollisionPair>) {
+    fn narrow_phase(&mut self, potential_pairs: Vec<CollisionPair>, world: &World) {
         for pair in potential_pairs {
-            // Get collision shapes
+            // Get collision shapes (model space)
             let shape_a = match self.colliders.get(&pair.entity_a) {
                 Some(collider) => &collider.shape,
                 None => continue,
@@ -191,8 +187,32 @@ impl PhysicsCollisionSystem {
                 None => continue,
             };
             
-            // Test intersection
-            if shape_a.intersects(shape_b) {
+            // Get transforms
+            let transform_a = match world.get_component::<TransformComponent>(pair.entity_a) {
+                Some(t) => t,
+                None => continue,
+            };
+            
+            let transform_b = match world.get_component::<TransformComponent>(pair.entity_b) {
+                Some(t) => t,
+                None => continue,
+            };
+            
+            // Transform shapes to world space on-the-fly
+            let world_shape_a = shape_a.to_world_space(
+                transform_a.position,
+                transform_a.rotation,
+                transform_a.scale,
+            );
+            
+            let world_shape_b = shape_b.to_world_space(
+                transform_b.position,
+                transform_b.rotation,
+                transform_b.scale,
+            );
+            
+            // Test intersection in world space
+            if world_shape_a.intersects(&world_shape_b) {
                 self.current_pairs.insert(pair);
             }
         }
@@ -227,6 +247,17 @@ impl PhysicsCollisionSystem {
     /// Get spatial query for direct access (e.g., for visualization)
     pub fn spatial_query(&self) -> &dyn SpatialQuery {
         self.spatial_query.as_ref()
+    }
+    
+    /// Get mutable spatial query for direct access (e.g., for rebuilding octree)
+    pub fn spatial_query_mut(&mut self) -> &mut dyn SpatialQuery {
+        self.spatial_query.as_mut()
+    }
+    
+    /// Get the radius stored in the spatial query for an entity
+    /// Returns None if entity not found
+    pub fn get_spatial_query_radius(&self, entity: Entity) -> Option<f32> {
+        self.spatial_query.get_entity_data(entity).map(|(_, radius)| radius)
     }
     
     /// Get collider shape for an entity

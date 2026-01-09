@@ -38,10 +38,7 @@ pub struct ColliderComponent {
 impl ColliderComponent {
     /// Create a new collider with default settings
     pub fn new(shape: CollisionShape) -> Self {
-        let bounding_radius = match &shape {
-            CollisionShape::Sphere(sphere) => sphere.radius,
-            CollisionShape::Mesh(mesh) => mesh.bounding_sphere.radius,
-        };
+        let bounding_radius = shape.local_bounding_radius();
         
         Self {
             shape,

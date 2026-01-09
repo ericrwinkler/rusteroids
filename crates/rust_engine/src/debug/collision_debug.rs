@@ -118,20 +118,25 @@ impl CollisionDebugVisualizer {
             self.colors.shape_default
         };
         
+        // Note: For visualization, we just show local bounding sphere (no transform applied)
+        // For accurate visualization, would need TransformComponent passed in
         match shape {
-            CollisionShape::Sphere(sphere) => {
+            CollisionShape::Sphere(radius) => {
+                // TODO: Need position from TransformComponent for accurate visualization
+                // For now, draw at origin (visualization will be inaccurate)
                 self.debug_draw.draw_sphere(
-                    sphere.center,
-                    sphere.radius,
+                    Vec3::zeros(), // Placeholder - needs position from TransformComponent
+                    *radius,
                     color,
                     0.0, // One frame
                 );
             }
-            CollisionShape::Mesh(mesh) => {
-                // Draw bounding sphere for mesh collision shape
+            CollisionShape::Mesh(template) => {
+                // Draw local bounding sphere (at origin)
+                // TODO: Need position/rotation from TransformComponent for accurate visualization
                 self.debug_draw.draw_sphere(
-                    mesh.bounding_sphere.center,
-                    mesh.bounding_sphere.radius,
+                    Vec3::zeros(), // Placeholder
+                    template.local_bounding_radius,
                     color,
                     0.0,
                 );

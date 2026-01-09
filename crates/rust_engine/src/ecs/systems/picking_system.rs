@@ -5,7 +5,7 @@
 use crate::ecs::{World, Entity};
 use crate::input::picking::MouseState;
 use crate::render::Camera;
-use crate::physics::{CollisionSystem, CollisionShape};
+use crate::physics::CollisionShape;
 use crate::spatial::Octree;
 use crate::ecs::components::{PickableComponent, SelectionComponent, TransformComponent};
 
@@ -55,6 +55,9 @@ pub struct PickingSystem {
     
     /// Whether to perform hover detection (can be disabled for performance)
     hover_enabled: bool,
+    
+    /// Use simple sphere collision for picking (much faster than triangle meshes)
+    use_simple_picking: bool,
 }
 
 impl PickingSystem {
@@ -70,6 +73,7 @@ impl PickingSystem {
             hovered_entity: None,
             layer_mask: 0xFFFFFFFF, // All layers by default
             hover_enabled: true,
+            use_simple_picking: true, // Use sphere collision by default (faster)
         }
     }
 
@@ -104,6 +108,14 @@ impl PickingSystem {
     pub fn set_hover_enabled(&mut self, enabled: bool) {
         self.hover_enabled = enabled;
     }
+    
+    /// Enable or disable simple picking (sphere-only collision, much faster)
+    /// 
+    /// When enabled, uses bounding spheres for picking instead of accurate triangle meshes.
+    /// This is much faster but less precise.
+    pub fn set_simple_picking(&mut self, enabled: bool) {
+        self.use_simple_picking = enabled;
+    }
 
     /// Perform picking operation
     ///
@@ -121,7 +133,6 @@ impl PickingSystem {
         world: &mut World,
         camera: &Camera,
         octree: &Octree,
-        collision_system: &CollisionSystem,
         shape_provider: &dyn Fn(Entity) -> Option<CollisionShape>,
         current_frame: u64,
     ) {
@@ -133,11 +144,12 @@ impl PickingSystem {
             // Generate world-space ray from camera
             let ray = camera.screen_to_world_ray(ndc_x, ndc_y);
 
-            // Collect pickable entities with collision shapes
-            let shapes = self.collect_pickable_shapes(world, shape_provider);
+            // Use octree to filter entities along the ray path (broad phase)
+            let candidates = self.collect_ray_candidates(world, octree, &ray, shape_provider);
 
-            // Ray cast to find hit
-            let hit = collision_system.ray_cast_first(&ray, octree, &shapes);
+            // Ray cast against filtered candidates only (narrow phase)
+            let hit = self.ray_cast_shapes(world, &ray, &candidates);
+            
             println!("PickingSystem: Click at ({:.2}, {:.2})", 
                      self.mouse_state.screen_x, self.mouse_state.screen_y);
             
@@ -189,15 +201,21 @@ impl PickingSystem {
         self.selected_entity = None;
     }
 
-    /// Helper: Collect shapes for all pickable entities
-    fn collect_pickable_shapes(
+    /// Helper: Collect entities along ray path using octree (broad phase)
+    /// This dramatically reduces the number of expensive triangle tests
+    fn collect_ray_candidates(
         &self,
         world: &World,
+        _octree: &Octree,
+        ray: &crate::physics::collision::Ray,
         shape_provider: &dyn Fn(Entity) -> Option<CollisionShape>,
     ) -> Vec<(Entity, CollisionShape)> {
-        let mut shapes = Vec::new();
+        use crate::physics::collision::primitives::BoundingSphere;
+        
+        let mut candidates = Vec::new();
 
-        // Iterate over all entities with both PickableComponent and TransformComponent
+        // Quick sphere-ray intersection test for all entities
+        // This is much cheaper than octree traversal and gives us good culling
         for entity in world.entities() {
             // Check if entity has required components
             if let (Some(pickable), Some(transform)) = (
@@ -214,14 +232,81 @@ impl PickingSystem {
                     continue;
                 }
 
+                // Early-out: Test bounding sphere against ray (if radius is provided)
+                if let Some(radius) = pickable.collision_radius {
+                    let bounding_sphere = BoundingSphere::new(transform.position, radius);
+                    if bounding_sphere.intersect_ray(ray).is_none() {
+                        continue; // Ray doesn't hit this entity's bounding sphere
+                    }
+                }
+
                 // Get collision shape from provider
                 if let Some(shape) = shape_provider(*entity) {
-                    shapes.push((*entity, shape));
+                    // If simple picking is enabled, convert mesh shapes to spheres
+                    if self.use_simple_picking {
+                        match shape {
+                            CollisionShape::Mesh(_) => {
+                                // Use bounding sphere instead of mesh for picking (if available)
+                                if let Some(radius) = pickable.collision_radius {
+                                    let sphere_shape = CollisionShape::Sphere(radius);
+                                    candidates.push((*entity, sphere_shape));
+                                } else {
+                                    // No radius provided, use the mesh shape
+                                    candidates.push((*entity, shape));
+                                }
+                            }
+                            CollisionShape::Sphere(_) => {
+                                candidates.push((*entity, shape));
+                            }
+                        }
+                    } else {
+                        candidates.push((*entity, shape));
+                    }
                 }
             }
         }
 
-        shapes
+        candidates
+    }
+
+    /// Helper: Ray cast against collected shapes, transforming from model-space to world-space
+    fn ray_cast_shapes(
+        &self,
+        world: &World,
+        ray: &crate::physics::collision::Ray,
+        shapes: &[(Entity, CollisionShape)],
+    ) -> Option<crate::physics::collision::RayHit> {
+        use crate::physics::collision::RayHit;
+        
+        let mut closest_hit: Option<RayHit> = None;
+        let mut closest_distance = f32::MAX;
+
+        for (entity, model_shape) in shapes {
+            // Get transform to convert model-space shape to world-space
+            if let Some(transform) = world.get_component::<TransformComponent>(*entity) {
+                // Transform shape to world-space
+                let world_shape = model_shape.to_world_space(
+                    transform.position,
+                    transform.rotation,
+                    transform.scale,
+                );
+
+                // Test ray intersection with world-space shape
+                if let Some((distance, point, normal)) = world_shape.intersect_ray_detailed(ray) {
+                    if distance < closest_distance {
+                        closest_distance = distance;
+                        closest_hit = Some(RayHit {
+                            entity: *entity,
+                            distance,
+                            point,
+                            normal,
+                        });
+                    }
+                }
+            }
+        }
+
+        closest_hit
     }
 
     /// Helper: Update hover state

@@ -6,10 +6,8 @@
 //! - Camera positioned at 30-degree angle for clear view
 //! - Real-time octree subdivision based on entity density
 
-#![allow(dead_code)]
-
 use rust_engine::spatial::{Octree, OctreeConfig, OctreeSpatialQuery};
-use rust_engine::physics::{CollisionSystem, CollisionShape, CollisionLayers};
+use rust_engine::physics::{CollisionShape, CollisionLayers};
 use rust_engine::scene::{AABB, SceneManager};
 use rust_engine::assets::ObjLoader;
 use rust_engine::ecs::{World, Entity, LightingSystem as EcsLightingSystem};
@@ -21,31 +19,28 @@ use rust_engine::render::{
     FontAtlas,
 };
 use rust_engine::render::resources::materials::{Material, UnlitMaterialParams, StandardMaterialParams};
-use rust_engine::foundation::math::{Vec3, Quat, Transform};
+use rust_engine::foundation::math::Vec3;
 use glfw::{Action, Key, WindowEvent};
 use std::time::Instant;
 use std::f32::consts::PI;
 
 // Octree visualization settings
 const OCTREE_SIZE: f32 = 100.0;  // Octree bounds: -50 to +50 on each axis
-const CAMERA_DISTANCE: f32 = 200.0;
-const CAMERA_ANGLE: f32 = 30.0 * PI / 180.0;  // 30 degrees
 
 // Entity counts
 const NUM_SMALL_MESH: usize = 15;
 const NUM_SMALL_SPHERE: usize = 10;
 const NUM_LARGE_MESH: usize = 3;
 const NUM_LARGE_SPHERE: usize = 6;
+const NUM_MONKEY: usize = 5;
 
 // Movement speeds
 const SMALL_SHIP_SPEED: f32 = 6.0;
 const LARGE_SHIP_SPEED: f32 = 3.0;
 const SMALL_SHIP_SIZE: f32 = 0.8;
 const LARGE_SHIP_SIZE: f32 = 2.0;
-
-// Visualization colors
-const OCTREE_LINE_COLOR: [f32; 4] = [0.0, 0.8, 1.0, 0.3];  // Cyan with transparency
-const ACTIVE_NODE_COLOR: [f32; 4] = [1.0, 0.5, 0.0, 0.5];  // Orange for nodes with entities
+const MONKEY_SIZE: f32 = 1.5;
+const MONKEY_SPEED: f32 = 4.0;
 
 /// Type of collision shape used for a ship
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,9 +56,7 @@ struct Ship {
     velocity: Vec3,
     size: f32,  // Visual scale
     collision_radius: f32,  // Actual collision bounding sphere radius
-    bounds_extents: Vec3,
     original_color: Vec3,  // Store original color to restore after collision
-    is_colliding: bool,     // Track collision state
     collision_shape_type: CollisionShapeType,  // Track what kind of collision to use
     mesh_type: MeshType,  // Track which mesh this ship uses (for collision matching)
 }
@@ -76,13 +69,7 @@ pub struct OctreeVisualizationApp {
     world: World,
     lighting_system: EcsLightingSystem,
     
-    // Octree
-    octree: Octree,
-    
-    // Collision system (old - kept for backwards compatibility)
-    collision_system: CollisionSystem,
-    
-    // ECS Collision system (new modular system)
+    // ECS Collision system (owns the octree)
     ecs_collision_system: EcsCollisionSystem,
     
     // Ships
@@ -91,16 +78,18 @@ pub struct OctreeVisualizationApp {
     // Visualization meshes
     small_ship_mesh: Option<Mesh>,
     large_ship_mesh: Option<Mesh>,
+    monkey_mesh: Option<Mesh>,
+    sphere_mesh: Option<Mesh>,
     wireframe_cube_mesh: Mesh,
     
     // Visualization entities (octree node cubes)
     visualization_entities: Vec<Entity>,
     
-    // Ray visualization entities (for mouse picking debug)
-    ray_visualization_entities: Vec<Entity>,
-    
-    // Collision radius visualization sphere (for selected entity)
+    // Collision radius visualization sphere (for selected entity's query radius)
     collision_radius_sphere: Option<Entity>,
+    
+    // Bounding sphere visualization for nearby entities (cyan entities)
+    nearby_bounding_spheres: std::collections::HashMap<Entity, Entity>,
     
     // Picking system (replaces old manual mouse handling)
     picking_system: PickingSystem,
@@ -124,7 +113,6 @@ pub struct OctreeVisualizationApp {
     fps_update_timer: Instant,
     frame_count: u32,
     current_fps: f32,
-    debug_frame_counter: u64,
     
     // UI
     ui_manager: rust_engine::ui::UIManager,
@@ -201,7 +189,23 @@ impl OctreeVisualizationApp {
             30  // For large ships (doubled)
         )?;
         
-        // 4. Cube pool for octree visualization
+        // 4. Monkey pool for collision objects
+        let monkey_mesh = ObjLoader::load_obj("resources/models/monkey.obj")?;
+        let monkey_material = Material::standard_pbr(StandardMaterialParams {
+            base_color: Vec3::new(0.6, 0.4, 0.2), // Brown color
+            alpha: 1.0,
+            metallic: 0.1,
+            roughness: 0.7,
+            ..Default::default()
+        });
+        graphics_engine.create_mesh_pool(
+            MeshType::Monkey,
+            &monkey_mesh,
+            &[monkey_material],
+            20  // For monkeys
+        )?;
+        
+        // 5. Cube pool for octree visualization
         let cube_mesh = Mesh::cube();
         let cube_material = Material::transparent_unlit(UnlitMaterialParams {
             color: Vec3::new(0.3, 0.7, 1.0),
@@ -259,14 +263,9 @@ impl OctreeVisualizationApp {
             min_node_size: 10.0,  // Adjusted for 200x200x200 space
         };
         
+        // Create ECS collision system with its own octree
         let octree = Octree::new(octree_bounds, octree_config);
-        
-        // Create collision system
-        let collision_system = CollisionSystem::new();
-        
-        // Create ECS collision system with octree wrapper
-        // NOTE: We need to clone octree here for the spatial query
-        let octree_query = Box::new(OctreeSpatialQuery::new(octree.clone()));
+        let octree_query = Box::new(OctreeSpatialQuery::new(octree));
         let mut ecs_collision_system = EcsCollisionSystem::new(octree_query);
         ecs_collision_system.enable_debug(true); // Enable debug visualization
         
@@ -319,16 +318,16 @@ impl OctreeVisualizationApp {
             scene_manager,
             world,
             lighting_system,
-            octree,
-            collision_system,
             ecs_collision_system,
             ships: Vec::new(),
             small_ship_mesh: None,
             large_ship_mesh: None,
+            monkey_mesh: None,
+            sphere_mesh: None,
             wireframe_cube_mesh,
             visualization_entities: Vec::new(),
-            ray_visualization_entities: Vec::new(),
             collision_radius_sphere: None,
+            nearby_bounding_spheres: std::collections::HashMap::new(),
             picking_system,
             camera_move_forward: false,
             camera_move_backward: false,
@@ -347,7 +346,6 @@ impl OctreeVisualizationApp {
             ui_manager,
             fps_label_id,
             start_time: now,
-            debug_frame_counter: 0,
         })
     }
     
@@ -409,6 +407,30 @@ impl OctreeVisualizationApp {
             }
         }
         
+        // Load monkey mesh
+        match ObjLoader::load_obj("resources/models/monkey.obj") {
+            Ok(mesh) => {
+                println!("Loaded monkey mesh: {} vertices", mesh.vertices.len());
+                self.monkey_mesh = Some(mesh);
+            }
+            Err(e) => {
+                eprintln!("Failed to load monkey mesh: {}", e);
+                self.monkey_mesh = Some(Mesh::cube());
+            }
+        }
+        
+        // Load sphere mesh
+        match ObjLoader::load_obj("resources/models/sphere.obj") {
+            Ok(mesh) => {
+                println!("Loaded sphere mesh: {} vertices", mesh.vertices.len());
+                self.sphere_mesh = Some(mesh);
+            }
+            Err(e) => {
+                eprintln!("Failed to load sphere mesh: {}", e);
+                self.sphere_mesh = Some(Mesh::cube());
+            }
+        }
+        
         // Create entities with for loops
         for _ in 0..NUM_SMALL_MESH {
             self.create_small_mesh();
@@ -426,13 +448,17 @@ impl OctreeVisualizationApp {
             self.create_large_sphere();
         }
         
-        let total = NUM_SMALL_MESH + NUM_SMALL_SPHERE + NUM_LARGE_MESH + NUM_LARGE_SPHERE;
+        for _ in 0..NUM_MONKEY {
+            self.create_monkey();
+        }
+        
+        let total = NUM_SMALL_MESH + NUM_SMALL_SPHERE + NUM_LARGE_MESH + NUM_LARGE_SPHERE + NUM_MONKEY;
         println!("Created {} entities:", total);
         println!("  {} small mesh (spaceship) with mesh collision (blue)", NUM_SMALL_MESH);
         println!("  {} small sphere with sphere collision (green)", NUM_SMALL_SPHERE);
         println!("  {} large mesh (frigate) with mesh collision (purple)", NUM_LARGE_MESH);
         println!("  {} large sphere with sphere collision (red)", NUM_LARGE_SPHERE);
-        println!("Octree bounds: {:?}", self.octree.root.bounds);
+        println!("  {} monkey with mesh collision (yellow)", NUM_MONKEY);
         
         // Add directional sunlight
         use rust_engine::ecs::components::lighting::LightFactory;
@@ -459,6 +485,22 @@ impl OctreeVisualizationApp {
         }
         
         Ok(())
+    }
+    
+    /// Calculate bounding radius for a centered mesh
+    /// Returns the distance to the farthest vertex from origin
+    fn calculate_mesh_bounding_radius(mesh: &rust_engine::render::Mesh) -> f32 {
+        let mut max_dist_sq = 0.0f32;
+        
+        for vertex in &mesh.vertices {
+            let x = vertex.position[0];
+            let y = vertex.position[1];
+            let z = vertex.position[2];
+            let dist_sq = x * x + y * y + z * z;
+            max_dist_sq = max_dist_sq.max(dist_sq);
+        }
+        
+        max_dist_sq.sqrt()
     }
     
     fn create_small_mesh(&mut self) {
@@ -493,25 +535,13 @@ impl OctreeVisualizationApp {
         use rust_engine::foundation::math::Transform;
         let transform = Transform {
             position,
-            rotation: rust_engine::foundation::math::Quat::identity(),
+            rotation: Self::rotation_from_velocity(velocity),
             scale: Vec3::new(SMALL_SHIP_SIZE, SMALL_SHIP_SIZE, SMALL_SHIP_SIZE),
         };
         
-        // Calculate AABB (bounding box) from mesh geometry for better radius estimate
-        let mut min = Vec3::new(f32::MAX, f32::MAX, f32::MAX);
-        let mut max = Vec3::new(f32::MIN, f32::MIN, f32::MIN);
-        for vertex in &render_mesh.vertices {
-            let pos = Vec3::new(vertex.position[0], vertex.position[1], vertex.position[2]);
-            min.x = min.x.min(pos.x);
-            min.y = min.y.min(pos.y);
-            min.z = min.z.min(pos.z);
-            max.x = max.x.max(pos.x);
-            max.y = max.y.max(pos.y);
-            max.z = max.z.max(pos.z);
-        }
-        let extents = (max - min) * 0.5; // Half-extents
-        let avg_extent = (extents.x + extents.y + extents.z) / 3.0;
-        let collision_radius = avg_extent * SMALL_SHIP_SIZE;
+        // Calculate bounding radius: distance to farthest vertex from center (origin)
+        // Mesh is already centered by obj_loader, so we find max distance from (0,0,0)
+        let collision_radius = Self::calculate_mesh_bounding_radius(&render_mesh) * SMALL_SHIP_SIZE;
         
         let entity = self.scene_manager.create_renderable_entity(
             &mut self.world,
@@ -522,10 +552,12 @@ impl OctreeVisualizationApp {
         );
         
         // Add collision components for new ECS collision system
-        let vertices: Vec<Vec3> = render_mesh.vertices.iter()
+        // Extract MODEL SPACE vertices (no rotation/position applied)
+        let model_vertices: Vec<Vec3> = render_mesh.vertices.iter()
             .map(|v| Vec3::new(v.position[0], v.position[1], v.position[2]))
             .collect();
-        let mesh_shape = CollisionShape::mesh(&vertices, &render_mesh.indices, position, SMALL_SHIP_SIZE);
+        
+        let mesh_shape = CollisionShape::mesh_from_model(&model_vertices, &render_mesh.indices);
         let mut collider = ColliderComponent::new(mesh_shape);
         // Override bounding_radius to match the manually calculated collision_radius
         collider.bounding_radius = collision_radius;
@@ -537,18 +569,14 @@ impl OctreeVisualizationApp {
         self.world.add_component(entity, CollisionStateComponent::default());
         
         // Register with ECS collision system
-        self.ecs_collision_system.register_collider(entity, &collider);
-        
-        self.octree.insert(entity, position, collision_radius);
+        self.ecs_collision_system.register_collider(entity, &collider, &self.world);
         
         self.ships.push(Ship {
             entity,
             velocity,
             size: SMALL_SHIP_SIZE,
             collision_radius,
-            bounds_extents: Vec3::new(SMALL_SHIP_SIZE, SMALL_SHIP_SIZE, SMALL_SHIP_SIZE),
             original_color: color,
-            is_colliding: false,
             collision_shape_type: CollisionShapeType::Mesh,
             mesh_type: MeshType::Spaceship,
         });
@@ -571,7 +599,7 @@ impl OctreeVisualizationApp {
             rng.gen_range(-1.0..1.0),
         ).normalize() * SMALL_SHIP_SPEED;
         
-        let render_mesh = ObjLoader::load_obj("resources/models/sphere.obj").unwrap();
+        let render_mesh = self.sphere_mesh.as_ref().unwrap().clone();
         let color = Vec3::new(0.2, 0.8, 0.2); // Green
         
         use rust_engine::render::resources::materials::StandardMaterialParams;
@@ -586,7 +614,7 @@ impl OctreeVisualizationApp {
         use rust_engine::foundation::math::Transform;
         let transform = Transform {
             position,
-            rotation: rust_engine::foundation::math::Quat::identity(),
+            rotation: Self::rotation_from_velocity(velocity),
             scale: Vec3::new(SMALL_SHIP_SIZE, SMALL_SHIP_SIZE, SMALL_SHIP_SIZE),
         };
         
@@ -599,25 +627,22 @@ impl OctreeVisualizationApp {
         );
         
         // Add collision components for new ECS collision system
-        let sphere_shape = CollisionShape::sphere(position, SMALL_SHIP_SIZE);
+        // Sphere: just radius (position from TransformComponent)
+        let sphere_shape = CollisionShape::sphere(SMALL_SHIP_SIZE);
         let collider = ColliderComponent::new(sphere_shape)
             .with_layers(CollisionLayers::VEHICLE, CollisionLayers::VEHICLE | CollisionLayers::ENVIRONMENT)
             .with_debug_draw(false);
         
         self.world.add_component(entity, collider.clone());
         self.world.add_component(entity, CollisionStateComponent::default());
-        self.ecs_collision_system.register_collider(entity, &collider);
-        
-        self.octree.insert(entity, position, SMALL_SHIP_SIZE);
+        self.ecs_collision_system.register_collider(entity, &collider, &self.world);
         
         self.ships.push(Ship {
             entity,
             velocity,
             size: SMALL_SHIP_SIZE,
             collision_radius: SMALL_SHIP_SIZE,
-            bounds_extents: Vec3::new(SMALL_SHIP_SIZE, SMALL_SHIP_SIZE, SMALL_SHIP_SIZE),
             original_color: color,
-            is_colliding: false,
             collision_shape_type: CollisionShapeType::Sphere,
             mesh_type: MeshType::Sphere,
         });
@@ -655,25 +680,13 @@ impl OctreeVisualizationApp {
         use rust_engine::foundation::math::Transform;
         let transform = Transform {
             position,
-            rotation: rust_engine::foundation::math::Quat::identity(),
+            rotation: Self::rotation_from_velocity(velocity),
             scale: Vec3::new(LARGE_SHIP_SIZE, LARGE_SHIP_SIZE, LARGE_SHIP_SIZE),
         };
         
-        // Calculate AABB (bounding box) from mesh geometry for better radius estimate
-        let mut min = Vec3::new(f32::MAX, f32::MAX, f32::MAX);
-        let mut max = Vec3::new(f32::MIN, f32::MIN, f32::MIN);
-        for vertex in &render_mesh.vertices {
-            let pos = Vec3::new(vertex.position[0], vertex.position[1], vertex.position[2]);
-            min.x = min.x.min(pos.x);
-            min.y = min.y.min(pos.y);
-            min.z = min.z.min(pos.z);
-            max.x = max.x.max(pos.x);
-            max.y = max.y.max(pos.y);
-            max.z = max.z.max(pos.z);
-        }
-        let extents = (max - min) * 0.5; // Half-extents
-        let avg_extent = (extents.x + extents.y + extents.z) / 3.0;
-        let collision_radius = avg_extent * LARGE_SHIP_SIZE;
+        // Calculate bounding radius: distance to farthest vertex from center (origin)
+        // Mesh is already centered by obj_loader, so we find max distance from (0,0,0)
+        let collision_radius = Self::calculate_mesh_bounding_radius(&render_mesh) * LARGE_SHIP_SIZE;
         
         let entity = self.scene_manager.create_renderable_entity(
             &mut self.world,
@@ -684,10 +697,12 @@ impl OctreeVisualizationApp {
         );
         
         // Add collision components for new ECS collision system
-        let vertices: Vec<Vec3> = render_mesh.vertices.iter()
+        // Extract MODEL SPACE vertices (no rotation/position applied)
+        let model_vertices: Vec<Vec3> = render_mesh.vertices.iter()
             .map(|v| Vec3::new(v.position[0], v.position[1], v.position[2]))
             .collect();
-        let mesh_shape = CollisionShape::mesh(&vertices, &render_mesh.indices, position, LARGE_SHIP_SIZE);
+        
+        let mesh_shape = CollisionShape::mesh_from_model(&model_vertices, &render_mesh.indices);
         let mut collider = ColliderComponent::new(mesh_shape);
         // Override bounding_radius to match the manually calculated collision_radius
         collider.bounding_radius = collision_radius;
@@ -697,18 +712,14 @@ impl OctreeVisualizationApp {
         
         self.world.add_component(entity, collider.clone());
         self.world.add_component(entity, CollisionStateComponent::default());
-        self.ecs_collision_system.register_collider(entity, &collider);
-        
-        self.octree.insert(entity, position, collision_radius);
+        self.ecs_collision_system.register_collider(entity, &collider, &self.world);
         
         self.ships.push(Ship {
             entity,
             velocity,
             size: LARGE_SHIP_SIZE,
             collision_radius,
-            bounds_extents: Vec3::new(LARGE_SHIP_SIZE, LARGE_SHIP_SIZE, LARGE_SHIP_SIZE),
             original_color: color,
-            is_colliding: false,
             collision_shape_type: CollisionShapeType::Mesh,
             mesh_type: MeshType::Frigate,
         });
@@ -731,7 +742,7 @@ impl OctreeVisualizationApp {
             rng.gen_range(-1.0..1.0),
         ).normalize() * LARGE_SHIP_SPEED;
         
-        let render_mesh = ObjLoader::load_obj("resources/models/sphere.obj").unwrap();
+        let render_mesh = self.sphere_mesh.as_ref().unwrap().clone();
         let color = Vec3::new(0.8, 0.2, 0.2); // Red
         
         use rust_engine::render::resources::materials::StandardMaterialParams;
@@ -746,7 +757,7 @@ impl OctreeVisualizationApp {
         use rust_engine::foundation::math::Transform;
         let transform = Transform {
             position,
-            rotation: rust_engine::foundation::math::Quat::identity(),
+            rotation: Self::rotation_from_velocity(velocity),
             scale: Vec3::new(LARGE_SHIP_SIZE, LARGE_SHIP_SIZE, LARGE_SHIP_SIZE),
         };
         
@@ -758,67 +769,133 @@ impl OctreeVisualizationApp {
             transform
         );
         
-        // Add collision components for new ECS collision system
-        let sphere_shape = CollisionShape::sphere(position, LARGE_SHIP_SIZE);
+        // Add collision components for new ECS collision system  
+        // Sphere: just radius (position from TransformComponent)
+        let sphere_shape = CollisionShape::sphere(LARGE_SHIP_SIZE);
         let collider = ColliderComponent::new(sphere_shape)
             .with_layers(CollisionLayers::VEHICLE, CollisionLayers::VEHICLE | CollisionLayers::ENVIRONMENT)
             .with_debug_draw(false);
         
         self.world.add_component(entity, collider.clone());
         self.world.add_component(entity, CollisionStateComponent::default());
-        self.ecs_collision_system.register_collider(entity, &collider);
-        
-        self.octree.insert(entity, position, LARGE_SHIP_SIZE);
+        self.ecs_collision_system.register_collider(entity, &collider, &self.world);
         
         self.ships.push(Ship {
             entity,
             velocity,
             size: LARGE_SHIP_SIZE,
             collision_radius: LARGE_SHIP_SIZE,
-            bounds_extents: Vec3::new(LARGE_SHIP_SIZE, LARGE_SHIP_SIZE, LARGE_SHIP_SIZE),
             original_color: color,
-            is_colliding: false,
             collision_shape_type: CollisionShapeType::Sphere,
             mesh_type: MeshType::Sphere,
         });
     }
     
-    /// Helper to create collision mesh from render mesh
-    fn create_collision_mesh_from_render_mesh(
-        render_mesh: &Mesh,
-        position: Vec3,
-        scale: f32,
-    ) -> CollisionShape {
-        // Extract positions and PRE-SCALE them before passing to collision system
-        let positions: Vec<Vec3> = render_mesh.vertices.iter()
-            .map(|v| {
-                let pos = Vec3::new(v.position[0], v.position[1], v.position[2]);
-                pos * scale  // Apply scale here
-            })
+    fn create_monkey(&mut self) {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let bounds = OCTREE_SIZE / 2.0 - 10.0;
+        
+        let position = Vec3::new(
+            rng.gen_range(-bounds..bounds),
+            rng.gen_range(-bounds..bounds),
+            rng.gen_range(-bounds..bounds),
+        );
+        
+        let velocity = Vec3::new(
+            rng.gen_range(-1.0..1.0),
+            rng.gen_range(-1.0..1.0),
+            rng.gen_range(-1.0..1.0),
+        ).normalize() * MONKEY_SPEED;
+        
+        let color = Vec3::new(1.0, 1.0, 0.0); // Yellow
+        
+        // Use cached monkey mesh
+        let render_mesh = self.monkey_mesh.as_ref().unwrap().clone();
+        
+        let material = Material::standard_pbr(StandardMaterialParams {
+            base_color: color,
+            alpha: 1.0,
+            metallic: 0.1,
+            roughness: 0.7,
+            ..Default::default()
+        });
+        
+        use rust_engine::foundation::math::Transform;
+        let transform = Transform {
+            position,
+            rotation: Self::rotation_from_velocity(velocity),
+            scale: Vec3::new(MONKEY_SIZE, MONKEY_SIZE, MONKEY_SIZE),
+        };
+        
+        // Calculate bounding radius: distance to farthest vertex from center (origin)
+        // Mesh is already centered by obj_loader, so we find max distance from (0,0,0)
+        let collision_radius = Self::calculate_mesh_bounding_radius(&render_mesh) * MONKEY_SIZE;
+        
+        let entity = self.scene_manager.create_renderable_entity(
+            &mut self.world,
+            render_mesh.clone(),
+            MeshType::Monkey,
+            material,
+            transform
+        );
+        
+        // Add collision components for new ECS collision system
+        // Extract MODEL SPACE vertices (no rotation/position applied)
+        let model_vertices: Vec<Vec3> = render_mesh.vertices.iter()
+            .map(|v| Vec3::new(v.position[0], v.position[1], v.position[2]))
             .collect();
         
-        // Pass scale=1.0 since vertices are already scaled
-        CollisionShape::mesh(&positions, &render_mesh.indices, position, 1.0)
+        let mesh_shape = CollisionShape::mesh_from_model(&model_vertices, &render_mesh.indices);
+        let mut collider = ColliderComponent::new(mesh_shape);
+        // Override bounding_radius to match the manually calculated collision_radius
+        collider.bounding_radius = collision_radius;
+        let collider = collider
+            .with_layers(CollisionLayers::VEHICLE, CollisionLayers::VEHICLE | CollisionLayers::ENVIRONMENT)
+            .with_debug_draw(false);
+        
+        self.world.add_component(entity, collider.clone());
+        self.world.add_component(entity, CollisionStateComponent::default());
+        self.ecs_collision_system.register_collider(entity, &collider, &self.world);
+        
+        self.ships.push(Ship {
+            entity,
+            velocity,
+            size: MONKEY_SIZE,
+            collision_radius,
+            original_color: color,
+            collision_shape_type: CollisionShapeType::Mesh,
+            mesh_type: MeshType::Monkey,
+        });
     }
-
-    /// Get the collision shape for a ship based on its type
-    fn get_collision_shape(&self, ship: &Ship, position: Vec3) -> CollisionShape {
-        match ship.collision_shape_type {
-            CollisionShapeType::Sphere => {
-                // Simple sphere collision
-                CollisionShape::sphere(position, ship.size)
+    
+    /// Calculate rotation quaternion to make ship point in direction of velocity
+    /// Assumes ship model's forward direction is +Z axis
+    fn rotation_from_velocity(velocity: Vec3) -> rust_engine::foundation::math::Quat {
+        if velocity.magnitude() < 0.001 {
+            return rust_engine::foundation::math::Quat::identity();
+        }
+        
+        let forward = velocity.normalize();
+        let default_forward = Vec3::new(0.0, 0.0, 1.0);
+        
+        // Calculate rotation axis and angle
+        let axis = default_forward.cross(&forward);
+        let axis_length = axis.magnitude();
+        
+        if axis_length < 0.001 {
+            // Vectors are parallel or anti-parallel
+            if default_forward.dot(&forward) < 0.0 {
+                // Anti-parallel: rotate 180 degrees around up axis
+                rust_engine::foundation::math::Quat::from_axis_angle(&Vec3::y_axis(), std::f32::consts::PI)
+            } else {
+                // Parallel: no rotation needed
+                rust_engine::foundation::math::Quat::identity()
             }
-            CollisionShapeType::Mesh => {
-                // Per-vertex mesh collision - use the SAME mesh type that was used for rendering
-                let render_mesh = match ship.mesh_type {
-                    MeshType::Spaceship => self.small_ship_mesh.as_ref().unwrap(),
-                    MeshType::Frigate => self.large_ship_mesh.as_ref().unwrap(),
-                    _ => self.small_ship_mesh.as_ref().unwrap(),  // Fallback
-                };
-                
-                let shape = Self::create_collision_mesh_from_render_mesh(render_mesh, position, ship.size);
-                shape
-            }
+        } else {
+            let axis_normalized = rust_engine::foundation::math::Unit::new_normalize(axis);
+            let angle = default_forward.dot(&forward).acos();
+            rust_engine::foundation::math::Quat::from_axis_angle(&axis_normalized, angle)
         }
     }
     
@@ -921,6 +998,10 @@ impl OctreeVisualizationApp {
                     }
                     
                     transform.position = pos;
+                    // Update rotation to point in direction of travel
+                    transform.rotation = Self::rotation_from_velocity(ship.velocity);
+                    
+                    // Collision shape automatically uses new transform - no manual update needed!
                 }
             }
             
@@ -957,13 +1038,14 @@ impl OctreeVisualizationApp {
     }
     
     fn rebuild_octree(&mut self) {
-        // Clear octree
-        self.octree.clear();
+        // Clear collision system's octree via SpatialQuery interface
+        let spatial_query = self.ecs_collision_system.spatial_query_mut();
+        spatial_query.clear();
         
         // Reinsert all ships with consistent collision radius
         for ship in &self.ships {
             if let Some(transform) = self.world.get_component::<TransformComponent>(ship.entity) {
-                self.octree.insert(ship.entity, transform.position, ship.collision_radius);
+                spatial_query.insert(ship.entity, transform.position, ship.collision_radius);
             }
         }
         
@@ -980,9 +1062,9 @@ impl OctreeVisualizationApp {
         let mut shape_map = std::collections::HashMap::new();
         
         for ship in &self.ships {
-            if let Some(transform) = self.world.get_component::<TransformComponent>(ship.entity) {
-                let shape = self.get_collision_shape(ship, transform.position);
-                shape_map.insert(ship.entity, shape);
+            if let Some(collider) = self.world.get_component::<ColliderComponent>(ship.entity) {
+                // Shapes are now stored in model-space in ColliderComponent
+                shape_map.insert(ship.entity, collider.shape.clone());
             }
         }
         
@@ -992,213 +1074,23 @@ impl OctreeVisualizationApp {
         };
         
         // Use picking system's internal update to handle mouse state
+        // Downcast to OctreeSpatialQuery to get the octree
+        let spatial_query = self.ecs_collision_system.spatial_query();
+        let octree_query = spatial_query.as_any()
+            .downcast_ref::<rust_engine::spatial::OctreeSpatialQuery>()
+            .expect("SpatialQuery must be OctreeSpatialQuery");
+        let octree = octree_query.octree();
+        
         self.picking_system.update(
             &mut self.world,
             &self.camera,
-            &self.octree,
-            &self.collision_system,
+            octree,
             &shape_provider,
             current_frame,
         );
     }
     
-    fn update_collision_radius_visualization(&mut self) {
-        let selected = self.picking_system.get_selected();
-        
-        if let Some(selected_entity) = selected {
-            // Get current transform position (not octree position which may be stale)
-            let (position, radius) = if let Some(transform) = self.world.get_component::<TransformComponent>(selected_entity) {
-                // Find the ship to get its collision radius
-                let ship = self.ships.iter().find(|s| s.entity == selected_entity);
-                if let Some(ship) = ship {
-                    let query_radius = ship.collision_radius * 2.0; // Match query_nearby logic
-                    (transform.position, query_radius)
-                } else {
-                    return;
-                }
-            } else {
-                return;
-            };
-            
-            // Create or update the visualization sphere
-            if let Some(existing_sphere) = self.collision_radius_sphere {
-                // Update existing sphere position and scale
-                if let Some(sphere_transform) = self.world.get_component_mut::<TransformComponent>(existing_sphere) {
-                    sphere_transform.position = position;
-                    sphere_transform.scale = Vec3::new(radius, radius, radius);
-                }
-            } else {
-                // Create new visualization sphere
-                let sphere_mesh = ObjLoader::load_obj("resources/models/sphere.obj").unwrap();
-                
-                use rust_engine::render::resources::materials::UnlitMaterialParams;
-                let material = Material::transparent_unlit(UnlitMaterialParams {
-                    color: Vec3::new(0.5, 0.8, 1.0), // Light blue
-                    alpha: 0.15, // Highly transparent
-                });
-                
-                let mut sphere_transform = Transform::from_position_rotation(
-                    position,
-                    Quat::identity(),
-                );
-                sphere_transform.scale = Vec3::new(radius, radius, radius);
-                
-                let entity = self.scene_manager.create_renderable_entity(
-                    &mut self.world,
-                    sphere_mesh,
-                    MeshType::Sphere,
-                    material,
-                    sphere_transform,
-                );
-                
-                self.collision_radius_sphere = Some(entity);
-            }
-        } else {
-            // No entity selected, destroy visualization sphere if it exists
-            if let Some(sphere_entity) = self.collision_radius_sphere.take() {
-                self.scene_manager.destroy_entity(
-                    &mut self.world,
-                    &mut self.graphics_engine,
-                    sphere_entity,
-                );
-            }
-        }
-    }
-    
-    fn detect_and_handle_collisions(&mut self) {
-        use rust_engine::ecs::components::RenderableComponent;
-        
-        // Use octree for efficient collision detection (broad phase)
-        // For each ship, query nearby entities from the octree and check collisions
-        let mut colliding_entities = std::collections::HashSet::new();
-        
-        // Get selected entity from picking system (if any)
-        let selected = self.picking_system.get_selected();
-        
-        // Track entities that are near the selected ship (for cyan coloring)
-        let mut selected_nearby_entities = std::collections::HashSet::new();
-        
-        // Track entities that are collision targets of the selected ship (for collision detection visualization)
-        let mut selected_collision_targets = std::collections::HashSet::new();
-        if let Some(selected_entity) = selected {
-            // Get selected ship's collision shape
-            if let Some(selected_ship) = self.ships.iter().find(|s| s.entity == selected_entity) {
-                if let Some(selected_transform) = self.world.get_component::<TransformComponent>(selected_entity) {
-                    // Create collision shape based on ship type
-                    let selected_shape = self.get_collision_shape(selected_ship, selected_transform.position);
-                    
-                    // Query all nearby entities from octree (these are candidates for collision detection)
-                    let nearby = self.octree.query_nearby(selected_entity);
-                    for nearby_entity in nearby {
-                        if nearby_entity == selected_entity {
-                            continue;
-                        }
-                        
-                        // Mark as nearby (for cyan coloring)
-                        selected_nearby_entities.insert(nearby_entity);
-                        
-                        // Check collision for actual intersections
-                        if let Some(nearby_ship) = self.ships.iter().find(|s| s.entity == nearby_entity) {
-                            if let Some(nearby_transform) = self.world.get_component::<TransformComponent>(nearby_entity) {
-                                let nearby_shape = self.get_collision_shape(nearby_ship, nearby_transform.position);
-                                
-                                // Use the unified intersects method (handles sphere-sphere, sphere-mesh, mesh-mesh)
-                                if selected_shape.intersects(&nearby_shape) {
-                                    selected_collision_targets.insert(nearby_entity);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        for ship in &self.ships {
-            // Get this ship's current transform
-            let ship_transform = match self.world.get_component::<TransformComponent>(ship.entity) {
-                Some(t) => t,
-                None => continue,
-            };
-            
-            // Query nearby entities using the octree (broad phase)
-            let nearby = self.octree.query_nearby(ship.entity);
-            
-            // Create collision shape for this ship
-            let ship_shape = self.get_collision_shape(ship, ship_transform.position);
-            
-            // For each nearby entity, perform detailed collision check (narrow phase)
-            for nearby_entity in nearby {
-                if nearby_entity.id() == ship.entity.id() {
-                    continue; // Skip self
-                }
-                
-                // Find the nearby ship to get its size
-                let nearby_ship = match self.ships.iter().find(|s| s.entity.id() == nearby_entity.id()) {
-                    Some(s) => s,
-                    None => continue,
-                };
-                
-                // Get nearby entity's transform
-                let nearby_transform = match self.world.get_component::<TransformComponent>(nearby_entity) {
-                    Some(t) => t,
-                    None => continue,
-                };
-                
-                // Create collision shape for nearby ship
-                let nearby_shape = self.get_collision_shape(nearby_ship, nearby_transform.position);
-                
-                // Check if shapes intersect (handles all combinations: sphere-sphere, sphere-mesh, mesh-mesh)
-                if ship_shape.intersects(&nearby_shape) {
-                    colliding_entities.insert(ship.entity);
-                    colliding_entities.insert(nearby_entity);
-                }
-            }
-        }
-        
-        // Update ship collision states
-        for ship in &mut self.ships {
-            ship.is_colliding = colliding_entities.contains(&ship.entity);
-        }
-        
-        // Update material colors based on collision state
-        // Priority: Selected ship (blue) > Nearby ships to selected (cyan) > Colliding (white) > Original
-        for ship in &self.ships {
-            // First, check selection state (immutable borrow)
-            let is_selected = self.world.get_component::<SelectionComponent>(ship.entity)
-                .map_or(false, |sel| sel.selected);
-            
-            // Determine new color based on state
-            let new_color = if is_selected {
-                // Selected ship is BLUE
-                Vec3::new(0.0, 0.0, 1.0)
-            } else if selected_nearby_entities.contains(&ship.entity) {
-                // Ships near the selected ship are CYAN (octree collision detection candidates)
-                Vec3::new(0.0, 1.0, 1.0)
-            } else if ship.is_colliding {
-                // Other colliding ships are WHITE
-                Vec3::new(1.0, 1.0, 1.0)
-            } else {
-                // Non-colliding, non-selected ships keep original color
-                ship.original_color
-            };
-            
-            // Then update renderable (mutable borrow)
-            if let Some(renderable) = self.world.get_component_mut::<RenderableComponent>(ship.entity) {
-                // Update the material color using PBR material
-                use rust_engine::render::resources::materials::StandardMaterialParams;
-                renderable.material = Material::standard_pbr(StandardMaterialParams {
-                    base_color: new_color,
-                    alpha: 1.0,
-                    metallic: 0.1,
-                    roughness: 0.7,
-                    ..Default::default()
-                });
-            }
-        }
-    }
-    
     /// Update ship colors based on ECS collision state
-    /// This streamlines the old detect_and_handle_collisions function (~150 lines -> ~50 lines)
     fn update_ship_colors_from_collision_state(&mut self) {
         use rust_engine::ecs::components::RenderableComponent;
         
@@ -1250,10 +1142,12 @@ impl OctreeVisualizationApp {
                 });
             }
         }
+        
+        // Update bounding sphere visualization for nearby entities
+        self.update_nearby_bounding_spheres(selected, &selected_nearby_entities);
     }
     
     /// Update collision debug visualization using the new debug system
-    /// This replaces the old update_collision_radius_visualization (~60 lines -> ~10 lines)
     fn update_collision_debug_visualization(&mut self) {
         // Get selected entity from picking system
         let selected = self.picking_system.get_selected();
@@ -1326,6 +1220,79 @@ impl OctreeVisualizationApp {
         }
     }
     
+    fn update_nearby_bounding_spheres(&mut self, selected: Option<Entity>, nearby_entities: &std::collections::HashSet<Entity>) {
+        // Remove spheres for entities that are no longer nearby
+        let mut to_remove = Vec::new();
+        for (&entity, &sphere_entity) in &self.nearby_bounding_spheres {
+            // Don't render sphere for selected entity (it has the query radius sphere)
+            // Remove if not in nearby set anymore or is the selected entity
+            if !nearby_entities.contains(&entity) || Some(entity) == selected {
+                to_remove.push(entity);
+                self.scene_manager.destroy_entity(
+                    &mut self.world,
+                    &mut self.graphics_engine,
+                    sphere_entity,
+                );
+            }
+        }
+        for entity in to_remove {
+            self.nearby_bounding_spheres.remove(&entity);
+        }
+        
+        // Create or update spheres for nearby entities
+        for &entity in nearby_entities {
+            // Skip selected entity (it has its own query radius sphere)
+            if Some(entity) == selected {
+                continue;
+            }
+            
+            // Get entity's transform and collider
+            let (position, bounding_radius) = if let Some(transform) = self.world.get_component::<TransformComponent>(entity) {
+                if let Some(collider) = self.world.get_component::<ColliderComponent>(entity) {
+                    (transform.position, collider.bounding_radius)
+                } else {
+                    continue;
+                }
+            } else {
+                continue;
+            };
+            
+            // Update or create sphere
+            if let Some(&sphere_entity) = self.nearby_bounding_spheres.get(&entity) {
+                // Update existing sphere
+                if let Some(sphere_transform) = self.world.get_component_mut::<TransformComponent>(sphere_entity) {
+                    sphere_transform.position = position;
+                    sphere_transform.scale = Vec3::new(bounding_radius, bounding_radius, bounding_radius);
+                }
+            } else {
+                // Create new sphere
+                let sphere_mesh = rust_engine::assets::ObjLoader::load_obj("resources/models/sphere.obj").unwrap();
+                
+                use rust_engine::render::resources::materials::UnlitMaterialParams;
+                let material = Material::transparent_unlit(UnlitMaterialParams {
+                    color: Vec3::new(0.0, 1.0, 1.0), // Cyan
+                    alpha: 0.2, // Semi-transparent
+                });
+                
+                let mut sphere_transform = rust_engine::foundation::math::Transform::from_position_rotation(
+                    position,
+                    rust_engine::foundation::math::Quat::identity(),
+                );
+                sphere_transform.scale = Vec3::new(bounding_radius, bounding_radius, bounding_radius);
+                
+                let sphere_entity = self.scene_manager.create_renderable_entity(
+                    &mut self.world,
+                    sphere_mesh,
+                    rust_engine::render::systems::dynamic::MeshType::Sphere,
+                    material,
+                    sphere_transform,
+                );
+                
+                self.nearby_bounding_spheres.insert(entity, sphere_entity);
+            }
+        }
+    }
+    
     fn update_octree_visualization(&mut self) {
         // Properly despawn old visualization entities to free GPU resources
         for entity in self.visualization_entities.drain(..) {
@@ -1336,8 +1303,14 @@ impl OctreeVisualizationApp {
             );
         }
         
-        // Get all leaf nodes
-        let leaves = self.octree.get_all_leaves();
+        // Get all leaf nodes from collision system's octree
+        // Downcast to OctreeSpatialQuery to access octree
+        let spatial_query = self.ecs_collision_system.spatial_query();
+        let octree_query = spatial_query.as_any()
+            .downcast_ref::<rust_engine::spatial::OctreeSpatialQuery>()
+            .expect("SpatialQuery must be OctreeSpatialQuery");
+        let octree = octree_query.octree();
+        let leaves = octree.get_all_leaves();
         
         // Create visualization cube for each leaf node
         for leaf in leaves {

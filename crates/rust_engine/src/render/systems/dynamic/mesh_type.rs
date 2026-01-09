@@ -23,12 +23,14 @@ pub enum MeshType {
     Spaceship,
     /// Frigate mesh - large capital ships
     Frigate,
+    /// Monkey mesh - Blender's iconic test mesh
+    Monkey,
 }
 
 impl MeshType {
     /// Get all available mesh types
     pub fn all() -> &'static [MeshType] {
-        &[MeshType::Teapot, MeshType::Sphere, MeshType::Cube, MeshType::TextQuad, MeshType::Spaceship, MeshType::Frigate]
+        &[MeshType::Teapot, MeshType::Sphere, MeshType::Cube, MeshType::TextQuad, MeshType::Spaceship, MeshType::Frigate, MeshType::Monkey]
     }
     
     /// Get the default mesh model path for this mesh type
@@ -40,6 +42,7 @@ impl MeshType {
             MeshType::TextQuad => "", // Text quads are generated procedurally, not loaded
             MeshType::Spaceship => "models/spaceship_simple.obj",
             MeshType::Frigate => "models/frigate.obj",
+            MeshType::Monkey => "models/monkey.obj",
         }
     }
     
@@ -52,6 +55,7 @@ impl MeshType {
             MeshType::TextQuad => "TextQuad",
             MeshType::Spaceship => "Spaceship",
             MeshType::Frigate => "Frigate",
+            MeshType::Monkey => "Monkey",
         }
     }
 }

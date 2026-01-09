@@ -12,6 +12,7 @@ use crate::foundation::math::Vec3;
 use crate::scene::AABB;
 use crate::spatial::Octree;
 use std::collections::HashMap;
+use std::any::Any;
 
 /// Abstract interface for spatial partitioning used in broad-phase collision detection
 /// 
@@ -45,6 +46,12 @@ pub trait SpatialQuery: Send + Sync {
     
     /// Get the number of entities in the structure
     fn entity_count(&self) -> usize;
+    
+    /// Downcast to Any for type-specific access (e.g., OctreeSpatialQuery)
+    fn as_any(&self) -> &dyn Any;
+    
+    /// Downcast to Any for mutable type-specific access
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 /// Octree-based implementation of SpatialQuery
@@ -139,6 +146,14 @@ impl SpatialQuery for OctreeSpatialQuery {
     
     fn entity_count(&self) -> usize {
         self.octree.entity_count()
+    }
+    
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }
 

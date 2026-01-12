@@ -8,6 +8,7 @@ use rust_engine::ecs::{
     World, Entity, LightFactory, LightingSystem as EcsLightingSystem,
 };
 use rust_engine::ecs::components::{TransformComponent, LightComponent, RenderableComponent};
+use rust_engine::ecs::systems::TrailSystem;
 use rust_engine::scene::SceneManager;
 use rust_engine::render::{
     Camera,
@@ -76,6 +77,7 @@ pub struct DynamicTeapotApp {
     scene_manager: SceneManager,
     world: World,
     lighting_system: EcsLightingSystem,
+    trail_system: TrailSystem,
     
     frigate_mesh: Option<Mesh>,
     spaceship_mesh: Option<Mesh>,
@@ -92,6 +94,9 @@ pub struct DynamicTeapotApp {
     flyby_spawn_timer: f32,  // Time until next flyby spawn
     flyby_group_2: Option<SpaceshipFormation>,  // Second flyby formation
     flyby_spawn_timer_2: f32,  // Time until second flyby spawn
+    flyby_group_3: Option<SpaceshipFormation>,  // Arced path formation
+    flyby_spawn_timer_3: f32,  // Time until third flyby spawn
+    arc_fighters_time: f32,  // Track time for arc path calculation
     
     // Camera tracking
     camera_target_position: Vec3,
@@ -108,6 +113,9 @@ pub struct DynamicTeapotApp {
     camera_pitch_down: bool,
     camera_yaw: f32,
     camera_pitch: f32,
+    
+    // Simulation control
+    paused: bool,
     
     // Audio
     audio: Option<rust_engine::audio::AudioSystem>,
@@ -233,6 +241,7 @@ impl DynamicTeapotApp {
             scene_manager,
             world,
             lighting_system,
+            trail_system: TrailSystem::new(),
             frigate_mesh: None,
             spaceship_mesh: None,
             spaceship_material: None,
@@ -253,6 +262,9 @@ impl DynamicTeapotApp {
             flyby_spawn_timer: 5.0,  // First flyby after 5 seconds
             flyby_group_2: None,
             flyby_spawn_timer_2: 8.0,  // Second group starts 8 seconds in
+            flyby_group_3: None,
+            flyby_spawn_timer_3: 3.0,  // Arc fighters after 3 seconds
+            arc_fighters_time: 0.0,
             camera_target_position: Vec3::new(80.0, 30.0, 120.0),
             camera_target_lookat: Vec3::new(0.0, 0.0, 0.0),
             start_time,
@@ -265,8 +277,9 @@ impl DynamicTeapotApp {
             camera_yaw_right: false,
             camera_pitch_up: false,
             camera_pitch_down: false,
-            camera_yaw: 0.325,  // Positive yaw for left rotation (~19 degrees)
-            camera_pitch: -0.07,  // Pitch down ~4 degrees (in radians)
+            camera_yaw: -2.158,  // Yaw to look from (80, 30, 120) towards origin (atan2(-0.815, -0.543))
+            camera_pitch: -0.204,  // Pitch to look down from above (asin(-0.204))
+            paused: false,
         }
     }
     
@@ -424,6 +437,9 @@ impl DynamicTeapotApp {
                     transform_scaled
                 );
                 
+                // Formation fighters don't get trails - they're barely moving (just drifting)
+                // Only flyby fighters get trails
+                
                 self.formations[formation_idx].ships.push(FormationShip {
                     entity,
                     offset: local_offset,
@@ -488,6 +504,15 @@ impl DynamicTeapotApp {
                 transform_scaled
             );
             
+            // Add trail emitter to flyby fighter
+            use rust_engine::ecs::components::TrailEmitterComponent;
+            use rust_engine::foundation::math::Vec4;
+            let trail_emitter = TrailEmitterComponent::new()
+                .with_color(Vec4::new(0.3, 0.6, 1.2, 0.6))  // Brighter for fast ships
+                .with_trail_config(20, 0.6, 0.6)  // 20 segments, 0.6 units apart, 0.6s lifetime
+                .with_width(0.12);
+            self.world.add_component(entity, trail_emitter);
+            
             ships.push(FormationShip {
                 entity,
                 offset: v_offset,
@@ -517,6 +542,70 @@ impl DynamicTeapotApp {
         }
     }
     
+    fn spawn_arc_fighters(&mut self) {
+        let spaceship_mesh = self.spaceship_mesh.clone().expect("Spaceship mesh not loaded");
+        let spaceship_material = self.spaceship_material.clone().expect("Spaceship material not loaded");
+        
+        // Spawn 2 fighters side-by-side that will follow an arced path
+        let spawn_position = Vec3::new(30.0, 10.0, -90.0);  // Start right of frigates, slightly above, behind camera
+        
+        log::info!("Spawning arc fighters at {:?}", spawn_position);
+        
+        let mut ships = Vec::new();
+        
+        for i in 0..2 {
+            let side_offset = Vec3::new((i as f32 - 0.5) * 4.0, 0.0, 0.0);  // 4 units apart
+            let position = spawn_position + side_offset;
+            let rotation_quat = Quat::from_euler_angles(0.0, 0.0, 0.0);
+            
+            use rust_engine::foundation::math::Transform;
+            let transform = Transform::from_position_rotation(position, rotation_quat);
+            let transform_scaled = Transform {
+                position: transform.position,
+                rotation: transform.rotation,
+                scale: Vec3::new(0.5, 0.5, 0.5),
+            };
+            let entity = self.scene_manager.create_renderable_entity(
+                &mut self.world,
+                spaceship_mesh.clone(),
+                rust_engine::render::systems::dynamic::MeshType::Spaceship,
+                spaceship_material.clone(),
+                transform_scaled
+            );
+            
+            // Add trail emitter to arc fighter
+            use rust_engine::ecs::components::TrailEmitterComponent;
+            use rust_engine::foundation::math::Vec4;
+            let trail_emitter = TrailEmitterComponent::new()
+                .with_color(Vec4::new(1.0, 0.5, 0.3, 0.7))  // Orange trail for arc fighters
+                .with_trail_config(25, 0.4, 0.8)  // 25 segments, 0.4 units apart, 0.8s lifetime
+                .with_width(0.15);
+            self.world.add_component(entity, trail_emitter);
+            
+            ships.push(FormationShip {
+                entity,
+                offset: side_offset,
+                phase: 0.0,
+                local_offset: side_offset,
+                orbit_phase: 0.0,
+            });
+        }
+        
+        let formation = SpaceshipFormation {
+            parent_frigate: 0,
+            ships,
+            orbit_radius: 0.0,
+            orbit_speed: 0.0,
+            angle_offset: 0.0,
+            pattern_type: 0,
+            variance_x: 0.0,
+            variance_y: 0.0,
+            variance_z: 0.0,
+        };
+        
+        self.flyby_group_3 = Some(formation);
+    }
+
     fn spawn_particle_lights_count(&mut self, z_position: f32, count: usize) {
         use rand::Rng;
         let mut rng = rand::thread_rng();
@@ -847,6 +936,39 @@ impl DynamicTeapotApp {
             }
         }
         
+        // Create billboard mesh for light trails
+        let billboard_mesh = Mesh::billboard_quad();
+        
+        // Load trail texture with alpha falloff on edges
+        let trail_texture_path = "resources/textures/light_trail.png";
+        let trail_image = ImageData::from_file(trail_texture_path)
+            .map_err(|e| format!("Failed to load trail texture: {}", e))?;
+        
+        let trail_texture_handle = self.graphics_engine.upload_texture_from_image_data(
+            trail_image,
+            TextureType::BaseColor
+        )?;
+        
+        // Create transparent unlit material for light trails
+        // Billboards use the TransparentUnlit pipeline, so we should use transparent_unlit()
+        let trail_material = Material::transparent_unlit(UnlitMaterialParams {
+            color: Vec3::new(0.2, 0.6, 1.0),  // Cyan color
+            alpha: 1.0,                        // Fully opaque - texture's alpha channel controls edge falloff
+        })
+        .with_name("Fighter Trail")
+        .with_base_color_texture(trail_texture_handle);
+        
+        if let Err(e) = self.graphics_engine.create_mesh_pool(
+            MeshType::Billboard,
+            &billboard_mesh,
+            &[trail_material],
+            500  // Enough for many trail segments
+        ) {
+            log::error!("Failed to create billboard mesh pool: {}", e);
+            return Err(e);
+        }
+        log::info!("Created billboard trail mesh pool successfully");
+        
         // Spawn the fleet
         self.spawn_fleet_frigates();
         self.spawn_formation_ships();
@@ -878,6 +1000,10 @@ impl DynamicTeapotApp {
                 match event {
                     WindowEvent::Key(Key::Escape, _, Action::Press, _) => {
                         self.window.set_should_close(true);
+                    }
+                    WindowEvent::Key(Key::Space, _, Action::Press, _) => {
+                        self.paused = !self.paused;
+                        println!("Simulation {}", if self.paused { "PAUSED" } else { "RESUMED" });
                     }
                     WindowEvent::Key(Key::W, _, action, _) => {
                         self.camera_move_forward = action == Action::Press || action == Action::Repeat;
@@ -1034,93 +1160,101 @@ impl DynamicTeapotApp {
         let fps_text = format!("FPS: {:.1}", self.current_fps);
         self.ui_manager.update_text(self.fps_label_id, fps_text);
         
-        // Apply slight cyclical drift to frigates to simulate movement
-        for (idx, frigate) in self.frigates.iter_mut().enumerate() {
-            // Slight cyclical drift motion (not moving forward, just drifting)
-            // Stagger each frigate in the cycle with phase offset
-            let drift_phase = elapsed * 0.3 + (idx as f32) * 2.1;  // 2.1 rad offset staggers them nicely
-            frigate.position.x += (drift_phase.sin() * 0.5) * delta_time;
-            frigate.position.y += (drift_phase.cos() * 0.3) * delta_time;
-            frigate.position.z += ((drift_phase * 1.5).sin() * 0.4) * delta_time;
-            
-            // Update frigate entity transform component
-            use rust_engine::ecs::components::TransformComponent;
-            if let Some(transform) = self.world.get_component_mut::<TransformComponent>(frigate.entity) {
-                transform.position = frigate.position;
-                // Mark entity as dirty so scene manager syncs it
-                self.scene_manager.mark_entity_dirty(frigate.entity);
-            }
-        }
-        
-        // Update formation ship positions with minimal cyclical drift
-        for (formation_idx, formation) in self.formations.iter_mut().enumerate() {
-            if formation.parent_frigate >= self.frigates.len() {
-                continue;
-            }
-            
-            let frigate = &self.frigates[formation.parent_frigate];
-            
-            // Group-level drift (whole formation drifts together slightly)
-            let group_drift_phase = elapsed * formation.orbit_speed;
-            let group_drift = Vec3::new(
-                formation.variance_x * group_drift_phase.sin(),
-                formation.variance_y * (group_drift_phase * 0.8).cos(),
-                formation.variance_z * (group_drift_phase * 0.6).sin()
-            );
-            
-            // Calculate formation group center with drift
-            let group_center_offset = Vec3::new(
-                formation.angle_offset.cos() * formation.orbit_radius,
-                (formation.angle_offset * 2.0).sin() * 5.0 + 15.0,  // Higher above frigates
-                formation.angle_offset.sin() * formation.orbit_radius + (formation_idx as f32) * 8.0  // Forward stagger
-            ) + group_drift;
-            
-            for ship in &mut formation.ships {
-                // Individual ship cyclical drift (very subtle)
-                let ship_drift_phase = elapsed * 0.2 + ship.phase;
-                let ship_drift = Vec3::new(
-                    0.3 * ship_drift_phase.sin(),
-                    0.2 * (ship_drift_phase * 1.3).cos(),
-                    0.3 * (ship_drift_phase * 0.7).sin()
-                );
+        // Only update simulation if not paused
+        if !self.paused {
+            // Apply slight cyclical drift to frigates to simulate movement
+            for (idx, frigate) in self.frigates.iter_mut().enumerate() {
+                // Slight cyclical drift motion (not moving forward, just drifting)
+                // Stagger each frigate in the cycle with phase offset
+                let drift_phase = elapsed * 0.3 + (idx as f32) * 2.1;  // 2.1 rad offset staggers them nicely
+                frigate.position.x += (drift_phase.sin() * 0.5) * delta_time;
+                frigate.position.y += (drift_phase.cos() * 0.3) * delta_time;
+                frigate.position.z += ((drift_phase * 1.5).sin() * 0.4) * delta_time;
                 
-                // Final position: frigate + group offset + V formation offset + drifts
-                let new_position = frigate.position + group_center_offset + ship.local_offset + ship_drift;
-                
-                // Update ship transform
+                // Update frigate entity transform component
                 use rust_engine::ecs::components::TransformComponent;
-                if let Some(transform) = self.world.get_component_mut::<TransformComponent>(ship.entity) {
-                    transform.position = new_position;
-                    // Keep ships pointing forward (same orientation as frigate)
-                    transform.rotation = Quat::from_euler_angles(0.0, 0.0, 0.0);
-                    self.scene_manager.mark_entity_dirty(ship.entity);
+                if let Some(transform) = self.world.get_component_mut::<TransformComponent>(frigate.entity) {
+                    transform.position = frigate.position;
+                    // Mark entity as dirty so scene manager syncs it
+                    self.scene_manager.mark_entity_dirty(frigate.entity);
                 }
             }
-        }
-        
-        // Sync all entity transforms to scene manager for rendering
-        self.scene_manager.sync_from_world(&mut self.world);
-        
-        // Note: GPU handle allocation and transform updates are handled automatically
-        // by render_entities_from_queue() in render_frame()
-        
-        
-        // Update flyby formation timer and spawn
-        self.flyby_spawn_timer -= delta_time;
-        if self.flyby_spawn_timer <= 0.0 && self.flyby_group.is_none() {
-            self.spawn_flyby_formation(0, -50.0);
-            self.flyby_spawn_timer = 15.0;  // Next flyby in 15 seconds
-        }
-        
-        // Update second flyby formation timer and spawn
-        self.flyby_spawn_timer_2 -= delta_time;
-        if self.flyby_spawn_timer_2 <= 0.0 && self.flyby_group_2.is_none() {
-            self.spawn_flyby_formation(1, -70.0);  // Different frigate, further back
-            self.flyby_spawn_timer_2 = 18.0;  // Next flyby in 18 seconds
-        }
-        
-        // Update flyby formation movement
-        if let Some(ref mut flyby) = self.flyby_group {
+            
+            // Update formation ship positions with minimal cyclical drift
+            for (formation_idx, formation) in self.formations.iter_mut().enumerate() {
+                if formation.parent_frigate >= self.frigates.len() {
+                    continue;
+                }
+                
+                let frigate = &self.frigates[formation.parent_frigate];
+                
+                // Group-level drift (whole formation drifts together slightly)
+                let group_drift_phase = elapsed * formation.orbit_speed;
+                let group_drift = Vec3::new(
+                    formation.variance_x * group_drift_phase.sin(),
+                    formation.variance_y * (group_drift_phase * 0.8).cos(),
+                    formation.variance_z * (group_drift_phase * 0.6).sin()
+                );
+                
+                // Calculate formation group center with drift
+                let group_center_offset = Vec3::new(
+                    formation.angle_offset.cos() * formation.orbit_radius,
+                    (formation.angle_offset * 2.0).sin() * 5.0 + 15.0,  // Higher above frigates
+                    formation.angle_offset.sin() * formation.orbit_radius + (formation_idx as f32) * 8.0  // Forward stagger
+                ) + group_drift;
+                
+                for ship in &mut formation.ships {
+                    // Individual ship cyclical drift (very subtle)
+                    let ship_drift_phase = elapsed * 0.2 + ship.phase;
+                    let ship_drift = Vec3::new(
+                        0.3 * ship_drift_phase.sin(),
+                        0.2 * (ship_drift_phase * 1.3).cos(),
+                        0.3 * (ship_drift_phase * 0.7).sin()
+                    );
+                    
+                    // Final position: frigate + group offset + V formation offset + drifts
+                    let new_position = frigate.position + group_center_offset + ship.local_offset + ship_drift;
+                    
+                    // Update ship transform
+                    use rust_engine::ecs::components::TransformComponent;
+                    if let Some(transform) = self.world.get_component_mut::<TransformComponent>(ship.entity) {
+                        transform.position = new_position;
+                        // Keep ships pointing forward (same orientation as frigate)
+                        transform.rotation = Quat::from_euler_angles(0.0, 0.0, 0.0);
+                        self.scene_manager.mark_entity_dirty(ship.entity);
+                    }
+                }
+            }
+            
+            // Update trail system - generate billboard quads for all trail emitters
+            self.trail_system.update(&mut self.world, delta_time);
+            
+            // Note: GPU handle allocation and transform updates are handled automatically
+            // by render_entities_from_queue() in render_frame()
+            
+            // Update flyby formation timer and spawn
+            self.flyby_spawn_timer -= delta_time;
+            if self.flyby_spawn_timer <= 0.0 && self.flyby_group.is_none() {
+                self.spawn_flyby_formation(0, -50.0);
+                self.flyby_spawn_timer = 15.0;  // Next flyby in 15 seconds
+            }
+            
+            // Update second flyby formation timer and spawn
+            self.flyby_spawn_timer_2 -= delta_time;
+            if self.flyby_spawn_timer_2 <= 0.0 && self.flyby_group_2.is_none() {
+                self.spawn_flyby_formation(1, -70.0);  // Different frigate, further back
+                self.flyby_spawn_timer_2 = 18.0;  // Next flyby in 18 seconds
+            }
+            
+            // Update arc fighters timer and spawn
+            self.flyby_spawn_timer_3 -= delta_time;
+            if self.flyby_spawn_timer_3 <= 0.0 && self.flyby_group_3.is_none() {
+                self.spawn_arc_fighters();
+                self.flyby_spawn_timer_3 = 20.0;  // Next arc flyby in 20 seconds
+            }
+            
+            // Update flyby formation movement
+            if let Some(ref mut flyby) = self.flyby_group {
             const FLYBY_SPEED: f32 = 25.0;
             let mut all_past_camera = true;
             
@@ -1191,63 +1325,72 @@ impl DynamicTeapotApp {
             }
         }
         
-        // Manual camera controls (replace automatic following)
-        let camera_speed = 20.0 * delta_time;
-        let rotation_speed = 2.0 * delta_time;
-        
-        // Update yaw and pitch
-        if self.camera_yaw_left {
-            self.camera_yaw += rotation_speed;
+        // Update arc fighters movement with curved path
+        if let Some(ref mut arc_group) = self.flyby_group_3 {
+            self.arc_fighters_time += delta_time;
+            let t = self.arc_fighters_time;
+            
+            // Arc parameters: create a smooth curved path from left to right
+            const ARC_SPEED: f32 = 15.0;
+            const ARC_RADIUS: f32 = 40.0;
+            const ARC_HEIGHT_VARIATION: f32 = 8.0;
+            
+            let mut all_past = true;
+            
+            for ship in &mut arc_group.ships {
+                // Current position
+                let mut current_pos = Vec3::zeros();
+                if let Some(transform) = self.world.get_component::<TransformComponent>(ship.entity) {
+                    current_pos = transform.position;
+                }
+                
+                // Calculate arced path: horizontal arc from left to right
+                // Use parametric arc: x moves right, z moves forward, slight sine wave for smoothness
+                let arc_angle = t * 0.6;  // Controls arc tightness
+                let forward_speed = ARC_SPEED * delta_time;
+                
+                // Move forward and follow arc
+                current_pos.z += forward_speed;
+                current_pos.x += arc_angle.sin() * ARC_RADIUS * 0.03;  // Gradual rightward drift
+                current_pos.y += (arc_angle * 2.0).sin() * ARC_HEIGHT_VARIATION * 0.01;  // Slight height variation
+                
+                // Calculate velocity direction for banking
+                let next_arc_angle = (t + delta_time) * 0.6;
+                let future_x = current_pos.x + (next_arc_angle.sin() * ARC_RADIUS * 0.03);
+                let future_z = current_pos.z + forward_speed;
+                let velocity_dir = Vec3::new(future_x - current_pos.x, 0.0, future_z - current_pos.z).normalize();
+                
+                // Calculate banking rotation - ships lean into the turn
+                let bank_angle = (next_arc_angle.sin() - arc_angle.sin()) * 3.0;  // Proportional to turn rate
+                let pitch = 0.0;  // Level flight
+                let yaw = velocity_dir.x.atan2(velocity_dir.z);  // Point in movement direction
+                let roll = -bank_angle;  // Bank into turn (negative for right turn)
+                
+                let new_rotation = Quat::from_euler_angles(pitch, yaw, roll);
+                
+                // Update position and rotation
+                if let Some(transform) = self.world.get_component_mut::<TransformComponent>(ship.entity) {
+                    transform.position = current_pos;
+                    transform.rotation = new_rotation;
+                    self.scene_manager.mark_entity_dirty(ship.entity);
+                }
+                
+                // Check if past camera area
+                if current_pos.z < 180.0 {
+                    all_past = false;
+                }
+            }
+            
+            // Despawn if all ships passed
+            if all_past {
+                log::info!("Arc fighters passed camera, despawning");
+                for ship in &arc_group.ships {
+                    self.scene_manager.destroy_entity(&mut self.world, &mut self.graphics_engine, ship.entity);
+                }
+                self.flyby_group_3 = None;
+                self.arc_fighters_time = 0.0;
+            }
         }
-        if self.camera_yaw_right {
-            self.camera_yaw -= rotation_speed;
-        }
-        if self.camera_pitch_up {
-            self.camera_pitch += rotation_speed;
-            self.camera_pitch = self.camera_pitch.min(std::f32::consts::PI / 2.0 - 0.1);
-        }
-        if self.camera_pitch_down {
-            self.camera_pitch -= rotation_speed;
-            self.camera_pitch = self.camera_pitch.max(-std::f32::consts::PI / 2.0 + 0.1);
-        }
-        
-        // Calculate forward and right vectors based on yaw
-        let forward = Vec3::new(
-            -self.camera_yaw.sin(),
-            0.0,
-            -self.camera_yaw.cos()
-        );
-        let right = Vec3::new(
-            self.camera_yaw.cos(),
-            0.0,
-            -self.camera_yaw.sin()
-        );
-        
-        // Update camera position based on WASD input
-        let mut current_pos = self.camera.position;
-        if self.camera_move_forward {
-            current_pos = current_pos + forward * camera_speed;
-        }
-        if self.camera_move_backward {
-            current_pos = current_pos - forward * camera_speed;
-        }
-        if self.camera_move_left {
-            current_pos = current_pos - right * camera_speed;
-        }
-        if self.camera_move_right {
-            current_pos = current_pos + right * camera_speed;
-        }
-        
-        // Calculate look-at point based on yaw and pitch
-        let look_direction = Vec3::new(
-            -self.camera_yaw.sin() * self.camera_pitch.cos(),
-            self.camera_pitch.sin(),
-            -self.camera_yaw.cos() * self.camera_pitch.cos()
-        );
-        let lookat_point = current_pos + look_direction * 10.0;
-        
-        self.camera.set_position(current_pos);
-        self.camera.look_at(lookat_point, Vec3::new(0.0, 1.0, 0.0));
         
         // Move particles backward (simulate ships moving forward through particle field)
         const PARTICLE_SPEED: f32 = 15.0;  // Speed particles move backward
@@ -1357,6 +1500,11 @@ impl DynamicTeapotApp {
                 }
             }
         }
+        } // End of !self.paused block
+        
+        // Sync all entity transforms to scene manager for rendering (always run, even when paused)
+        // This ensures skybox and any other entities stay properly synced
+        self.scene_manager.sync_from_world(&mut self.world);
     }
     
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -1405,6 +1553,9 @@ impl DynamicTeapotApp {
         let render_queue = self.scene_manager.build_render_queue();
         self.graphics_engine.render_entities_from_queue(&render_queue)?;
         
+        // Generate billboard trail quads
+        let billboard_quads = self.trail_system.generate_billboard_quads(&self.world).clone();
+        
         // Build multi-light environment from entity system
         let multi_light_env = self.lighting_system.build_multi_light_environment(
             &self.world,
@@ -1415,12 +1566,13 @@ impl DynamicTeapotApp {
         // Export UI data for rendering
         let ui_data = self.ui_manager.get_render_data();
         
-        // Render frame
+        // Render frame with billboards
         self.graphics_engine.render_frame(
             &rust_engine::render::RenderFrameData {
                 camera: &self.camera,
                 lights: &multi_light_env,
                 ui: &ui_data,
+                billboards: &billboard_quads,
             },
             &mut self.window,
         )?;

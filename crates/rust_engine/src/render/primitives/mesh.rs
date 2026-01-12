@@ -412,6 +412,58 @@ impl Mesh {
 
         Self::new(vertices, indices)
     }
+    
+    /// Create a unit billboard quad mesh for instanced billboard rendering
+    /// 
+    /// Generates a simple quad (two triangles) centered at the origin, facing +Z.
+    /// The quad ranges from -0.5 to +0.5 in X and Y, suitable for per-instance scaling.
+    /// 
+    /// # Usage
+    /// This mesh is designed for instanced rendering where each instance provides
+    /// its own transformation matrix via instance attributes. The billboard orientation
+    /// (screen-aligned, velocity-aligned, etc.) is computed per-instance and passed
+    /// as an instance transform.
+    /// 
+    /// ```rust
+    /// // Create billboard mesh pool
+    /// let billboard_mesh = Mesh::billboard_quad();
+    /// graphics_engine.create_mesh_pool("billboard", billboard_mesh, billboard_material, 1000)?;
+    /// 
+    /// // Each billboard instance will use its own transform matrix
+    /// // computed from camera position and billboard orientation mode
+    /// ```
+    /// 
+    /// # Vertex Layout
+    /// - Position: Ranges from -0.5 to 0.5 in X and Y, Z=0
+    /// - Normal: Points along +Z axis
+    /// - UV: Standard (0,0) bottom-left to (1,1) top-right
+    /// 
+    /// # Coordinate System
+    /// - X+ = Right, X- = Left
+    /// - Y+ = Up, Y- = Down
+    /// - Z+ = Forward (facing camera in local space)
+    pub fn billboard_quad() -> Self {
+        // Flip V coordinate: Graphics APIs typically have texture origin at top-left (0,0)
+        // but our quad has Y+ going up, so V needs to be inverted
+        let vertices = vec![
+            // Bottom-left (V=1.0 because texture top is at bottom of quad)
+            Vertex::new([-0.5, -0.5, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0]),
+            // Bottom-right
+            Vertex::new([0.5, -0.5, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0]),
+            // Top-right (V=0.0 because texture bottom is at top of quad)
+            Vertex::new([0.5, 0.5, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0]),
+            // Top-left
+            Vertex::new([-0.5, 0.5, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0]),
+        ];
+
+        // Two triangles forming a quad (counter-clockwise winding)
+        let indices = vec![
+            0, 1, 2,  // First triangle (bottom-left, bottom-right, top-right)
+            2, 3, 0,  // Second triangle (top-right, top-left, bottom-left)
+        ];
+
+        Self::new(vertices, indices)
+    }
 }
 
 impl Asset for Mesh {

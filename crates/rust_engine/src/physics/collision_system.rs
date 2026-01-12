@@ -18,7 +18,9 @@ use std::collections::{HashMap, HashSet};
 /// Collision pair representing two entities that are colliding
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CollisionPair {
+    /// First entity in the collision pair (always has smaller ID)
     pub entity_a: Entity,
+    /// Second entity in the collision pair (always has larger ID)
     pub entity_b: Entity,
 }
 
@@ -39,6 +41,7 @@ struct ColliderData {
     shape: CollisionShape,
     layer: u32,
     mask: u32,
+    #[allow(dead_code)]
     is_trigger: bool,
 }
 

@@ -3,7 +3,7 @@
 //! This module defines the different types of materials supported by the engine
 //! and provides a unified interface for material management.
 
-use super::{StandardMaterialParams, UnlitMaterialParams, MaterialTextures, TextureHandle};
+use super::{StandardMaterialParams, UnlitMaterialParams, BillboardMaterialParams, MaterialTextures, TextureHandle};
 
 /// Enumeration of supported material types
 #[derive(Debug, Clone)]
@@ -12,6 +12,8 @@ pub enum MaterialType {
     StandardPBR(StandardMaterialParams),
     /// Unlit material for simple color/texture rendering
     Unlit(UnlitMaterialParams),
+    /// Billboard material for particles and effects
+    Billboard(BillboardMaterialParams),
     /// Transparent material with alpha blending
     Transparent {
         /// Base material to make transparent
@@ -76,6 +78,16 @@ impl Material {
         }
     }
     
+    /// Create a new billboard material for particles and effects
+    pub fn billboard(params: BillboardMaterialParams) -> Self {
+        Self {
+            material_type: MaterialType::Billboard(params),
+            textures: MaterialTextures::new(),
+            id: MaterialId(0),
+            name: None,
+        }
+    }
+    
     /// Create a new transparent PBR material with alpha blending
     pub fn transparent_pbr(params: StandardMaterialParams) -> Self {
         Self {
@@ -125,6 +137,9 @@ impl Material {
         // Enable base color texture in material params
         match &mut self.material_type {
             MaterialType::StandardPBR(params) => {
+                params.base_color_texture_enabled = true;
+            }
+            MaterialType::Billboard(params) => {
                 params.base_color_texture_enabled = true;
             }
             MaterialType::Transparent { base_material, .. } => {
@@ -187,11 +202,13 @@ impl Material {
         match &self.material_type {
             MaterialType::StandardPBR(_) => PipelineType::StandardPBR,
             MaterialType::Unlit(_) => PipelineType::Unlit,
+            MaterialType::Billboard(_) => PipelineType::Unlit, // TODO: Create dedicated Billboard pipeline
             MaterialType::Transparent { base_material, .. } => {
                 // Transparent materials use the same pipeline as base but with blending
                 match **base_material {
                     MaterialType::StandardPBR(_) => PipelineType::TransparentPBR,
                     MaterialType::Unlit(_) => PipelineType::TransparentUnlit,
+                    MaterialType::Billboard(_) => PipelineType::TransparentUnlit,
                     MaterialType::Transparent { .. } => {
                         // Nested transparent materials not supported, default to transparent PBR
                         PipelineType::TransparentPBR
@@ -267,6 +284,9 @@ impl Material {
             MaterialType::Unlit(params) => {
                 [params.color.x, params.color.y, params.color.z, params.alpha]
             }
+            MaterialType::Billboard(params) => {
+                params.base_color
+            }
             MaterialType::Transparent { base_material, .. } => {
                 // For transparent materials, get the base color from the underlying material
                 match &**base_material {
@@ -275,6 +295,9 @@ impl Material {
                     }
                     MaterialType::Unlit(params) => {
                         [params.color.x, params.color.y, params.color.z, params.alpha]
+                    }
+                    MaterialType::Billboard(params) => {
+                        params.base_color
                     }
                     MaterialType::Transparent { .. } => {
                         // Nested transparency not supported, return white

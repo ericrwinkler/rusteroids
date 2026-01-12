@@ -1099,10 +1099,12 @@ impl DynamicTeapotApp {
                 }
             }
             MaterialType::Unlit(_) => "Unlit Monkey",
+            MaterialType::Billboard(_) => "Billboard Monkey",
             MaterialType::Transparent { base_material, .. } => {
                 match base_material.as_ref() {
                     MaterialType::StandardPBR(_) => "Transparent PBR Monkey",
                     MaterialType::Unlit(_) => "Transparent Unlit Monkey",
+                    MaterialType::Billboard(_) => "Transparent Billboard Monkey",
                     _ => "Transparent Monkey"
                 }
             }
@@ -2371,6 +2373,7 @@ impl DynamicTeapotApp {
                 camera: &self.camera,
                 lights: &multi_light_env,
                 ui: &ui_data,
+                billboards: &[],  // No trails in dynamic demo
             },
             &mut self.window,
         )?;

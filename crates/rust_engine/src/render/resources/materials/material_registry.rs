@@ -174,6 +174,27 @@ impl MaterialManager {
                 
                 MaterialUBO::Unlit(material_ubo)
             }
+            MaterialType::Billboard(params) => {
+                // Billboard materials use unlit rendering with emission in additional_params
+                let mut material_ubo = UnlitMaterialUBO {
+                    color: params.base_color,
+                    texture_flags: [1, 0, 0, 0], // Enable base color texture
+                    additional_params: [
+                        params.emission_color.x * params.emission_strength,
+                        params.emission_color.y * params.emission_strength,
+                        params.emission_color.z * params.emission_strength,
+                        params.emission_strength
+                    ],
+                    _padding: [0.0; 4],
+                };
+                
+                // Set texture flag if base color texture is present
+                material_ubo = material_ubo.with_texture_flags(
+                    material.textures.base_color.is_some(),
+                );
+                
+                MaterialUBO::Unlit(material_ubo)
+            }
             MaterialType::Transparent { base_material, .. } => {
                 // For transparent materials, use the base material's UBO
                 // Alpha blending is handled by the pipeline, not the UBO
@@ -214,6 +235,23 @@ impl MaterialManager {
                             material_ubo = material_ubo.with_opacity_texture(true);
                         }
                         
+                        MaterialUBO::Unlit(material_ubo)
+                    }
+                    MaterialType::Billboard(params) => {
+                        let mut material_ubo = UnlitMaterialUBO {
+                            color: params.base_color,
+                            texture_flags: [1, 0, 0, 0],
+                            additional_params: [
+                                params.emission_color.x * params.emission_strength,
+                                params.emission_color.y * params.emission_strength,
+                                params.emission_color.z * params.emission_strength,
+                                params.emission_strength
+                            ],
+                            _padding: [0.0; 4],
+                        };
+                        material_ubo = material_ubo.with_texture_flags(
+                            material.textures.base_color.is_some(),
+                        );
                         MaterialUBO::Unlit(material_ubo)
                     }
                     MaterialType::Transparent { .. } => {

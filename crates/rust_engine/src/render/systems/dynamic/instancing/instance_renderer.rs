@@ -102,11 +102,24 @@ impl InstanceData {
                 // Unlit materials don't have emission
                 [0.0, 0.0, 0.0, 0.0]
             }
+            MaterialType::Billboard(params) => {
+                // Billboard materials have emission
+                [params.emission_color.x * params.emission_strength,
+                 params.emission_color.y * params.emission_strength,
+                 params.emission_color.z * params.emission_strength,
+                 params.emission_strength]
+            }
             MaterialType::Transparent { base_material, .. } => {
                 // Handle transparent materials by extracting from base material
                 match base_material.as_ref() {
                     MaterialType::StandardPBR(params) => {
                         [params.emission.x, params.emission.y, params.emission.z, params.emission_strength]
+                    }
+                    MaterialType::Billboard(params) => {
+                        [params.emission_color.x * params.emission_strength,
+                         params.emission_color.y * params.emission_strength,
+                         params.emission_color.z * params.emission_strength,
+                         params.emission_strength]
                     }
                     _ => {
                         [0.0, 0.0, 0.0, 0.0]
@@ -135,6 +148,10 @@ impl InstanceData {
                 // Unlit materials don't use textures
                 [0, 0, 0, 0]
             }
+            MaterialType::Billboard(params) => {
+                // Billboard materials can optionally use base color texture
+                [params.base_color_texture_enabled as u32, 0, 0, 0]
+            }
             MaterialType::Transparent { base_material, .. } => {
                 // Handle transparent materials by extracting from base material
                 match base_material.as_ref() {
@@ -145,6 +162,9 @@ impl InstanceData {
                             0,
                             0,
                         ]
+                    }
+                    MaterialType::Billboard(_params) => {
+                        [1, 0, 0, 0]
                     }
                     _ => {
                         [0, 0, 0, 0]
@@ -167,6 +187,10 @@ impl InstanceData {
                 // Use color from unlit parameters
                 ([params.color.x, params.color.y, params.color.z, params.alpha], 1)
             }
+            MaterialType::Billboard(params) => {
+                // Use base color from billboard parameters
+                (params.base_color, 1)
+            }
             MaterialType::Transparent { base_material, .. } => {
                 // Handle transparent materials by extracting from base material
                 match base_material.as_ref() {
@@ -175,6 +199,9 @@ impl InstanceData {
                     }
                     MaterialType::Unlit(params) => {
                         ([params.color.x, params.color.y, params.color.z, params.alpha], 1)
+                    }
+                    MaterialType::Billboard(params) => {
+                        (params.base_color, 1)
                     }
                     MaterialType::Transparent { .. } => {
                         // Nested transparent materials, use default white

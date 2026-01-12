@@ -61,3 +61,39 @@ impl Default for UnlitMaterialParams {
         }
     }
 }
+
+/// Billboard material parameters for particle effects and light trails
+#[derive(Debug, Clone)]
+pub struct BillboardMaterialParams {
+    /// Base RGBA color
+    pub base_color: [f32; 4],
+    /// Emission color for glow effects
+    pub emission_color: Vec3,
+    /// Emission strength multiplier
+    pub emission_strength: f32,
+    /// Alpha blending mode
+    pub blend_mode: BillboardBlendMode,
+    /// Whether base color texture is enabled
+    pub base_color_texture_enabled: bool,
+}
+
+/// Blending modes for billboard rendering
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BillboardBlendMode {
+    /// Standard alpha blending (src_alpha, 1-src_alpha)
+    AlphaBlend,
+    /// Additive blending for glowing effects (src_alpha, one)
+    Additive,
+}
+
+impl Default for BillboardMaterialParams {
+    fn default() -> Self {
+        Self {
+            base_color: [1.0, 1.0, 1.0, 1.0],
+            emission_color: Vec3::new(0.0, 0.0, 0.0),
+            emission_strength: 0.0,
+            blend_mode: BillboardBlendMode::AlphaBlend,
+            base_color_texture_enabled: false,
+        }
+    }
+}

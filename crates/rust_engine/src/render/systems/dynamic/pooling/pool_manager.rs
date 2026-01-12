@@ -396,6 +396,30 @@ impl MeshPoolManager {
         self.update_stats();
     }
     
+    /// Clear all objects from a specific pool
+    ///
+    /// Despawns all active objects in the specified pool. Useful for transient
+    /// objects like billboards that should be cleared each frame.
+    ///
+    /// # Arguments
+    ///
+    /// * `mesh_type` - Which mesh type pool to clear
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(usize)` - Number of objects cleared
+    /// * `Err(PoolManagerError)` - Pool not found
+    pub fn clear_pool(&mut self, mesh_type: MeshType) -> Result<usize, PoolManagerError> {
+        let pool_resources = self.pools.get_mut(&mesh_type)
+            .ok_or_else(|| PoolManagerError::PoolNotFound { mesh_type })?;
+        
+        let cleared_count = pool_resources.manager.clear_all_objects();
+        self.stats.total_despawned += cleared_count as u64;
+        self.update_stats();
+        
+        Ok(cleared_count)
+    }
+    
     /// Get active objects from a specific pool
     ///
     /// # Arguments
@@ -422,6 +446,26 @@ impl MeshPoolManager {
         self.pools.iter()
             .filter(|(_, pool_resources)| pool_resources.manager.active_count() > 0)
             .map(|(mesh_type, pool_resources)| (*mesh_type, &pool_resources.manager, &pool_resources.shared_resources))
+    }
+    
+    /// Get the texture handle from a specific pool
+    ///
+    /// Returns the texture that was assigned to this pool when it was created.
+    /// All instances in the pool should use this shared texture.
+    ///
+    /// # Arguments
+    ///
+    /// * `mesh_type` - Which mesh type pool to query
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Option<TextureHandle>)` - Texture handle (if any) from the pool
+    /// * `Err(PoolManagerError)` - Pool not found
+    pub fn get_pool_texture(&self, mesh_type: MeshType) -> Result<Option<TextureHandle>, PoolManagerError> {
+        let pool_resources = self.pools.get(&mesh_type)
+            .ok_or_else(|| PoolManagerError::PoolNotFound { mesh_type })?;
+        
+        Ok(pool_resources.texture_handle)
     }
 
     /// Render all active pools using backend interface (with dedicated renderers)

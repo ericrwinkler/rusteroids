@@ -1389,6 +1389,7 @@ impl OctreeVisualizationApp {
                 camera: &self.camera,
                 lights: &multi_light_env,
                 ui: &ui_data,
+                billboards: &[],  // No trails in octree demo
             },
             &mut self.window,
         )?;

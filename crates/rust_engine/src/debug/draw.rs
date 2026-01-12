@@ -15,45 +15,69 @@ pub type DebugShapeId = String;
 pub enum DebugShape {
     /// Line segment from start to end
     Line {
+        /// Starting point of the line
         start: Vec3,
+        /// Ending point of the line
         end: Vec3,
+        /// RGBA color of the line
         color: Vec4,
+        /// How long to display the line (seconds, 0.0 = one frame)
         duration: f32,
     },
     
     /// Sphere at center with radius
     Sphere {
+        /// Center position of the sphere
         center: Vec3,
+        /// Radius of the sphere
         radius: f32,
+        /// RGBA color of the sphere
         color: Vec4,
+        /// How long to display the sphere (seconds, 0.0 = one frame)
         duration: f32,
+        /// Whether to render as wireframe or solid
         wireframe: bool,
     },
     
     /// Box (AABB or OBB) at center with half-extents
     Box {
+        /// Center position of the box
         center: Vec3,
+        /// Half-extents of the box (half-width, half-height, half-depth)
         extents: Vec3,
+        /// Rotation of the box (identity = axis-aligned)
         rotation: Quat,
+        /// RGBA color of the box
         color: Vec4,
+        /// How long to display the box (seconds, 0.0 = one frame)
         duration: f32,
+        /// Whether to render as wireframe or solid
         wireframe: bool,
     },
     
     /// Capsule from start to end with radius
     Capsule {
+        /// Starting point of the capsule spine
         start: Vec3,
+        /// Ending point of the capsule spine
         end: Vec3,
+        /// Radius of the capsule
         radius: f32,
+        /// RGBA color of the capsule
         color: Vec4,
+        /// How long to display the capsule (seconds, 0.0 = one frame)
         duration: f32,
     },
     
     /// Point at position
     Point {
+        /// Position of the point
         position: Vec3,
+        /// RGBA color of the point
         color: Vec4,
+        /// Size of the point (in world units)
         size: f32,
+        /// How long to display the point (seconds, 0.0 = one frame)
         duration: f32,
     },
 }

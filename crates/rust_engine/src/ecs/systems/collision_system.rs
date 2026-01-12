@@ -9,7 +9,7 @@
 
 use crate::ecs::{World, Entity};
 use crate::ecs::components::{ColliderComponent, CollisionStateComponent, TransformComponent};
-use crate::physics::collision_system::{PhysicsCollisionSystem, CollisionPair};
+use crate::physics::collision_system::PhysicsCollisionSystem;
 use crate::spatial::spatial_query::SpatialQuery;
 use crate::debug::collision_debug::CollisionDebugVisualizer;
 use std::collections::HashSet;
@@ -181,13 +181,13 @@ impl EcsCollisionSystem {
             .collect();
         
         // Get selected entity's bounding radius for debug
-        let selected_bounding_radius = if let Some(selected) = self.selected_entity {
+        let _selected_bounding_radius = if let Some(selected) = self.selected_entity {
             world.get_component::<ColliderComponent>(selected).map(|c| c.bounding_radius)
         } else {
             None
         };
         
-        let selected_transform_position = if let Some(selected) = self.selected_entity {
+        let _selected_transform_position = if let Some(selected) = self.selected_entity {
             world.get_component::<TransformComponent>(selected).map(|t| t.position)
         } else {
             None

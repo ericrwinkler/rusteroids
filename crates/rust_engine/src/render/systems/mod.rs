@@ -8,3 +8,4 @@ pub mod batching;
 pub mod dynamic;
 pub mod text;
 pub mod ui;
+pub mod billboard;

@@ -528,6 +528,39 @@ impl DynamicObjectManager {
         self.stats.current_active = self.active_objects.len();
     }
     
+    /// Clear all objects from this manager
+    ///
+    /// Despawns all active objects. Useful for transient objects that should
+    /// be cleared each frame (like billboards).
+    ///
+    /// # Returns
+    ///
+    /// Number of objects cleared
+    pub fn clear_all_objects(&mut self) -> usize {
+        let count = self.active_objects.len();
+        
+        // Mark all objects for cleanup
+        for &handle in &self.active_objects {
+            if let Some(object) = self.object_pool.get_mut_with_handle(handle) {
+                object.state = ResourceState::PendingCleanup;
+            }
+        }
+        
+        // Clean up all objects
+        let objects_to_cleanup: Vec<_> = self.active_objects.iter().copied().collect();
+        for handle in objects_to_cleanup {
+            self.cleanup_object(handle);
+        }
+        
+        // Clear active objects list
+        self.active_objects.clear();
+        
+        // Update statistics
+        self.stats.current_active = 0;
+        
+        count
+    }
+    
     /// Clean up a specific object
     fn cleanup_object(&mut self, handle: DynamicObjectHandle) {
         if self.object_pool.is_handle_valid(handle) {

@@ -25,12 +25,14 @@ pub enum MeshType {
     Frigate,
     /// Monkey mesh - Blender's iconic test mesh
     Monkey,
+    /// Billboard quad - for particles, trails, effects
+    Billboard,
 }
 
 impl MeshType {
     /// Get all available mesh types
     pub fn all() -> &'static [MeshType] {
-        &[MeshType::Teapot, MeshType::Sphere, MeshType::Cube, MeshType::TextQuad, MeshType::Spaceship, MeshType::Frigate, MeshType::Monkey]
+        &[MeshType::Teapot, MeshType::Sphere, MeshType::Cube, MeshType::TextQuad, MeshType::Spaceship, MeshType::Frigate, MeshType::Monkey, MeshType::Billboard]
     }
     
     /// Get the default mesh model path for this mesh type
@@ -43,6 +45,7 @@ impl MeshType {
             MeshType::Spaceship => "models/spaceship_simple.obj",
             MeshType::Frigate => "models/frigate.obj",
             MeshType::Monkey => "models/monkey.obj",
+            MeshType::Billboard => "", // Billboard quads are generated procedurally
         }
     }
     
@@ -56,6 +59,7 @@ impl MeshType {
             MeshType::Spaceship => "Spaceship",
             MeshType::Frigate => "Frigate",
             MeshType::Monkey => "Monkey",
+            MeshType::Billboard => "Billboard",
         }
     }
 }

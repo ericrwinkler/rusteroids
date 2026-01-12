@@ -335,11 +335,13 @@ impl PipelineManager {
         match material_type {
             MaterialType::StandardPBR(_) => PipelineType::StandardPBR,
             MaterialType::Unlit(_) => PipelineType::Unlit,
+            MaterialType::Billboard(_) => PipelineType::Unlit, // TODO: Create dedicated Billboard pipeline
             MaterialType::Transparent { base_material, .. } => {
                 // Transparent materials use the same pipeline as base but with blending
                 match **base_material {
                     MaterialType::StandardPBR(_) => PipelineType::TransparentPBR,
                     MaterialType::Unlit(_) => PipelineType::TransparentUnlit,
+                    MaterialType::Billboard(_) => PipelineType::TransparentUnlit,
                     MaterialType::Transparent { .. } => {
                         // Nested transparent materials not supported, default to transparent PBR
                         PipelineType::TransparentPBR

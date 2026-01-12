@@ -104,7 +104,7 @@ impl CollisionDebugVisualizer {
     /// Visualize a collision shape
     pub fn draw_collision_shape(
         &mut self,
-        entity: Entity,
+        _entity: Entity,
         shape: &CollisionShape,
         is_colliding: bool,
     ) {

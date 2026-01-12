@@ -310,6 +310,7 @@ impl PickingSystem {
     }
 
     /// Helper: Update hover state
+    #[allow(dead_code)]
     fn update_hover_state(
         &mut self,
         world: &mut World,

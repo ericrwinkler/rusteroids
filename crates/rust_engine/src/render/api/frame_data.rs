@@ -10,6 +10,7 @@
 use crate::render::primitives::Camera;
 use crate::render::systems::lighting::MultiLightEnvironment;
 use crate::render::systems::ui::UIRenderData;
+use crate::render::systems::billboard::BillboardQuad;
 
 /// Complete frame rendering data
 /// 
@@ -25,4 +26,7 @@ pub struct RenderFrameData<'a> {
     
     /// UI overlay data (quads, text)
     pub ui: &'a UIRenderData,
+    
+    /// Billboard quads for trails and effects
+    pub billboards: &'a [BillboardQuad],
 }

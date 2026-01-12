@@ -265,6 +265,13 @@ pub fn begin_dynamic_frame(
 ) {
     log::trace!("Dynamic frame started");
     
+    // Clear transient billboards from previous frame
+    if let Some(mgr) = pool_manager {
+        if let Err(e) = mgr.clear_pool(MeshType::Billboard) {
+            log::trace!("No billboard pool to clear: {}", e);
+        }
+    }
+    
     // Update pool manager to process cleanup of manually despawned objects
     if let Some(mgr) = pool_manager {
         mgr.update_all_pools();
@@ -323,3 +330,5 @@ pub fn record_dynamic_draws(
 pub fn get_dynamic_stats(pool_manager: &Option<MeshPoolManager>) -> Option<PoolManagerStats> {
     pool_manager.as_ref().map(|manager| manager.get_stats())
 }
+
+

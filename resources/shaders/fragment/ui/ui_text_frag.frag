@@ -1,6 +1,11 @@
 #version 450
 
-// Fragment input from vertex shader
+// ============================================================================
+// UI Text Fragment Shader
+// Samples glyph atlas and applies text color from push constants
+// ============================================================================
+
+// Input from vertex shader
 layout(location = 0) in vec2 fragTexCoord;
 
 // Output color
@@ -18,6 +23,6 @@ void main() {
     // Sample glyph atlas (alpha channel contains glyph coverage)
     float alpha = texture(glyphAtlas, fragTexCoord).a;
     
-    // Output text color with atlas alpha
+    // Output text color with atlas alpha for transparency
     outColor = vec4(pushConstants.textColor.rgb, pushConstants.textColor.a * alpha);
 }

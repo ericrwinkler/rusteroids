@@ -83,81 +83,100 @@ fn main() {
         return;
     }
 
-    // Process shader files
-    let shader_files = match std::fs::read_dir(&shader_dir) {
-        Ok(files) => files,
-        Err(_) => {
-            eprintln!("info: No shader directory found at: {:?}", shader_dir);
-            return;
-        }
-    };
-
-    let mut compiled_count = 0;
-    for entry in shader_files {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("warning: Error reading shader directory entry: {}", e);
-                continue;
-            }
+    // Process shader files recursively
+    fn compile_shaders_recursive(
+        shader_dir: &Path,
+        target_dir: &Path,
+        compiler_path: &str,
+        compiler_type: CompilerType,
+        compiled_count: &mut i32
+    ) {
+        let shader_files = match std::fs::read_dir(shader_dir) {
+            Ok(files) => files,
+            Err(_) => return,
         };
 
-        let path = entry.path();
-        if let Some(ext) = path.extension() {
-            if ext == "vert" || ext == "frag" || ext == "comp" || ext == "geom" || ext == "tesc" || ext == "tese" {
-                let out_file = target_dir
-                    .join(path.file_stem().unwrap())
-                    .with_extension("spv");
+        for entry in shader_files {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
 
-                // Check if recompilation is needed
-                let needs_compile = if let (Ok(src_meta), Ok(dst_meta)) = (
-                    std::fs::metadata(&path),
-                    std::fs::metadata(&out_file)
-                ) {
-                    src_meta.modified().unwrap() > dst_meta.modified().unwrap()
-                } else {
-                    true // Compile if either file doesn't exist or we can't get metadata
-                };
+            let path = entry.path();
+            
+            // Recurse into subdirectories
+            if path.is_dir() {
+                compile_shaders_recursive(&path, target_dir, compiler_path, compiler_type, compiled_count);
+                continue;
+            }
+            
+            // Skip include files (.glsl) - they're not standalone shaders
+            if let Some(ext) = path.extension() {
+                if ext == "glsl" {
+                    continue;
+                }
+                
+                if ext == "vert" || ext == "frag" || ext == "comp" || ext == "geom" || ext == "tesc" || ext == "tese" {
+                    let out_file = target_dir
+                        .join(path.file_stem().unwrap())
+                        .with_extension("spv");
 
-                if needs_compile {
-                    let status = match compiler_type {
-                        CompilerType::Glslc => {
-                            Command::new(&compiler_path)
-                                .arg(&path)
-                                .arg("-o")
-                                .arg(&out_file)
-                                .status()
-                        }
-                        CompilerType::GlslangValidator => {
-                            Command::new(&compiler_path)
-                                .arg("-V")  // Vulkan semantics
-                                .arg(&path)
-                                .arg("-o")
-                                .arg(&out_file)
-                                .status()
-                        }
+                    // Check if recompilation is needed
+                    let needs_compile = if let (Ok(src_meta), Ok(dst_meta)) = (
+                        std::fs::metadata(&path),
+                        std::fs::metadata(&out_file)
+                    ) {
+                        src_meta.modified().unwrap() > dst_meta.modified().unwrap()
+                    } else {
+                        true // Compile if either file doesn't exist or we can't get metadata
                     };
 
-                    match status {
-                        Ok(s) if s.success() => {
-                            eprintln!("info: Compiled {:?} -> {:?}", path.file_name().unwrap(), out_file.file_name().unwrap());
-                            compiled_count += 1;
+                    if needs_compile {
+                        let status = match compiler_type {
+                            CompilerType::Glslc => {
+                                Command::new(compiler_path)
+                                    .arg("-I")
+                                    .arg("../../resources/shaders") // Allow includes from shader root
+                                    .arg(&path)
+                                    .arg("-o")
+                                    .arg(&out_file)
+                                    .status()
+                            }
+                            CompilerType::GlslangValidator => {
+                                Command::new(compiler_path)
+                                    .arg("-V")  // Vulkan semantics
+                                    .arg("-I../../resources/shaders")
+                                    .arg(&path)
+                                    .arg("-o")
+                                    .arg(&out_file)
+                                    .status()
+                            }
+                        };
+
+                        match status {
+                            Ok(s) if s.success() => {
+                                eprintln!("info: Compiled {:?} -> {:?}", path.file_name().unwrap(), out_file.file_name().unwrap());
+                                *compiled_count += 1;
+                            }
+                            Ok(s) => {
+                                eprintln!("error: Shader compilation failed for {:?} with exit code: {}", path, s.code().unwrap_or(-1));
+                                panic!("Shader compilation failed");
+                            }
+                            Err(e) => {
+                                eprintln!("error: Failed to run shader compiler for {:?}: {}", path, e);
+                                panic!("Failed to execute shader compiler");
+                            }
                         }
-                        Ok(s) => {
-                            eprintln!("error: Shader compilation failed for {:?} with exit code: {}", path, s.code().unwrap_or(-1));
-                            panic!("Shader compilation failed");
-                        }
-                        Err(e) => {
-                            eprintln!("error: Failed to run shader compiler for {:?}: {}", path, e);
-                            panic!("Failed to execute shader compiler");
-                        }
+                    } else {
+                        eprintln!("info: Shader {:?} is up to date", path.file_name().unwrap());
                     }
-                } else {
-                    eprintln!("info: Shader {:?} is up to date", path.file_name().unwrap());
                 }
             }
         }
     }
+    
+    let mut compiled_count = 0;
+    compile_shaders_recursive(&shader_dir, &target_dir, &compiler_path, compiler_type, &mut compiled_count);
 
     if compiled_count > 0 {
         eprintln!("info: Successfully compiled {} shader(s)", compiled_count);

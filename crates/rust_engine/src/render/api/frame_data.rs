@@ -9,7 +9,7 @@
 
 use crate::render::primitives::Camera;
 use crate::render::systems::lighting::MultiLightEnvironment;
-use crate::render::systems::ui::UIRenderData;
+use crate::ui::UIRenderData;
 use crate::render::systems::billboard::BillboardQuad;
 
 /// Complete frame rendering data

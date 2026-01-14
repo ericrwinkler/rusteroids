@@ -5,7 +5,7 @@
 
 use crate::ui::backend::{UIRenderBackend, FontAtlasHandle};
 use crate::render::systems::text::FontAtlas;
-use crate::render::systems::ui::{PanelVertex, UIVertex};
+use crate::ui::rendering::{PanelVertex, UIVertex};
 use crate::render::backends::vulkan::{VulkanRenderer, VulkanError, VulkanResult};
 use crate::foundation::math::Vec4;
 use crate::render::resources::materials::TextureHandle;
@@ -289,7 +289,7 @@ fn ensure_ui_pipeline_initialized(renderer: &mut VulkanRenderer) -> VulkanResult
     }
     
     // Create vertex buffer for dynamic UI rendering
-    use crate::render::systems::ui::UIVertex;
+    use crate::ui::rendering::UIVertex;
     let max_vertices = 600; // 100 quads * 6 vertices each
     let buffer_size = (std::mem::size_of::<UIVertex>() * max_vertices) as vk::DeviceSize;
     

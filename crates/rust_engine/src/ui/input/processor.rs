@@ -1,9 +1,8 @@
 //! UI Input Processing
 //!
-//! Moved from render/systems/ui/input.rs
-//! Input processing is not a rendering concern - it belongs in the input system.
+//! Handles UI-specific input processing separate from rendering.
 
-use crate::render::systems::ui::components::{UIButton, ButtonState};
+use crate::ui::widgets::{UIButton, ButtonState};
 use crate::events::{Event, EventType, EventArg, EventSystem};
 use crate::input::collision;
 

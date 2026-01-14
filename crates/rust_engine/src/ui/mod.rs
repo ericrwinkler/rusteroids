@@ -4,24 +4,35 @@
 //! 
 //! Architecture:
 //! - UIManager: Central UI system managing scene graph, input, and events
-//! - Components: Reuse existing components from render::systems::ui
-//! - UIRenderBackend: Trait for backend-agnostic rendering
+//! - widgets/: UI widget definitions (Panel, Button, Text)
+//! - rendering/: Backend-agnostic rendering infrastructure
+//! - input/: UI input processing
 
 pub mod manager;
 pub mod backend;
+pub mod widgets;
+pub mod rendering;
+pub mod input;
 
 pub use manager::UIManager;
 pub use backend::UIRenderBackend;
 
-// Re-export existing UI components and systems
-pub use crate::render::systems::ui::{
-    UIRenderer, UIRenderCommand,
+// Re-export widgets
+pub use widgets::{
     UIElement, UIPanel, UIText, UIButton, ButtonState,
-    Anchor, HorizontalAlign, VerticalAlign,
+    Anchor, HorizontalAlign, VerticalAlign, UILayout,
 };
 
-// Re-export for external use
-pub use crate::input::ui_input::{UIInputProcessor, MouseButton};
+// Re-export rendering types
+pub use rendering::{
+    UIRenderer, UIRenderCommand, UIRenderData,
+    RenderQuad, RenderText,
+};
+
+// Re-export input types
+pub use input::{UIInputProcessor, UIInputEvent, MouseButton};
+
+// Re-export events
 pub use crate::events::EventSystem;
 
 /// Unique identifier for UI elements

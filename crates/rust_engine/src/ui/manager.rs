@@ -5,9 +5,8 @@
 use super::{UIPanel, UIText, UIButton, UINodeId};
 use super::backend::UIRenderBackend;
 use crate::render::systems::text::FontAtlas;
-use crate::render::systems::ui::{UIRenderer, UIRenderCommand, UIRenderData};
-use crate::render::systems::ui::renderer::{RenderQuad, RenderText};
-use crate::input::ui_input::{UIInputProcessor, MouseButton};
+use crate::ui::rendering::{UIRenderer, UIRenderCommand, UIRenderData, RenderQuad, RenderText};
+use crate::ui::input::{UIInputProcessor, MouseButton};
 use crate::events::EventSystem;
 use crate::foundation::math::Vec2;
 use std::collections::HashMap;
@@ -262,7 +261,7 @@ impl UIManager {
                     let final_y = screen_anchor_y + button.element.position.1;
                     
                     // Determine button color based on state
-                    use crate::render::systems::ui::ButtonState;
+                    use crate::ui::ButtonState;
                     let color = match button.state {
                         ButtonState::Normal => button.normal_color,
                         ButtonState::Hovered => button.hover_color,

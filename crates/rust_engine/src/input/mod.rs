@@ -1,6 +1,5 @@
 //! Input management system
 
-pub mod ui_input;
 pub mod collision;
 pub mod picking;
 

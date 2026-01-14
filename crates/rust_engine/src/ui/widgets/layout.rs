@@ -4,7 +4,7 @@
 
 use crate::foundation::math::Vec2;
 #[allow(unused_imports)] // Used in tests
-use super::components::{UIElement, Anchor};
+use crate::ui::widgets::{UIElement, Anchor};
 
 /// Layout calculator for UI elements
 pub struct UILayout;

@@ -103,6 +103,10 @@ pub struct OctreeVisualizationApp {
     camera_yaw_right: bool,
     camera_pitch_up: bool,
     camera_pitch_down: bool,
+    
+    // Modifier keys for selection
+    ctrl_pressed: bool,
+    shift_pressed: bool,
     camera_yaw: f32,
     camera_pitch: f32,
     
@@ -307,7 +311,10 @@ impl OctreeVisualizationApp {
         
         // Initialize picking system
         let (window_width, window_height) = window.get_size();
-        let picking_system = PickingSystem::new(window_width as u32, window_height as u32);
+        let mut picking_system = PickingSystem::new(window_width as u32, window_height as u32);
+        
+        // Use detailed triangle mesh picking (slower but accurate)
+        picking_system.set_simple_picking(false);
         
         let now = Instant::now();
         
@@ -337,6 +344,9 @@ impl OctreeVisualizationApp {
             camera_yaw_right: false,
             camera_pitch_up: false,
             camera_pitch_down: false,
+            
+            ctrl_pressed: false,
+            shift_pressed: false,
             camera_yaw: initial_yaw,
             camera_pitch: initial_pitch,
             paused: false,
@@ -1081,7 +1091,42 @@ impl OctreeVisualizationApp {
             .expect("SpatialQuery must be OctreeSpatialQuery");
         let octree = octree_query.octree();
         
+        // Check if we should perform box selection (on mouse release after drag)
+        // Box selection is triggered by checking if we were dragging and button was just released
+        // For now, we'll handle box selection in a separate call when mouse is released
+        
         self.picking_system.update(
+            &mut self.world,
+            &self.camera,
+            octree,
+            &shape_provider,
+            current_frame,
+        );
+    }
+    
+    /// Perform box selection (called when drag operation completes)
+    fn perform_box_selection(&mut self, current_frame: u64) {
+        // Pre-collect all shapes
+        let mut shape_map = std::collections::HashMap::new();
+        
+        for ship in &self.ships {
+            if let Some(collider) = self.world.get_component::<ColliderComponent>(ship.entity) {
+                shape_map.insert(ship.entity, collider.shape.clone());
+            }
+        }
+        
+        let shape_provider = |entity: Entity| -> Option<CollisionShape> {
+            shape_map.get(&entity).cloned()
+        };
+        
+        // Get octree
+        let spatial_query = self.ecs_collision_system.spatial_query();
+        let octree_query = spatial_query.as_any()
+            .downcast_ref::<rust_engine::spatial::OctreeSpatialQuery>()
+            .expect("SpatialQuery must be OctreeSpatialQuery");
+        let octree = octree_query.octree();
+        
+        self.picking_system.perform_box_selection(
             &mut self.world,
             &self.camera,
             octree,
@@ -1094,19 +1139,16 @@ impl OctreeVisualizationApp {
     fn update_ship_colors_from_collision_state(&mut self) {
         use rust_engine::ecs::components::RenderableComponent;
         
-        // Get selected entity from picking system
-        let selected = self.picking_system.get_selected();
+        // Get all selected entities from picking system
+        let selected_entities = self.picking_system.get_all_selected();
         
-        // Get nearby entities for the selected ship (for cyan coloring)
-        let selected_nearby_entities: std::collections::HashSet<Entity> = if let Some(selected_entity) = selected {
-            if let Some(collision_state) = self.world.get_component::<CollisionStateComponent>(selected_entity) {
-                collision_state.nearby_entities.clone()
-            } else {
-                std::collections::HashSet::new()
+        // Collect nearby entities for ALL selected ships (for cyan coloring)
+        let mut selected_nearby_entities = std::collections::HashSet::new();
+        for selected_entity in selected_entities {
+            if let Some(collision_state) = self.world.get_component::<CollisionStateComponent>(*selected_entity) {
+                selected_nearby_entities.extend(collision_state.nearby_entities.iter());
             }
-        } else {
-            std::collections::HashSet::new()
-        };
+        }
         
         // Update material colors based on collision state
         // Priority: Selected ship (blue) > Nearby ships to selected (cyan) > Colliding (white) > Original
@@ -1143,8 +1185,75 @@ impl OctreeVisualizationApp {
             }
         }
         
-        // Update bounding sphere visualization for nearby entities
-        self.update_nearby_bounding_spheres(selected, &selected_nearby_entities);
+        // Update bounding sphere visualization for nearby entities (show for first selected)
+        let primary_selected = selected_entities.iter().next().copied();
+        self.update_nearby_bounding_spheres(primary_selected, &selected_nearby_entities);
+    }
+    
+    /// Add selection box visualization to UI render data
+    fn add_selection_box_to_ui(&self, ui_data: &mut rust_engine::ui::UIRenderData) {
+        use rust_engine::ui::RenderQuad;
+        use rust_engine::foundation::math::{Vec2, Vec4};
+        
+        // Only render selection box during active drag
+        if !self.picking_system.is_dragging() {
+            return;
+        }
+        
+        // Get drag box in screen coordinates
+        if let Some(((min_x, min_y), (max_x, max_y))) = self.picking_system.get_selection_box() {
+            let border_thickness = 2.0;
+            let border_color = Vec4::new(1.0, 1.0, 0.0, 0.8); // Yellow, semi-transparent
+            let fill_color = Vec4::new(1.0, 1.0, 0.0, 0.1);   // Very transparent yellow fill
+            
+            let width = (max_x - min_x) as f32;
+            let height = (max_y - min_y) as f32;
+            
+            // Top edge
+            ui_data.quads.push(RenderQuad {
+                position: Vec2::new(min_x as f32, min_y as f32),
+                size: Vec2::new(width, border_thickness),
+                color: border_color,
+                texture: None,
+                depth: 1000.0, // Render on top
+            });
+            
+            // Bottom edge
+            ui_data.quads.push(RenderQuad {
+                position: Vec2::new(min_x as f32, max_y as f32 - border_thickness),
+                size: Vec2::new(width, border_thickness),
+                color: border_color,
+                texture: None,
+                depth: 1000.0,
+            });
+            
+            // Left edge
+            ui_data.quads.push(RenderQuad {
+                position: Vec2::new(min_x as f32, min_y as f32),
+                size: Vec2::new(border_thickness, height),
+                color: border_color,
+                texture: None,
+                depth: 1000.0,
+            });
+            
+            // Right edge
+            ui_data.quads.push(RenderQuad {
+                position: Vec2::new(max_x as f32 - border_thickness, min_y as f32),
+                size: Vec2::new(border_thickness, height),
+                color: border_color,
+                texture: None,
+                depth: 1000.0,
+            });
+            
+            // Semi-transparent fill (rendered behind border)
+            ui_data.quads.push(RenderQuad {
+                position: Vec2::new(min_x as f32, min_y as f32),
+                size: Vec2::new(width, height),
+                color: fill_color,
+                texture: None,
+                depth: 999.0, // Behind border
+            });
+        }
     }
     
     /// Update collision debug visualization using the new debug system
@@ -1380,8 +1489,9 @@ impl OctreeVisualizationApp {
             0.1,
         ).clone();
         
-        // Get UI render data
-        let ui_data = self.ui_manager.get_render_data();
+        // Get UI render data and add selection box if dragging
+        let mut ui_data = self.ui_manager.get_render_data();
+        self.add_selection_box_to_ui(&mut ui_data);
         
         // Render frame
         self.graphics_engine.render_frame(
@@ -1437,17 +1547,42 @@ impl OctreeVisualizationApp {
                 WindowEvent::Key(Key::X, _, action, _) => {
                     self.camera_pitch_down = action == Action::Press || action == Action::Repeat;
                 }
+                WindowEvent::Key(Key::LeftControl | Key::RightControl, _, action, _) => {
+                    self.ctrl_pressed = action == Action::Press || action == Action::Repeat;
+                    self.picking_system.update_modifiers(self.ctrl_pressed, self.shift_pressed);
+                }
+                WindowEvent::Key(Key::LeftShift | Key::RightShift, _, action, _) => {
+                    self.shift_pressed = action == Action::Press || action == Action::Repeat;
+                    self.picking_system.update_modifiers(self.ctrl_pressed, self.shift_pressed);
+                }
                 WindowEvent::CursorPos(x, y) => {
-                    // Update picking system with mouse position
-                    self.picking_system.update_mouse(x, y, false);
+                    // Update picking system with mouse movement
+                    self.picking_system.on_mouse_move(x, y);
                 }
                 WindowEvent::MouseButton(glfw::MouseButton::Button1, Action::Press, _) => {
-                    // Left mouse button clicked - use current mouse position and set click flag
-                    // Don't update position, just set the click flag using the last known position
+                    // Left mouse button pressed - start potential drag
                     let (current_x, current_y) = self.picking_system.get_mouse_position();
-                    self.picking_system.update_mouse(current_x, current_y, true);
+                    self.picking_system.on_mouse_press(current_x, current_y);
+                    println!("Mouse pressed at ({:.2}, {:.2})", current_x, current_y);
+                }
+                WindowEvent::MouseButton(glfw::MouseButton::Button1, Action::Release, _) => {
+                    // Left mouse button released
+                    let was_dragging = self.picking_system.is_dragging();
                     
-                    println!("Mouse clicked at ({:.2}, {:.2})", current_x, current_y);
+                    if was_dragging {
+                        // Was dragging - perform box selection immediately (before drag state is cleared)
+                        let frame_count = (self.start_time.elapsed().as_secs_f32() * 60.0) as u64;
+                        self.perform_box_selection(frame_count);
+                        println!("Box selection completed");
+                    } else {
+                        // Was a click, not a drag - trigger single entity selection
+                        let (current_x, current_y) = self.picking_system.get_mouse_position();
+                        self.picking_system.update_mouse(current_x, current_y, true);
+                        println!("Click at ({:.2}, {:.2})", current_x, current_y);
+                    }
+                    
+                    // Now clear the drag state
+                    self.picking_system.on_mouse_release();
                 }
                 WindowEvent::FramebufferSize(width, height) => {
                     framebuffer_resized = true;

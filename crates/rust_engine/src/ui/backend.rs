@@ -4,7 +4,7 @@
 //! Keeps the UI system independent of Vulkan/DirectX/OpenGL specifics.
 
 use crate::render::systems::text::FontAtlas;
-use crate::render::systems::ui::{PanelVertex, UIVertex};
+use crate::ui::rendering::{PanelVertex, UIVertex};
 use crate::foundation::math::Vec4;
 
 /// Handle to a font atlas uploaded to the GPU

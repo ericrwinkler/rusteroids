@@ -325,7 +325,7 @@ impl GraphicsEngine {
     /// 
     /// Converts UIRenderData (quads, text) into vertex buffers and
     /// submits to the Vulkan backend. Called internally by render_frame().
-    fn draw_ui_internal(&mut self, ui_data: &systems::ui::UIRenderData) -> Result<(), Box<dyn std::error::Error>> {
+    fn draw_ui_internal(&mut self, ui_data: &crate::ui::UIRenderData) -> Result<(), Box<dyn std::error::Error>> {
         // Get Vulkan backend (for now, we need direct access)
         // TODO: Abstract this into RenderBackend trait when adding other backends
         let vulkan_renderer = match self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
@@ -334,7 +334,7 @@ impl GraphicsEngine {
         };
         
         // Delegate to UI rendering bridge
-        systems::ui::renderer::render_ui_data(ui_data, vulkan_renderer)
+        crate::ui::rendering::render_ui_data(ui_data, vulkan_renderer)
     }
     
     /// Update mouse position for UI input processingsingon

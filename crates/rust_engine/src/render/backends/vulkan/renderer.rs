@@ -10,7 +10,7 @@ use super::state::{SyncManager, SwapchainManager};
 use crate::render::backends::vulkan::*;
 use crate::render::primitives::Vertex;
 use crate::foundation::math::{Mat4, Vec3};
-use crate::input::ui_input::{UIInputProcessor, MouseButton};
+use crate::ui::input::{UIInputProcessor, MouseButton};
 use ash::vk;
 use std::collections::HashMap;
 

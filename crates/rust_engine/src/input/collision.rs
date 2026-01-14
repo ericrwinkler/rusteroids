@@ -3,8 +3,7 @@
 //! Hit testing and spatial queries for UI elements and game objects.
 //! This is input system responsibility - determining what the user clicked on.
 
-use crate::render::systems::ui::components::UIElement;
-use crate::render::systems::ui::layout::UILayout;
+use crate::ui::widgets::{UIElement, UILayout};
 
 /// Check if a point is inside a rectangular UI element's bounds
 ///
@@ -113,7 +112,7 @@ fn calculate_ui_element_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::systems::ui::components::Anchor;
+    use crate::ui::widgets::Anchor;
     
     #[test]
     fn test_point_in_rect() {

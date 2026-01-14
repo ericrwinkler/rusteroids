@@ -20,6 +20,10 @@ pub struct MouseState {
     pub right_click: bool,
     /// Middle mouse button pressed this frame
     pub middle_click: bool,
+    /// Drag start position (None if not dragging)
+    pub drag_start: Option<(f64, f64)>,
+    /// Whether mouse button is currently held down
+    pub button_down: bool,
 }
 
 impl MouseState {
@@ -33,6 +37,8 @@ impl MouseState {
             left_click: false,
             right_click: false,
             middle_click: false,
+            drag_start: None,
+            button_down: false,
         }
     }
 
@@ -102,6 +108,46 @@ impl MouseState {
         self.left_click = false;
         self.right_click = false;
         self.middle_click = false;
+    }
+
+    /// Start a drag operation at current mouse position
+    pub fn start_drag(&mut self) {
+        self.drag_start = Some((self.screen_x, self.screen_y));
+        self.button_down = true;
+    }
+
+    /// End drag operation
+    pub fn end_drag(&mut self) {
+        self.drag_start = None;
+        self.button_down = false;
+    }
+
+    /// Check if currently dragging (threshold: 5 pixels to distinguish from click)
+    pub fn is_dragging(&self) -> bool {
+        const DRAG_THRESHOLD: f64 = 5.0;
+        if let Some((start_x, start_y)) = self.drag_start {
+            if self.button_down {
+                let dx = self.screen_x - start_x;
+                let dy = self.screen_y - start_y;
+                let distance = (dx * dx + dy * dy).sqrt();
+                return distance >= DRAG_THRESHOLD;
+            }
+        }
+        false
+    }
+
+    /// Get drag box in screen space (min, max corners)
+    pub fn get_drag_box(&self) -> Option<((f64, f64), (f64, f64))> {
+        if let Some((start_x, start_y)) = self.drag_start {
+            if self.button_down {
+                let min_x = start_x.min(self.screen_x);
+                let max_x = start_x.max(self.screen_x);
+                let min_y = start_y.min(self.screen_y);
+                let max_y = start_y.max(self.screen_y);
+                return Some(((min_x, min_y), (max_x, max_y)));
+            }
+        }
+        None
     }
 }
 

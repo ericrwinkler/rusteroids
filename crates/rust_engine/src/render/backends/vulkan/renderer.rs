@@ -1365,124 +1365,12 @@ impl VulkanRenderer {
         &mut self,
         texture_handle: crate::render::resources::materials::TextureHandle,
     ) -> Result<vk::DescriptorSet, Box<dyn std::error::Error>> {
-        log::info!("[RENDERER] create_material_descriptor_set_with_texture called with texture {:?}", texture_handle);
-        
-        // Allocate a new descriptor set
-        let layouts = vec![self.ubo_manager.material_descriptor_set_layout()];
-        log::info!("[RENDERER] About to build alloc_info");
-        let alloc_info = vk::DescriptorSetAllocateInfo::builder()
-            .descriptor_pool(self.resource_manager.get_descriptor_pool())
-            .set_layouts(&layouts);
-
-        log::info!("[RENDERER] About to allocate descriptor sets");
-        let descriptor_sets = unsafe {
-            self.context.raw_device().allocate_descriptor_sets(&alloc_info)
-                .map_err(|e| format!("Failed to allocate descriptor set: {:?}", e))?
-        };
-        
-        log::info!("[RENDERER] Descriptor sets allocated successfully");
-        let descriptor_set = descriptor_sets[0];
-        
-        // Get the texture from resource manager
-        log::info!("[RENDERER] Getting texture from resource manager");
-        let texture = self.resource_manager.get_loaded_texture(texture_handle.0 as usize)
-            .ok_or("Texture not found in resource manager")?;
-        
-        log::info!("[RENDERER] Building buffer and image infos");
-        // Material UBO buffer info - use actual size of StandardMaterialUBO
-        use crate::render::resources::materials::StandardMaterialUBO;
-        let material_ubo_size = std::mem::size_of::<StandardMaterialUBO>() as vk::DeviceSize;
-        let material_buffer_info = vk::DescriptorBufferInfo::builder()
-            .buffer(self.ubo_manager.material_ubo_buffer_handle())
-            .offset(0)
-            .range(material_ubo_size)
-            .build();
-        
-        // Base color texture - use the specified texture
-        let base_color_image_info = vk::DescriptorImageInfo::builder()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(texture.image_view())
-            .sampler(texture.sampler())
-            .build();
-        
-        // All other textures use default white
-        let default_image_info = vk::DescriptorImageInfo::builder()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(self.resource_manager.default_white_texture().image_view())
-            .sampler(self.resource_manager.default_white_texture().sampler())
-            .build();
-        
-        // Keep arrays alive - CRITICAL for avoiding dangling pointers!
-        let material_buffer_infos = [material_buffer_info];
-        let base_color_infos = [base_color_image_info];
-        let default_infos = [default_image_info];
-        
-        let descriptor_writes = vec![
-            // Binding 0: Material UBO
-            vk::WriteDescriptorSet::builder()
-                .dst_set(descriptor_set)
-                .dst_binding(0)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(&material_buffer_infos)
-                .build(),
-            // Binding 1: Base color texture (custom texture)
-            vk::WriteDescriptorSet::builder()
-                .dst_set(descriptor_set)
-                .dst_binding(1)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&base_color_infos)
-                .build(),
-            // Binding 2: Normal map (default)
-            vk::WriteDescriptorSet::builder()
-                .dst_set(descriptor_set)
-                .dst_binding(2)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&default_infos)
-                .build(),
-            // Binding 3: Metallic/roughness (default)
-            vk::WriteDescriptorSet::builder()
-                .dst_set(descriptor_set)
-                .dst_binding(3)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&default_infos)
-                .build(),
-            // Binding 4: AO (default)
-            vk::WriteDescriptorSet::builder()
-                .dst_set(descriptor_set)
-                .dst_binding(4)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&default_infos)
-                .build(),
-            // Binding 5: Emission (default)
-            vk::WriteDescriptorSet::builder()
-                .dst_set(descriptor_set)
-                .dst_binding(5)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&default_infos)
-                .build(),
-            // Binding 6: Opacity (default)
-            vk::WriteDescriptorSet::builder()
-                .dst_set(descriptor_set)
-                .dst_binding(6)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&default_infos)
-                .build(),
-        ];
-        
-        log::info!("[RENDERER] About to update descriptor sets");
-        unsafe {
-            self.context.raw_device().update_descriptor_sets(&descriptor_writes, &[]);
-        }
-        
-        log::info!("[RENDERER] Created material descriptor set {:?} with texture {:?}", descriptor_set, texture_handle);
-        Ok(descriptor_set)
+        crate::render::backends::vulkan::resources::TextureManager::create_simple_material(
+            &self.context,
+            &self.resource_manager,
+            &self.ubo_manager,
+            texture_handle,
+        )
     }
     
     /// Create a material descriptor set with base color AND emission textures
@@ -1501,11 +1389,39 @@ impl VulkanRenderer {
         base_color_handle: crate::render::resources::materials::TextureHandle,
         emission_handle: crate::render::resources::materials::TextureHandle,
     ) -> Result<vk::DescriptorSet, Box<dyn std::error::Error>> {
-        crate::render::backends::vulkan::resources::TextureManager::create_material_descriptor_set_with_textures(
+        crate::render::backends::vulkan::resources::TextureManager::create_emissive_material(
             &self.context,
             &self.resource_manager,
             &self.ubo_manager,
             base_color_handle,
+            emission_handle,
+        )
+    }
+    
+    /// Create a material descriptor set with base color, normal, and optional emission textures
+    ///
+    /// Creates a descriptor set configured for materials with custom base color,
+    /// normal map, and optionally emission textures, using defaults for all other texture bindings.
+    ///
+    /// # Arguments
+    /// * `base_color_handle` - The texture to bind as base color (binding 1)
+    /// * `normal_handle` - The texture to bind as normal map (binding 2)
+    /// * `emission_handle` - Optional texture to bind as emission (binding 5)
+    ///
+    /// # Returns
+    /// A descriptor set configured with the specified textures
+    pub fn create_material_descriptor_set_with_all_textures(
+        &mut self,
+        base_color_handle: crate::render::resources::materials::TextureHandle,
+        normal_handle: crate::render::resources::materials::TextureHandle,
+        emission_handle: Option<crate::render::resources::materials::TextureHandle>,
+    ) -> Result<vk::DescriptorSet, Box<dyn std::error::Error>> {
+        crate::render::backends::vulkan::resources::TextureManager::create_pbr_material(
+            &self.context,
+            &self.resource_manager,
+            &self.ubo_manager,
+            base_color_handle,
+            normal_handle,
             emission_handle,
         )
     }

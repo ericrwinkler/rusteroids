@@ -214,9 +214,13 @@ impl InstanceData {
     
     /// Calculate normal matrix from model matrix
     fn calculate_normal_matrix(model_matrix: &Mat4) -> [[f32; 4]; 4] {
-        // Extract 3x3 rotation/scale part and invert transpose for normals
+        // Extract 3x3 rotation/scale part
         let mat3 = model_matrix.fixed_view::<3, 3>(0, 0);
-        let normal_mat3 = mat3.try_inverse().unwrap_or_else(|| mat3.clone_owned()).transpose();
+        
+        // Calculate transpose(inverse()) for proper normal transformation
+        let normal_mat3 = mat3.try_inverse()
+            .unwrap_or_else(|| mat3.clone_owned())
+            .transpose();
         
         // Convert to 4x4 with padding
         [

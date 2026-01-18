@@ -677,23 +677,33 @@ impl GraphicsEngine {
             .and_then(|mat| mat.textures.base_color);
         let emission_texture = materials.get(0)
             .and_then(|mat| mat.textures.emission);
+        let normal_texture = materials.get(0)
+            .and_then(|mat| mat.textures.normal);
         
-        log::info!("Creating mesh pool for {:?} with capacity {}, base_color: {:?}, emission: {:?}", 
-                   mesh_type, max_objects, base_color_texture, emission_texture);
+        log::info!("Creating mesh pool for {:?} with capacity {}, base_color: {:?}, emission: {:?}, normal: {:?}", 
+                   mesh_type, max_objects, base_color_texture, emission_texture, normal_texture);
         
         // Now delegate to graphics_api with pre-created resources
         if let Some(ref mut mgr) = self.pool_manager {
             if let Some(vulkan_backend) = self.backend.as_any_mut().downcast_mut::<crate::render::backends::vulkan::VulkanRenderer>() {
                 // Create descriptor set based on available textures
-                let material_descriptor_set = match (base_color_texture, emission_texture) {
-                    (Some(base_tex), Some(emission_tex)) => {
+                let material_descriptor_set = match (base_color_texture, normal_texture, emission_texture) {
+                    // Base + Normal + Emission
+                    (Some(base_tex), Some(normal_tex), emission_tex) => {
+                        log::info!("Creating descriptor set with base_color {:?}, normal {:?}, emission {:?}", base_tex, normal_tex, emission_tex);
+                        vulkan_backend.create_material_descriptor_set_with_all_textures(base_tex, normal_tex, emission_tex)?
+                    }
+                    // Base + Emission (no normal)
+                    (Some(base_tex), None, Some(emission_tex)) => {
                         log::info!("Creating descriptor set with base_color {:?} and emission {:?}", base_tex, emission_tex);
                         vulkan_backend.create_material_descriptor_set_with_textures(base_tex, emission_tex)?
                     }
-                    (Some(base_tex), None) => {
+                    // Just Base color
+                    (Some(base_tex), None, None) => {
                         log::info!("Creating descriptor set with base_color {:?}", base_tex);
                         vulkan_backend.create_material_descriptor_set_with_texture(base_tex)?
                     }
+                    // No textures
                     _ => {
                         log::info!("No textures, using default descriptor set");
                         vulkan_backend.get_default_material_descriptor_set()

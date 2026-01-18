@@ -191,7 +191,7 @@ impl UboManager {
         use crate::render::resources::materials::{StandardMaterialUBO, StandardMaterialParams};
         
         let default_material_params = StandardMaterialParams {
-            base_color: Vec3::new(0.8, 0.6, 0.4), // Warm brown default
+            base_color: Vec3::new(1.0, 1.0, 1.0), // Pure white - don't tint textures
             alpha: 1.0,
             metallic: 0.1,
             roughness: 0.8,

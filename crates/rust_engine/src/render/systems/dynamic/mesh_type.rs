@@ -27,12 +27,16 @@ pub enum MeshType {
     Monkey,
     /// Billboard quad - for particles, trails, effects
     Billboard,
+    /// Turret base mesh - rotating base of turret
+    TurretBase,
+    /// Turret barrel mesh - recoiling barrel of turret
+    TurretBarrel,
 }
 
 impl MeshType {
     /// Get all available mesh types
     pub fn all() -> &'static [MeshType] {
-        &[MeshType::Teapot, MeshType::Sphere, MeshType::Cube, MeshType::TextQuad, MeshType::Spaceship, MeshType::Frigate, MeshType::Monkey, MeshType::Billboard]
+        &[MeshType::Teapot, MeshType::Sphere, MeshType::Cube, MeshType::TextQuad, MeshType::Spaceship, MeshType::Frigate, MeshType::Monkey, MeshType::Billboard, MeshType::TurretBase, MeshType::TurretBarrel]
     }
     
     /// Get the default mesh model path for this mesh type
@@ -46,6 +50,8 @@ impl MeshType {
             MeshType::Frigate => "models/frigate.obj",
             MeshType::Monkey => "models/monkey.obj",
             MeshType::Billboard => "", // Billboard quads are generated procedurally
+            MeshType::TurretBase => "models/simple_turret_base.obj",
+            MeshType::TurretBarrel => "models/simple_turret_barrel.obj",
         }
     }
     
@@ -60,6 +66,8 @@ impl MeshType {
             MeshType::Frigate => "Frigate",
             MeshType::Monkey => "Monkey",
             MeshType::Billboard => "Billboard",
+            MeshType::TurretBase => "TurretBase",
+            MeshType::TurretBarrel => "TurretBarrel",
         }
     }
 }

@@ -31,7 +31,10 @@ layout(location = 8) out vec3 fragTangent;
 void main() {
     // Get instanced transformation matrices
     mat4 modelMatrix = getInstanceModelMatrix();
-    mat3 normalMatrix = getInstanceNormalMatrix();
+    
+    // Calculate normal matrix directly from model matrix (transpose of inverse)
+    // For better accuracy, calculate it in the shader rather than pre-computing
+    mat3 normalMatrix = transpose(inverse(mat3(modelMatrix)));
     
     // Transform vertex position to world space
     vec4 worldPosition = modelMatrix * vec4(position, 1.0);

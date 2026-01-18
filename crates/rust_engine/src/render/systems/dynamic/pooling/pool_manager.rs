@@ -420,6 +420,18 @@ impl MeshPoolManager {
         Ok(cleared_count)
     }
     
+    /// Clear all billboard pools (transient particle effects)
+    ///
+    /// Clears all pools that are billboard types (Billboard, BillboardBullet, BillboardExplosion, etc.).
+    /// This is called automatically each frame to reset transient billboard allocations.
+    pub fn clear_all_billboard_pools(&mut self) {
+        for mesh_type in MeshType::all() {
+            if mesh_type.is_billboard() {
+                let _ = self.clear_pool(*mesh_type);
+            }
+        }
+    }
+    
     /// Get active objects from a specific pool
     ///
     /// # Arguments

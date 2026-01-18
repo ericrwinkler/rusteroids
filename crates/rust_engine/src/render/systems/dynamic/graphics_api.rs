@@ -263,13 +263,9 @@ pub fn update_instance_material(
 pub fn begin_dynamic_frame(
     pool_manager: &mut Option<MeshPoolManager>,
 ) {
-    log::trace!("Dynamic frame started");
-    
-    // Clear transient billboards from previous frame
+    // Clear transient billboard pools from previous frame
     if let Some(mgr) = pool_manager {
-        if let Err(e) = mgr.clear_pool(MeshType::Billboard) {
-            log::trace!("No billboard pool to clear: {}", e);
-        }
+        mgr.clear_all_billboard_pools();
     }
     
     // Update pool manager to process cleanup of manually despawned objects

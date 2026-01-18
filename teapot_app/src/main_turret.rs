@@ -3,12 +3,16 @@
 #![allow(dead_code)]
 
 use rust_engine::assets::{ObjLoader, MaterialBuilder, ImageData};
-use rust_engine::render::resources::materials::{Material, UnlitMaterialParams, TextureType};
+use rust_engine::render::resources::materials::{Material, UnlitMaterialParams};
+use rust_engine::render::TextureType;
 use rust_engine::ecs::{
     World, Entity, LightFactory, LightingSystem as EcsLightingSystem,
 };
-use rust_engine::ecs::components::TransformComponent;
-use rust_engine::scene::SceneManager;
+use rust_engine::ecs::components::{TransformComponent, ColliderComponent, CollisionStateComponent};
+use rust_engine::ecs::systems::EcsCollisionSystem;
+use rust_engine::physics::{CollisionShape, CollisionLayers};
+use rust_engine::spatial::{Octree, OctreeConfig, OctreeSpatialQuery};
+use rust_engine::scene::{SceneManager, AABB};
 use rust_engine::render::{
     Camera,
     Mesh,
@@ -17,8 +21,9 @@ use rust_engine::render::{
     WindowHandle,
     systems::dynamic::MeshType,
     FontAtlas,
+    systems::billboard::BillboardQuad,
 };
-use rust_engine::foundation::math::{Vec3, Quat};
+use rust_engine::foundation::math::{Vec3, Quat, Vec2, Vec4};
 use glfw::{Action, Key, WindowEvent};
 use std::time::Instant;
 
@@ -27,7 +32,10 @@ const TURRET_RECOIL_DISTANCE: f32 = 0.3;  // How far barrel moves back
 const TURRET_RECOIL_SPEED: f32 = 5.0;     // Speed of recoil snap-back
 const TURRET_RETURN_SPEED: f32 = 2.0;     // Speed barrel returns forward
 const TURRET_ROTATION_SPEED: f32 = 1.0;   // Radians per second turret rotation
-const FIRE_INTERVAL: f32 = 2.0;            // Seconds between shots
+const FIRE_INTERVAL: f32 = 2.0;            // Seconds between bursts
+const BURST_SIZE: usize = 5;               // Number of shots per burst
+const BURST_SHOT_INTERVAL: f32 = 0.15;     // Seconds between shots in a burst
+const TURRET_ALIGNMENT_THRESHOLD: f32 = 0.05;  // Radians - how aligned turret must be to fire (~2.8 degrees)
 // Barrel mount point relative to base: Vec3::new(0.0, 0.5, -1.2)
 
 struct TurretBase {
@@ -44,12 +52,27 @@ struct TurretBarrel {
     is_recoiling: bool,   // Whether actively recoiling
     pitch: f32,           // Current pitch angle (up/down aim)
     target_pitch: f32,    // Target pitch for smooth aiming
+    muzzle_light: Entity, // Point light at barrel tip
+    muzzle_flash_intensity: f32, // Current light intensity for flicker effect
+    flicker_timer: f32,   // Time remaining for flicker animation
 }
 
 struct Target {
     entity: Entity,
     position: Vec3,
     velocity: Vec3,
+}
+
+struct Projectile {
+    entity: Entity,
+    velocity: Vec3,
+    lifetime: f32,  // Remove projectile after N seconds
+}
+
+struct Explosion {
+    position: Vec3,
+    age: f32,       // Time since creation
+    max_age: f32,   // When to remove
 }
 
 pub struct TurretDemoApp {
@@ -59,6 +82,9 @@ pub struct TurretDemoApp {
     scene_manager: SceneManager,
     world: World,
     lighting_system: EcsLightingSystem,
+    
+    // ECS Collision system (owns the octree)
+    ecs_collision_system: EcsCollisionSystem,
     
     // Meshes
     turret_base_mesh: Option<Mesh>,
@@ -80,6 +106,8 @@ pub struct TurretDemoApp {
     standalone_turret_barrel: Option<Entity>,
     monkey_entity: Option<Entity>,
     targets: Vec<Target>,
+    projectiles: Vec<Projectile>,
+    explosions: Vec<Explosion>,
     sunlight_entity: Option<Entity>,
     skybox_entity: Option<Entity>,
     
@@ -91,6 +119,10 @@ pub struct TurretDemoApp {
     // Targeting
     current_target_index: usize,
     fire_timer: f32,
+    
+    // Burst firing state
+    burst_shots_remaining: usize,
+    burst_shot_timer: f32,
     
     // Camera control state
     camera_move_forward: bool,
@@ -172,6 +204,23 @@ impl TurretDemoApp {
         let mut world = World::new();
         let lighting_system = EcsLightingSystem::new();
         
+        // Create octree with bounds covering the entire scene
+        let octree_bounds = AABB::new(
+            Vec3::new(-200.0, -100.0, -200.0),
+            Vec3::new(200.0, 100.0, 200.0),
+        );
+        
+        let octree_config = OctreeConfig {
+            max_depth: 6,
+            max_entities_per_node: 8,
+            min_node_size: 5.0,
+        };
+        
+        // Create ECS collision system with its own octree
+        let octree = Octree::new(octree_bounds, octree_config);
+        let octree_query = Box::new(OctreeSpatialQuery::new(octree));
+        let ecs_collision_system = EcsCollisionSystem::new(octree_query);
+        
         // Create sunlight
         let sunlight_entity = Some(Self::create_sunlight(&mut world));
         
@@ -227,6 +276,7 @@ impl TurretDemoApp {
             scene_manager,
             world,
             lighting_system,
+            ecs_collision_system,
             turret_base_mesh: None,
             turret_barrel_mesh: None,
             sphere_mesh: None,
@@ -242,6 +292,8 @@ impl TurretDemoApp {
             standalone_turret_barrel: None,
             monkey_entity: None,
             targets: Vec::new(),
+            projectiles: Vec::new(),
+            explosions: Vec::new(),
             sunlight_entity,
             skybox_entity: None,
             orbit_angle: 0.0,
@@ -249,6 +301,8 @@ impl TurretDemoApp {
             orbit_speed: 0.05,
             current_target_index: 0,
             fire_timer: 0.0,
+            burst_shots_remaining: 0,
+            burst_shot_timer: 0.0,
             fps_update_timer: Instant::now(),
             frame_count: 0,
             current_fps: 60.0,
@@ -487,7 +541,7 @@ impl TurretDemoApp {
                 MeshType::Sphere,
                 sphere_mesh,
                 &[target_material],
-                10
+                50  // Increased to handle 3 targets + many projectiles from burst firing
             )?;
             log::info!("Created target mesh pool");
         }
@@ -510,6 +564,61 @@ impl TurretDemoApp {
             log::info!("Created monkey mesh pool for lighting test");
         }
         
+        // Create billboard pools for projectiles and explosions
+        // Using separate MeshType for each texture - industry standard approach
+        // Each particle effect type gets its own pool
+        
+        // Load bullet texture
+        let bullet_image = ImageData::from_file("resources/textures/bullet.png")
+            .map_err(|e| format!("Failed to load bullet texture: {}", e))?;
+        let bullet_texture = self.graphics_engine.upload_texture_from_image_data(
+            bullet_image,
+            TextureType::BaseColor
+        )?;
+        
+        // Create billboard quad mesh
+        let billboard_mesh = Mesh::billboard_quad();
+        
+        // Bullet billboard material
+        let bullet_material = Material::transparent_unlit(UnlitMaterialParams {
+            color: Vec3::new(1.0, 1.0, 1.0),
+            alpha: 1.0,
+        })
+        .with_name("BillboardBullet")
+        .with_base_color_texture(bullet_texture);
+        
+        self.graphics_engine.create_mesh_pool(
+            MeshType::BillboardBullet,
+            &billboard_mesh,
+            &[bullet_material],
+            100  // Pool size for projectiles
+        )?;
+        log::info!("Created bullet billboard pool");
+        
+        // Load explosion texture
+        let explosion_image = ImageData::from_file("resources/textures/explosion.png")
+            .map_err(|e| format!("Failed to load explosion texture: {}", e))?;
+        let explosion_texture = self.graphics_engine.upload_texture_from_image_data(
+            explosion_image,
+            TextureType::BaseColor
+        )?;
+        
+        // Explosion billboard material
+        let explosion_material = Material::transparent_unlit(UnlitMaterialParams {
+            color: Vec3::new(1.0, 1.0, 1.0),
+            alpha: 1.0,
+        })
+        .with_name("BillboardExplosion")
+        .with_base_color_texture(explosion_texture);
+        
+        self.graphics_engine.create_mesh_pool(
+            MeshType::BillboardExplosion,
+            &billboard_mesh,
+            &[explosion_material],
+            50  // Pool size for muzzle flashes
+        )?;
+        log::info!("Created explosion billboard pool");
+
         /*
         // Create skybox
         let skybox_mesh = Mesh::skybox();
@@ -765,6 +874,19 @@ impl TurretDemoApp {
             barrel_transform
         );
         
+        // Create muzzle flash light at barrel tip
+        let muzzle_light_entity = self.world.create_entity();
+        let barrel_tip_offset = Vec3::new(0.0, 0.0, -2.0); // Barrel tip in local space
+        let muzzle_light_pos = barrel_world_position + (frigate_rotation * barrel_tip_offset);
+        
+        self.world.add_component(muzzle_light_entity, TransformComponent::from_position(muzzle_light_pos));
+        self.world.add_component(muzzle_light_entity, LightFactory::point(
+            muzzle_light_pos,
+            Vec3::new(1.0, 0.7, 0.3), // Orange light
+            0.0, // Off until firing
+            8.0  // Range
+        ));
+        
         self.turret_barrel = Some(TurretBarrel {
             entity: barrel_entity,
             parent_base: base_entity,
@@ -772,6 +894,9 @@ impl TurretDemoApp {
             is_recoiling: false,
             pitch: 0.0,
             target_pitch: 0.3,  // Aim slightly upward (about 17 degrees)
+            muzzle_light: muzzle_light_entity,
+            muzzle_flash_intensity: 0.0,
+            flicker_timer: 0.0,
         });
         
         log::info!("Spawned turret with base and barrel");
@@ -843,6 +968,16 @@ impl TurretDemoApp {
                 transform
             );
             
+            // Add collision components for octree tracking
+            // Target sphere has scale 0.5, so radius is 0.5
+            let sphere_shape = CollisionShape::sphere(0.5);
+            let collider = ColliderComponent::new(sphere_shape)
+                .with_layers(CollisionLayers::ENEMY, CollisionLayers::PROJECTILE);
+            
+            self.world.add_component(entity, collider.clone());
+            self.world.add_component(entity, CollisionStateComponent::default());
+            self.ecs_collision_system.register_collider(entity, &collider, &self.world);
+            
             self.targets.push(Target {
                 entity,
                 position,
@@ -852,6 +987,84 @@ impl TurretDemoApp {
         
         log::info!("Spawned {} targets with random velocities", self.targets.len());
         Ok(())
+    }
+    
+    fn spawn_single_target(&mut self) {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        
+        let target_material = Material::transparent_unlit(UnlitMaterialParams {
+            color: Vec3::new(1.0, 0.5, 0.2),
+            alpha: 0.9,
+        })
+        .with_name("Target Instance");
+        
+        // Get current frigate position for spawning target nearby
+        let frigate_pos = Vec3::new(
+            self.orbit_radius * self.orbit_angle.cos(),
+            0.0,
+            self.orbit_radius * self.orbit_angle.sin()
+        );
+        
+        // Spawn at random position near frigate
+        let angle = rng.gen_range(0.0..std::f32::consts::TAU);
+        let distance = rng.gen_range(20.0..40.0);
+        let height = rng.gen_range(5.0..15.0);
+        
+        let position = frigate_pos + Vec3::new(
+            angle.cos() * distance,
+            height,
+            angle.sin() * distance,
+        );
+        
+        // Random velocity
+        let velocity_type = rng.gen_range(0..2);
+        let speed = rng.gen_range(3.0..7.0);
+        
+        let velocity = if velocity_type == 0 {
+            let to_center = Vec3::new(0.0, 0.0, 0.0) - position;
+            let perpendicular = Vec3::new(-to_center.z, 0.0, to_center.x).normalize();
+            perpendicular * speed
+        } else {
+            let direction = Vec3::new(
+                rng.gen_range(-1.0..1.0),
+                rng.gen_range(-0.3..0.3),
+                rng.gen_range(-1.0..1.0),
+            ).normalize();
+            direction * speed
+        };
+        
+        use rust_engine::foundation::math::Transform;
+        let transform = Transform {
+            position,
+            rotation: Quat::identity(),
+            scale: Vec3::new(0.5, 0.5, 0.5),
+        };
+        
+        let entity = self.scene_manager.create_renderable_entity(
+            &mut self.world,
+            self.sphere_mesh.as_ref().unwrap().clone(),
+            MeshType::Sphere,
+            target_material,
+            transform
+        );
+        
+        // Add collision components
+        let sphere_shape = CollisionShape::sphere(0.5);
+        let collider = ColliderComponent::new(sphere_shape)
+            .with_layers(CollisionLayers::ENEMY, CollisionLayers::PROJECTILE);
+        
+        self.world.add_component(entity, collider.clone());
+        self.world.add_component(entity, CollisionStateComponent::default());
+        self.ecs_collision_system.register_collider(entity, &collider, &self.world);
+        
+        self.targets.push(Target {
+            entity,
+            position,
+            velocity,
+        });
+        
+        log::info!("Spawned replacement target, total targets: {}", self.targets.len());
     }
     
     pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -1024,19 +1237,12 @@ impl TurretDemoApp {
                 transform.rotation = frigate_rotation;
             }
             
-            // Update turret base and barrel to follow frigate
+            // Update turret base position to follow frigate (rotation will be updated after targeting)
             let turret_offset_from_frigate = Vec3::new(0.0, 4.5, 0.0);  // Moved down 0.5 units
             let turret_base_world_pos = frigate_position + (frigate_rotation * turret_offset_from_frigate);
             
             if let Some(ref mut turret_base) = self.turret_base {
                 turret_base.position = turret_base_world_pos;
-                
-                if let Some(transform) = self.world.get_component_mut::<TransformComponent>(turret_base.entity) {
-                    // Combine frigate rotation with turret targeting rotation
-                    let turret_targeting_rotation = Quat::from_euler_angles(0.0, turret_base.rotation_y, 0.0);
-                    transform.rotation = frigate_rotation * turret_targeting_rotation;  // Combine rotations
-                    transform.position = turret_base_world_pos;
-                }
             }
         }
         
@@ -1121,23 +1327,27 @@ impl TurretDemoApp {
                 Quat::identity()
             };
             
-            // Extract frigate's yaw angle from its rotation
-            let frigate_yaw = frigate_rotation.euler_angles().1;  // Y rotation (yaw)
-            
             // Calculate barrel mount position (where barrel pivots from)
             let barrel_pivot_local = Vec3::new(0.0, 0.5, -0.5);  // Pivot point inside base
             let base_rotation = frigate_rotation * Quat::from_euler_angles(0.0, turret_base.rotation_y, 0.0);
             let barrel_pivot_world = turret_base.position + (base_rotation * barrel_pivot_local);
             
-            // Calculate direction to target from barrel pivot
-            let to_target = current_target.position - barrel_pivot_world;
-            let horizontal_dist = (to_target.x * to_target.x + to_target.z * to_target.z).sqrt();
+            // Calculate direction to target from barrel pivot in WORLD space
+            let to_target_world = current_target.position - barrel_pivot_world;
             
-            // Calculate yaw (base rotation) and pitch (barrel elevation)
-            // Convert world yaw to turret-local yaw by subtracting frigate's rotation
-            let world_target_yaw = (-to_target.z).atan2(to_target.x) - std::f32::consts::FRAC_PI_2;
-            let target_yaw = world_target_yaw - frigate_yaw;  // Convert to frigate-relative angle
-            let target_pitch = to_target.y.atan2(horizontal_dist);
+            // Transform target direction into frigate's LOCAL space
+            // This is key: we inverse-rotate by frigate rotation to get frigate-relative coordinates
+            let frigate_rotation_inverse = frigate_rotation.conjugate();
+            let to_target_local = frigate_rotation_inverse * to_target_world;
+            
+            // Now calculate angles in frigate's local space
+            // In local space: X = right, Y = up, Z = forward
+            // For yaw: atan2(x, -z) gives rotation around Y axis needed to point at target
+            let target_yaw = -to_target_local.x.atan2(-to_target_local.z);
+            
+            // For pitch: use local coordinates
+            let horizontal_dist = (to_target_local.x * to_target_local.x + to_target_local.z * to_target_local.z).sqrt();
+            let target_pitch = to_target_local.y.atan2(horizontal_dist);
             
             turret_base.target_rotation_y = target_yaw;
             turret_barrel.target_pitch = target_pitch.clamp(-0.2, 0.8);
@@ -1151,17 +1361,42 @@ impl TurretDemoApp {
             let pitch_diff = turret_barrel.target_pitch - turret_barrel.pitch;
             turret_barrel.pitch += pitch_diff.signum() * (TURRET_ROTATION_SPEED * delta_time).min(pitch_diff.abs());
             
-            // Update base transform (frigate_rotation already calculated above)
+            // Update base transform with combined rotation (frigate + targeting)
             if let Some(transform) = self.world.get_component_mut::<TransformComponent>(turret_base.entity) {
-                // Combine frigate rotation with turret targeting rotation
                 let turret_targeting_rotation = Quat::from_euler_angles(0.0, turret_base.rotation_y, 0.0);
                 transform.rotation = frigate_rotation * turret_targeting_rotation;
+                transform.position = turret_base.position;
+            }
+        } else {
+            // No targets - still need to update turret base transform to follow frigate
+            if let Some(turret_base) = self.turret_base.as_ref() {
+                if let Some(frigate_entity) = self.frigate_entity {
+                    if let Some(frigate_transform) = self.world.get_component::<TransformComponent>(frigate_entity) {
+                        let frigate_rotation = frigate_transform.rotation;
+                        
+                        if let Some(transform) = self.world.get_component_mut::<TransformComponent>(turret_base.entity) {
+                            let turret_targeting_rotation = Quat::from_euler_angles(0.0, turret_base.rotation_y, 0.0);
+                            transform.rotation = frigate_rotation * turret_targeting_rotation;
+                            transform.position = turret_base.position;
+                        }
+                    }
+                }
             }
         }
         
         // Update barrel recoil and position
         if let Some(turret_barrel) = self.turret_barrel.as_mut() {
             if let Some(turret_base) = self.turret_base.as_ref() {
+                // Animate muzzle flash (on during fire, off otherwise)
+                if turret_barrel.flicker_timer > 0.0 {
+                    turret_barrel.flicker_timer -= delta_time;
+                    turret_barrel.muzzle_flash_intensity = 20.0; // Bright, constant during flash
+                    
+                    if turret_barrel.flicker_timer <= 0.0 {
+                        turret_barrel.muzzle_flash_intensity = 0.0; // Turn off when not firing
+                    }
+                }
+                
                 // Return barrel to forward position
                 if turret_barrel.recoil_offset > 0.0 {
                     turret_barrel.recoil_offset -= TURRET_RETURN_SPEED * delta_time;
@@ -1211,14 +1446,118 @@ impl TurretDemoApp {
                     transform.position = barrel_world_position;
                     transform.rotation = barrel_rotation;
                 }
+                
+                // Update muzzle light position and intensity to track barrel tip
+                let barrel_tip_local = Vec3::new(0.0, 0.0, -2.0); // Barrel tip in barrel's local space
+                let barrel_tip_world = barrel_world_position + (barrel_rotation * barrel_tip_local);
+                
+                if let Some(light_transform) = self.world.get_component_mut::<TransformComponent>(turret_barrel.muzzle_light) {
+                    light_transform.position = barrel_tip_world;
+                }
+                
+                if let Some(light_component) = self.world.get_component_mut::<rust_engine::ecs::components::LightComponent>(turret_barrel.muzzle_light) {
+                    light_component.position = barrel_tip_world;
+                    light_component.intensity = turret_barrel.muzzle_flash_intensity;
+                }
             }
         }
         
-        // Fire timer
-        self.fire_timer += delta_time;
-        if self.fire_timer >= FIRE_INTERVAL {
-            self.fire_timer = 0.0;
-            self.fire_turret();
+        // Update projectiles
+        let mut projectiles_to_remove = Vec::new();
+        
+        for (i, projectile) in self.projectiles.iter_mut().enumerate() {
+            // Move projectile
+            if let Some(transform) = self.world.get_component_mut::<TransformComponent>(projectile.entity) {
+                transform.position = transform.position + projectile.velocity * delta_time;
+                
+                // Update position in Target struct (for consistency)
+                // Note: projectiles aren't targets, we just track position separately
+            }
+            
+            // Decrease lifetime
+            projectile.lifetime -= delta_time;
+            if projectile.lifetime <= 0.0 {
+                projectiles_to_remove.push(i);
+            }
+        }
+        
+        // Update explosions
+        for explosion in &mut self.explosions {
+            explosion.age += delta_time;
+        }
+        
+        // Remove old explosions
+        self.explosions.retain(|e| e.age < e.max_age);
+        
+        // Run collision detection
+        self.ecs_collision_system.update(&mut self.world, delta_time);
+        
+        // Check for collisions between projectiles and targets
+        let mut targets_to_remove = Vec::new();
+        
+        for (proj_idx, projectile) in self.projectiles.iter().enumerate() {
+            if let Some(collision_state) = self.world.get_component::<CollisionStateComponent>(projectile.entity) {
+                if collision_state.is_colliding() {
+                    // Check which target was hit
+                    for (target_idx, target) in self.targets.iter().enumerate() {
+                        if collision_state.colliding_with.contains(&target.entity) {
+                            log::info!("Projectile hit target!");
+                            targets_to_remove.push(target_idx);
+                            projectiles_to_remove.push(proj_idx);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Remove hit targets and projectiles (in reverse order to preserve indices)
+        targets_to_remove.sort_unstable();
+        targets_to_remove.dedup();
+        let num_targets_destroyed = targets_to_remove.len();
+        for &idx in targets_to_remove.iter().rev() {
+            let target = self.targets.remove(idx);
+            // Unregister from collision system
+            self.ecs_collision_system.unregister_collider(target.entity);
+            // Despawn entity
+            self.scene_manager.destroy_entity(&mut self.world, &mut self.graphics_engine, target.entity);
+        }
+        
+        // Spawn new targets to maintain 3 total targets
+        for _ in 0..num_targets_destroyed {
+            self.spawn_single_target();
+        }
+        
+        projectiles_to_remove.sort_unstable();
+        projectiles_to_remove.dedup();
+        for &idx in projectiles_to_remove.iter().rev() {
+            let projectile = self.projectiles.remove(idx);
+            // Unregister from collision system
+            self.ecs_collision_system.unregister_collider(projectile.entity);
+            // Remove transform component to mark as inactive (entity cleanup will happen later)
+            self.world.remove_component::<TransformComponent>(projectile.entity);
+        }
+        
+        // Burst firing system
+        if self.burst_shots_remaining > 0 {
+            // We're in a burst - fire shots at burst interval
+            self.burst_shot_timer += delta_time;
+            if self.burst_shot_timer >= BURST_SHOT_INTERVAL {
+                self.burst_shot_timer = 0.0;
+                self.fire_turret();
+                self.burst_shots_remaining -= 1;
+            }
+        } else {
+            // Not in a burst - check if it's time to start a new burst
+            self.fire_timer += delta_time;
+            if self.fire_timer >= FIRE_INTERVAL && self.is_turret_aligned() {
+                self.fire_timer = 0.0;
+                self.burst_shots_remaining = BURST_SIZE;
+                self.burst_shot_timer = 0.0;
+                // Fire first shot immediately
+                self.fire_turret();
+                self.burst_shots_remaining -= 1;
+            }
         }
         
         // Update FPS counter
@@ -1239,12 +1578,96 @@ impl TurretDemoApp {
         self.scene_manager.sync_from_world(&mut self.world);
     }
     
+    /// Check if turret is aligned with current target within threshold
+    fn is_turret_aligned(&self) -> bool {
+        // No targets means we can't be aligned
+        if self.targets.is_empty() || self.turret_base.is_none() || self.turret_barrel.is_none() {
+            return false;
+        }
+        
+        let turret_base = self.turret_base.as_ref().unwrap();
+        let turret_barrel = self.turret_barrel.as_ref().unwrap();
+        
+        // Check both yaw and pitch alignment
+        let yaw_diff = (turret_base.target_rotation_y - turret_base.rotation_y).abs();
+        let pitch_diff = (turret_barrel.target_pitch - turret_barrel.pitch).abs();
+        
+        // Normalize yaw difference to [-PI, PI] range
+        let yaw_diff_normalized = if yaw_diff > std::f32::consts::PI {
+            2.0 * std::f32::consts::PI - yaw_diff
+        } else {
+            yaw_diff
+        };
+        
+        // Both yaw and pitch must be within threshold
+        yaw_diff_normalized <= TURRET_ALIGNMENT_THRESHOLD && pitch_diff <= TURRET_ALIGNMENT_THRESHOLD
+    }
+    
     fn fire_turret(&mut self) {
         if let Some(turret_barrel) = self.turret_barrel.as_mut() {
             turret_barrel.recoil_offset = TURRET_RECOIL_DISTANCE;
             turret_barrel.is_recoiling = true;
-            log::info!("Turret fired! Recoil: {}", TURRET_RECOIL_DISTANCE);
+            turret_barrel.flicker_timer = 0.05; // Short flash - 50ms per shot
+            turret_barrel.muzzle_flash_intensity = 20.0; // Bright initial flash
+            
+            // Get barrel transform
+            if let Some(transform) = self.world.get_component::<TransformComponent>(turret_barrel.entity) {
+                let barrel_rotation = transform.rotation;
+                
+                // Barrel tip in local space (from simple_turret_barrel.obj: furthest point is z=-2.0)
+                let barrel_tip_local = Vec3::new(0.0, 0.0, -2.0);
+                
+                // Transform barrel tip to world space
+                let barrel_tip_world = transform.position + (barrel_rotation * barrel_tip_local);
+                
+                // Calculate firing direction (forward from barrel)
+                let forward = barrel_rotation * Vec3::new(0.0, 0.0, -1.0);
+                
+                // Spawn projectile from barrel tip
+                self.spawn_projectile(barrel_tip_world, forward);
+                
+                // Spawn muzzle flash explosion at barrel tip
+                self.explosions.push(Explosion {
+                    position: barrel_tip_world,
+                    age: 0.0,
+                    max_age: 0.3,  // 0.3 second flash
+                });
+                
+                log::info!("Turret fired projectile from barrel tip {:?} in direction {:?}", barrel_tip_world, forward);
+            }
         }
+    }
+    
+    fn spawn_projectile(&mut self, position: Vec3, direction: Vec3) {
+        let projectile_speed = 50.0;  // Fast projectiles
+        let velocity = direction.normalize() * projectile_speed;
+        
+        // Create a dummy entity for tracking (no renderable component needed)
+        let entity = self.world.create_entity();
+        
+        // Add position via TransformComponent for collision detection
+        self.world.add_component(entity, TransformComponent {
+            position,
+            rotation: Quat::identity(),
+            scale: Vec3::new(0.2, 0.2, 0.2),
+        });
+        
+        // Add collision components for octree tracking
+        // Projectile sphere has radius 0.2
+        let sphere_shape = CollisionShape::sphere(0.2);
+        let collider = ColliderComponent::new(sphere_shape)
+            .with_layers(CollisionLayers::PROJECTILE, CollisionLayers::ENEMY);
+        
+        self.world.add_component(entity, collider.clone());
+        self.world.add_component(entity, CollisionStateComponent::default());
+        self.ecs_collision_system.register_collider(entity, &collider, &self.world);
+        
+        // Track projectile
+        self.projectiles.push(Projectile {
+            entity,
+            velocity,
+            lifetime: 5.0,  // Remove after 5 seconds
+        });
     }
     
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -1259,21 +1682,60 @@ impl TurretDemoApp {
             0.0
         ).clone();
         
-
+        // Generate billboard quads for projectiles using BillboardBullet pool
+        let mut bullet_billboards = Vec::new();
+        for projectile in &self.projectiles {
+            if let Some(transform) = self.world.get_component::<TransformComponent>(projectile.entity) {
+                let billboard = BillboardQuad::new(transform.position)
+                    .with_size(Vec2::new(2.0, 0.6))  // Elongated bullet shape
+                    .with_color(Vec4::new(1.0, 0.8, 0.0, 1.0))  // Bright yellow
+                    .with_velocity_alignment(projectile.velocity.normalize());
+                bullet_billboards.push(billboard);
+            }
+        }
         
-        // Export UI data
+        // Generate billboard quads for explosions using BillboardExplosion pool
+        let mut explosion_billboards = Vec::new();
+        for explosion in &self.explosions {
+            let progress = explosion.age / explosion.max_age;  // 0.0 to 1.0
+            let scale = 1.0 + progress * 2.0;  // Stretches from 1.0 to 3.0
+            let alpha = 1.0 - progress;  // Fades from 1.0 to 0.0
+            
+            let billboard = BillboardQuad::new(explosion.position)
+                .with_size(Vec2::new(1.5 * scale, 1.5 * scale))  // Expanding square
+                .with_color(Vec4::new(1.0, 0.3, 0.0, alpha));  // Bright orange, fading
+            explosion_billboards.push(billboard);
+        }
+        
+        // Begin frame
+        self.graphics_engine.begin_dynamic_frame()?;
+        
+        // Set camera and lights
+        self.graphics_engine.set_camera(&self.camera);
+        let multi_light_env = self.lighting_system.build_multi_light_environment(
+            &self.world,
+            Vec3::new(0.0, 0.0, 0.0),
+            0.0
+        ).clone();
+        self.graphics_engine.set_multi_light_environment(&multi_light_env);
+        
+        // Render typed billboards
+        self.graphics_engine.render_billboards_with_type(&bullet_billboards, MeshType::BillboardBullet)?;
+        self.graphics_engine.render_billboards_with_type(&explosion_billboards, MeshType::BillboardExplosion)?;
+        
+        // Render 3D scene
+        let render_queue = self.scene_manager.build_render_queue();
+        self.graphics_engine.render_entities_from_queue(&render_queue)?;
+        self.graphics_engine.record_dynamic_draws()?;
+        
+        // Render UI using the vulkan backend directly (hacky but necessary)
         let ui_data = self.ui_manager.get_render_data();
+        if let Some(vulkan_renderer) = self.graphics_engine.get_vulkan_renderer_mut() {
+            rust_engine::ui::rendering::render_ui_data(&ui_data, vulkan_renderer)?;
+        }
         
-        // Render frame
-        self.graphics_engine.render_frame(
-            &rust_engine::render::RenderFrameData {
-                camera: &self.camera,
-                lights: &multi_light_env,
-                ui: &ui_data,
-                billboards: &[],
-            },
-            &mut self.window,
-        )?;
+        // End frame
+        self.graphics_engine.end_dynamic_frame(&mut self.window)?;
         
         // Dispatch UI events
         self.ui_manager.dispatch_events();

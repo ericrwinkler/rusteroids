@@ -13,4 +13,4 @@ pub use orientation::{
     calculate_velocity_aligned_matrix,
     calculate_world_axis_aligned_matrix,
 };
-pub use renderer::{BillboardRenderer, render_billboards_from_pool};
+pub use renderer::{BillboardRenderer, render_billboards_from_pool, render_billboards_from_pool_with_type};

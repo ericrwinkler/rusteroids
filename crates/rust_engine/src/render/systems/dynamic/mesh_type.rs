@@ -25,8 +25,12 @@ pub enum MeshType {
     Frigate,
     /// Monkey mesh - Blender's iconic test mesh
     Monkey,
-    /// Billboard quad - for particles, trails, effects
+    /// Billboard quad - for particles, trails, effects (generic)
     Billboard,
+    /// Billboard quad - for bullet projectiles
+    BillboardBullet,
+    /// Billboard quad - for explosion effects
+    BillboardExplosion,
     /// Turret base mesh - rotating base of turret
     TurretBase,
     /// Turret barrel mesh - recoiling barrel of turret
@@ -36,7 +40,7 @@ pub enum MeshType {
 impl MeshType {
     /// Get all available mesh types
     pub fn all() -> &'static [MeshType] {
-        &[MeshType::Teapot, MeshType::Sphere, MeshType::Cube, MeshType::TextQuad, MeshType::Spaceship, MeshType::Frigate, MeshType::Monkey, MeshType::Billboard, MeshType::TurretBase, MeshType::TurretBarrel]
+        &[MeshType::Teapot, MeshType::Sphere, MeshType::Cube, MeshType::TextQuad, MeshType::Spaceship, MeshType::Frigate, MeshType::Monkey, MeshType::Billboard, MeshType::BillboardBullet, MeshType::BillboardExplosion, MeshType::TurretBase, MeshType::TurretBarrel]
     }
     
     /// Get the default mesh model path for this mesh type
@@ -50,6 +54,8 @@ impl MeshType {
             MeshType::Frigate => "models/frigate.obj",
             MeshType::Monkey => "models/monkey.obj",
             MeshType::Billboard => "", // Billboard quads are generated procedurally
+            MeshType::BillboardBullet => "", // Billboard quads are generated procedurally
+            MeshType::BillboardExplosion => "", // Billboard quads are generated procedurally
             MeshType::TurretBase => "models/simple_turret_base.obj",
             MeshType::TurretBarrel => "models/simple_turret_barrel.obj",
         }
@@ -66,9 +72,16 @@ impl MeshType {
             MeshType::Frigate => "Frigate",
             MeshType::Monkey => "Monkey",
             MeshType::Billboard => "Billboard",
+            MeshType::BillboardBullet => "BillboardBullet",
+            MeshType::BillboardExplosion => "BillboardExplosion",
             MeshType::TurretBase => "TurretBase",
             MeshType::TurretBarrel => "TurretBarrel",
         }
+    }
+    
+    /// Check if this mesh type is a billboard (transient particle effect)
+    pub fn is_billboard(&self) -> bool {
+        matches!(self, MeshType::Billboard | MeshType::BillboardBullet | MeshType::BillboardExplosion)
     }
 }
 

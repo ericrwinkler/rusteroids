@@ -1,4 +1,7 @@
 //! Billboard data structures and types
+//!
+//! Billboards are rendered using separate mesh pools per texture type.
+//! See MeshType enum for supported billboard variants (Billboard, BillboardBullet, BillboardExplosion).
 
 use crate::foundation::math::{Vec2, Vec3, Vec4, Mat4};
 
@@ -78,12 +81,6 @@ impl BillboardQuad {
     /// Set billboard orientation to world-axis-aligned
     pub fn with_world_axis_alignment(mut self, axis: Vec3) -> Self {
         self.orientation = BillboardOrientation::WorldAxisAligned { axis };
-        self
-    }
-    
-    /// Set custom UV coordinates
-    pub fn with_uv_coords(mut self, coords: [Vec2; 4]) -> Self {
-        self.uv_coords = coords;
         self
     }
 }
